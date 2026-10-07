@@ -1,43 +1,113 @@
-# BackupProof
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="BackupProof: backups you can prove" width="100%">
+</p>
 
-**Backups you can prove.** BackupProof is a self-hosted backup system for servers, applications and databases. Every backup produces signed evidence. Every restore drill produces signed evidence that the data was *actually restored and verified*. All of it is chained into a tamper-evident ledger that an auditor can verify offline, without trusting BackupProof.
+<p align="center">
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.1.0-0a7bbb" alt="version v0.1.0"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/platforms-linux%20%7C%20windows%20%7C%20macOS-0a7bbb" alt="platforms linux, windows, macOS"></a>
+  <a href="#how-the-proof-works"><img src="https://img.shields.io/badge/restore%20tests-built%20in-4c9a2a" alt="restore tests built in"></a>
+  <a href="#how-the-proof-works"><img src="https://img.shields.io/badge/proofs-signed%20%C2%B7%20in--toto-6f42c1" alt="proofs signed with in-toto"></a>
+</p>
+
+BackupProof is a self-hosted backup system for servers, applications and databases that **proves every backup can be restored**. It restores each backup into an isolated sandbox, checks the data, and records signed, tamper-evident proof that an auditor can verify offline.
 
 > A green "backup succeeded" tells you a job ran. It doesn't tell you the data comes back.
-> BackupProof shows a source as **Proven** only after it has been restored from storage into an isolated sandbox and checked.
+> BackupProof shows an item as **Restore tested ✓** only after it has been restored from storage and checked.
 
-This is a ground-up rewrite (in Go) of the original TypeScript BackupProof v13. See [What changed from v13](#what-changed-from-v13).
+One static binary is the dashboard server, the agent for each protected server, and a standalone CLI. **New here?** Read the plain-language [Getting started guide](docs/GETTING-STARTED.md).
 
----
+## Demo
 
-## What it does
+A restore test from the CLI. The dashboard shows the same checks in plain words.
+
+```console
+$ backupproof drill --repo /mnt/backup/vault --spec examples/sqlite.json
+
+  [PASS] restore-from-storage    1 files, 20480 bytes, every chunk authenticated and every file hash verified
+  [PASS] content-root            Merkle root of 2 restored entries matches the snapshot (8214bb845872828e…)
+  [PASS] sqlite-integrity-check  PRAGMA integrity_check = ok
+  [PASS] row-count-reconciliation  2 tables, 600 rows reconciled with backup-time counts (exact)
+  [PASS] assert: users exist     returned 1
+
+RTO 41ms · restored 20480 bytes · sandbox embedded-sqlite (read-only)
+attestation 4af524f509f545e9… recorded at ledger #4
+
+$ backupproof proof verify drill.bundle.json --key bpkey1:server@backup:… --require-timestamp
+VALID  https://backupproof.dev/attestation/restore-drill/v1
+  signer    agent:web-01 (bp:e96a62db83be1b16)
+  drill     passed=true
+  ledger    entry #13, chained to signed checkpoint #14
+  time      2026-10-06T22:20:28Z (RFC 3161, https://freetsa.org/tsr)
+```
+
+## Install
+
+### Dashboard server
+
+The machine running the dashboard is protected straight away by its built-in agent ("This server"). Nothing else needs installing on it.
+
+```bash
+docker compose up -d
+```
+
+Or run the binary directly, behind a TLS reverse proxy such as Caddy or nginx:
+
+```bash
+backupproof server --data /var/lib/backupproof-server --listen 127.0.0.1:8420 --public-url https://backup.example.com
+```
+
+Then open the dashboard and create the admin account. There is no default password.
+
+### Other servers
+
+In the dashboard, open **Servers → Connect a server** and copy the one-line command for Linux, macOS or Windows. It downloads the agent, connects it with a single-use code (valid for 1 hour) and keeps it running as a service.
+
+Agents connect **outbound only** over HTTPS. Backup data goes straight from each server to storage and never passes through the dashboard.
+
+### Build from source
+
+```bash
+make build   # bin/backupproof (static, CGO_ENABLED=0)
+make dist    # every platform into dist/downloads, served to the one-line installers
+```
+
+Requires Go 1.27+ (see `go.mod`). The binary is pure Go, with SQLite via `modernc.org/sqlite` and no cgo.
+
+## Getting started
+
+1. **Storage → Add.** Choose a disk, Backblaze B2, Amazon S3, Cloudflare R2, Wasabi, another S3-compatible service, or SFTP. Click **Test connection**, then keep the generated encryption password and download the recovery kit.
+2. **Protect something.** Pick the server, then *what* (suggested folders, websites, WordPress and Docker databases are listed for you), *where*, and *how often*.
+3. Watch the item go from **Not tested yet** to **Restore tested ✓**. The first backup is restore-tested immediately.
+
+### Standalone CLI (one machine, no server)
+
+```bash
+export BP_PASSWORD='a long repository password'   # store it offline too
+backupproof init   --repo /mnt/backup/vault
+backupproof backup --repo /mnt/backup/vault --name website /var/www
+backupproof backup --repo /mnt/backup/vault --spec examples/postgres.json   # BP_SOURCE_PASSWORD for the DB
+backupproof drill  --repo /mnt/backup/vault --spec examples/postgres.json --timestamp
+backupproof proof export --repo /mnt/backup/vault <digest> -o drill.bundle.json
+```
+
+S3 with Object Lock: `--repo 's3://bucket/vault?endpoint=https://s3.eu-central-003.backblazeb2.com&lock=COMPLIANCE&lockDays=30'`, with credentials from `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Run `backupproof help` for every command.
+
+## Features
 
 | | |
 |---|---|
-| **Backs up** | File trees, PostgreSQL, MySQL/MariaDB, MongoDB, SQLite, or any command's output. Pre/post hooks let you quiesce applications. |
-| **Stores** | In its own deduplicating, encrypted, content-addressed repository format on local disk, any S3-compatible service (AWS, B2, R2, Wasabi, Garage, SeaweedFS…) with optional **S3 Object Lock**, or SFTP with a pinned host key. |
-| **Proves** | Scheduled **restore drills** restore the latest snapshot from storage into an empty directory or a `--network none` database container. Checks per data type:<br>• All data: the restored bytes must reproduce the snapshot's Merkle root.<br>• PostgreSQL: `amcheck` with `heapallindexed`.<br>• MySQL/MariaDB: `CHECK TABLE`.<br>• MongoDB: `validate(full)`.<br>• SQLite: `integrity_check`.<br>• Databases: row counts reconciled against counts captured at backup time.<br>• Your own SQL assertions and commands. |
-| **Attests** | Each backup and drill (pass *or fail*) becomes an [in-toto](https://in-toto.io) statement in a DSSE envelope, signed with the agent's Ed25519 key. It is optionally timestamped by an RFC 3161 TSA, and appended to a hash-chained ledger with signed checkpoints. |
-| **Watches** | A dead-man's-switch watchdog alerts on what *didn't* happen: overdue backups, stale proofs and silent agents. Alerts go to a webhook (Slack, Discord, Mattermost) or email, and the server can ping an external heartbeat URL. |
-| **Exports** | Per-proof bundles and a period **evidence pack** mapped to SOC 2 A1.2/A1.3, ISO 27001 A.8.13, NIST CSF, DORA Art. 12, NIS2 Art. 21 and HIPAA. A printable report is included. |
+| **Backs up** | File trees, PostgreSQL, MySQL/MariaDB, MongoDB, SQLite, or any command's output. Pre/post hooks quiesce applications. Database logins are read from Docker containers and WordPress `wp-config.php` on the server itself. |
+| **Stores** | An encrypted, deduplicating, content-addressed repository on a local disk, any S3-compatible service (with optional **S3 Object Lock**), or SFTP with a pinned host key. |
+| **Proves** | Scheduled **restore tests** restore a backup into an empty folder or a `--network none` database container. Checks per data type:<br>• All data: the restored bytes must reproduce the snapshot's Merkle root.<br>• PostgreSQL: `amcheck` with `heapallindexed`.<br>• MySQL/MariaDB: `CHECK TABLE`.<br>• MongoDB: `validate(full)`.<br>• SQLite: `integrity_check`.<br>• Databases: row counts reconciled against counts captured at backup time.<br>• PostgreSQL dumps found inside file backups are loaded into a test database.<br>• Your own SQL assertions and commands. |
+| **Attests** | Each backup and restore test, pass *or fail*, becomes an [in-toto](https://in-toto.io) statement in a DSSE envelope, signed with the agent's Ed25519 key. It is optionally timestamped by an RFC 3161 TSA and appended to a hash-chained ledger with signed checkpoints. |
+| **Watches** | A dead-man's-switch watchdog alerts on what *didn't* happen: overdue backups, stale proofs and silent servers. Alerts go to a webhook (Slack, Discord, Mattermost) or email, and the server can ping an external heartbeat URL. |
+| **Imports** | Existing backups are fetched, decrypted and converted into restore-tested copies that keep their original dates: **GPG / OpenSSL / age** encrypted files in a bucket or folder (archives can be unpacked), **restic** (reusing `/etc/restic/env`), **Kopia**, **BorgBackup**, and files on **Google Drive, Dropbox, OneDrive** and 70+ services via rclone. |
+| **Exports** | Per-proof bundles and a period **evidence pack** mapped to SOC 2 A1.2/A1.3, ISO 27001 A.8.13, NIST CSF, DORA Art. 12, NIS2 Art. 21 and HIPAA, plus a printable report. |
 
-It ships as one static binary: `backupproof server`, `backupproof agent`, and a standalone CLI.
-
-**New here? Read [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md):** a plain-language guide with no backup jargon.
-
-## Easy by default
-
-- **Nothing to install on the dashboard machine.** The server includes an agent ("This server") that protects its own machine.
-- **One-line install for other computers.** The dashboard shows a copy-paste command for Linux, macOS or Windows. It downloads the agent, connects it with a one-time code, and keeps it running as a service.
-- **Point and click.** A wizard asks *what* (folders, websites, databases), *where* (disk, Backblaze B2, Amazon S3, Cloudflare R2, Wasabi, SFTP) and *how often*.
-  - Each computer reports what it found: WordPress sites and their databases, and databases running in Docker. Logins are read on the computer itself.
-  - Storage has a **Test connection** button. The encryption password is generated for you, with a downloadable recovery kit.
-- **Bring your old backups.** Existing backups in S3, B2, a disk or SFTP are fetched, decrypted and converted into restore-tested copies that keep their original dates:
-  - **GPG, OpenSSL and age** encrypted files, opening `.zip` and `.tar.gz` archives;
-  - **restic** repositories, reusing the existing `/etc/restic/env` and password file;
-  - **Kopia** and **BorgBackup** repositories;
-  - files on **Google Drive, Dropbox, OneDrive** and 70+ other services via rclone (including rclone-encrypted folders).
-
-  PostgreSQL dumps found inside are loaded into a test database. See [docs/GUIDE-LUXVPS.md](docs/GUIDE-LUXVPS.md) for a worked example.
+The dashboard uses plain language ("Restore tested ✓", "Needs attention"), works on phones, supports dark mode and the keyboard, and follows the [Web Interface Guidelines](https://github.com/vercel-labs/web-interface-guidelines).
 
 ## How the proof works
 
@@ -55,54 +125,19 @@ drill  ──► restore from storage ─► recompute root R' from the bytes on
                                   signed checkpoint over the head  ·  optional RFC 3161 token
 ```
 
-- **The content root is unkeyed.** Blob names are keyed MACs, so storage observers learn nothing about the contents. The Merkle root, by contrast, can be recomputed by *anyone* who holds the restored data. An auditor can match "the data we restored" to "the data the signed statement talks about" without the repository password.
-- **Failures are recorded too.** A failed drill is signed and ledgered like a passing one. Deleting it breaks the hash chain.
-- **Separation of duties.** A source can name a separate verifier agent. That agent restores using only the repository, on a different machine with its own signing key.
-- **Unbiased sampling.** Repository read-data checks pick their sample from the current ledger head, so an operator can't steer the check away from data they know is bad.
-- **Keep-last-verified retention.** GFS retention, with restic-compatible semantics, never forgets the newest snapshots that passed a drill.
+- **The content root is unkeyed.** Blob names are keyed MACs, so storage observers learn nothing about the contents. The Merkle root, by contrast, can be recomputed by *anyone* who holds the restored data, so an auditor can match restored data to the signed statement without the repository password.
+- **Failures are recorded too.** A failed restore test is signed and ledgered like a passing one. Deleting it breaks the hash chain.
+- **Only verified backups are tested.** A restore test restores the exact snapshot named in the backup proof the server verified from that item's own server, and checks its content root before restoring.
+- **Separation of duties.** An item can name a different server for restore tests. That server restores using only the repository and its own signing key.
+- **Unbiased sampling.** Storage health checks pick their sample from the current ledger head, so an operator can't steer the check away from data they know is bad.
+- **Keep-last-verified retention.** GFS retention, with restic-compatible semantics, never forgets the newest snapshots that passed a restore test.
 
-Verify offline:
+Verify offline, without the repository password and without trusting the server:
 
 ```bash
 backupproof proof verify drill.bundle.json --key bpkey1:server@backup:… --key bpkey1:agent:web-01:… --require-timestamp
 backupproof proof verify-pack evidence.json --key …
 ```
-
-## Quick start
-
-### Standalone (one machine, no server)
-
-```bash
-export BP_PASSWORD='a long repository password'   # store it offline too
-backupproof init   --repo /mnt/backup/vault
-backupproof backup --repo /mnt/backup/vault --name website /var/www
-backupproof backup --repo /mnt/backup/vault --spec examples/postgres.json     # BP_SOURCE_PASSWORD for the DB
-backupproof drill  --repo /mnt/backup/vault --spec examples/postgres.json --timestamp
-backupproof proof list   --repo /mnt/backup/vault
-backupproof proof export --repo /mnt/backup/vault <digest> -o drill.bundle.json
-```
-
-S3 with Object Lock: `--repo 's3://bucket/vault?endpoint=https://s3.eu-central-003.backblazeb2.com&lock=COMPLIANCE&lockDays=30'`. Credentials come from `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
-
-### Fleet (control plane + agents)
-
-```bash
-# control plane (behind a TLS reverse proxy)
-backupproof server --data /var/lib/backupproof-server --listen 127.0.0.1:8420 --public-url https://backup.example.com
-# or: docker compose up -d
-```
-
-1. Open the dashboard and create the admin account. There is no default password.
-2. **Repositories → Add**: choose local, S3 or SFTP, and set a repository password you also store offline.
-3. **Agents → Enroll**: copy the single-use command (it expires in 1 h) and run it on each server:
-   ```bash
-   backupproof agent enroll --server https://backup.example.com --token pve_…
-   backupproof agent run          # or install deploy/backupproof-agent.service
-   ```
-4. **Sources → Add**: choose the kind, agent, repository, schedules, retention and drill checks. Optionally choose a **verifier** agent on another host (it needs Docker for database drills).
-5. Watch each source move from **Unproven** to **Proven**.
-
-Agents connect **outbound only** (HTTPS long-poll). Backup data goes straight from the agent to storage and never passes through the control plane.
 
 ## Repository format (v1)
 
@@ -116,43 +151,36 @@ Agents connect **outbound only** (HTTPS long-poll). Backup data goes straight fr
 
 Deduplication works across files and snapshots. Unchanged files (same size and mtime) reuse their chunk lists. Writes are lock-free. Prune deletes only unreferenced blobs older than a grace period, and refuses to run if any snapshot is unreadable.
 
+## Configuration
+
+| Variable / flag | Default | Purpose |
+|---|---|---|
+| `BP_DATA` / `--data` | `./backupproof-data` | Dashboard data folder (database, keys) |
+| `BP_LISTEN` / `--listen` | `:8420` | Listen address |
+| `BP_PUBLIC_URL` / `--public-url` | derived | Address other servers use; also settable in **Settings** |
+| `BP_SECRET_KEY` | generated `secret.key` | 64 hex chars; encrypts stored passwords and keys |
+| `BP_DOWNLOADS` / `--downloads` | `DATA/downloads` | Agent binaries served to the one-line installers |
+| `--no-local-agent` | off | Disable the built-in "This server" agent |
+| `BP_STATE` | `~/.backupproof` | Agent / CLI state folder |
+| `BP_PASSWORD`, `BP_PASSWORD_FILE` | | Repository password for the CLI |
+
 ## Security model
 
-- **Secrets at rest.** Repository passwords, storage and database credentials are encrypted in the control-plane database with a 256-bit key (`secret.key` or `BP_SECRET_KEY`). They are sent only to the agent holding the job lease.
-- **Agents.** Each agent has its own Ed25519 attestation key and a bearer token, stored hashed on the server. The server checks every attestation's signature against the enrolled key and checks that it describes the leased job's source before ledgering it. A compromised agent cannot forge evidence for sources it isn't assigned.
-- **Accounts.** Argon2id password hashes. Sessions are HttpOnly, `SameSite=Strict` cookies with CSRF tokens. Roles are admin, operator and auditor (read-only plus evidence). Anything that could give control of a server is admin-only: commands and hooks, custom restore-test commands, moving an item to another server, connecting servers, on-the-fly rclone remotes and previewing old backups. Every operator action is written to the same ledger as the proofs.
-- **Built-in agent.** It never backs up, imports from, or stores into the server's own data folder (keys, database), even when asked to protect `/` or `C:\`.
-- **Restores.** All writes go through an `os.Root` confined to the restore folder, and symlinks are created last, so a crafted snapshot can't write outside it. Restore tests only restore the snapshot named in the backup proof the server verified from that item's own server, and check its content root first.
+- **Secrets at rest.** Repository passwords, storage and database credentials are encrypted in the dashboard database with a 256-bit key (`secret.key` or `BP_SECRET_KEY`). They are sent only to the agent holding the job lease.
+- **Agents.** Each agent has its own Ed25519 attestation key and a bearer token, stored hashed. The server checks every attestation's signature against the enrolled key, and that it describes the leased job's item, before ledgering it.
+- **Accounts.** Argon2id password hashes, HttpOnly `SameSite=Strict` session cookies and CSRF tokens. Roles are admin, operator and auditor (read-only plus evidence). Anything that could give control of a server is admin-only: commands and hooks, custom restore-test commands, moving an item to another server, connecting servers, on-the-fly rclone remotes and previewing old backups. Every operator action is written to the same ledger as the proofs.
+- **Built-in agent.** It never backs up, imports from, or stores into the server's own data folder, even when asked to protect `/` or `C:\`.
+- **Restores.** All writes go through an `os.Root` confined to the restore folder, and symlinks are created last, so a crafted snapshot can't write outside it.
 - **Web.** Strict CSP (`default-src 'self'`), `X-Frame-Options: DENY`, no third-party assets.
-- **Drill sandboxes.** `--network none`, memory, CPU and PID limits, `no-new-privileges`, data on tmpfs, restored files mounted read-only, and the image recorded by digest.
-- **Ransomware.** Use S3 Object Lock in COMPLIANCE mode, and storage credentials that cannot delete. Prune skips locked objects. Run verifiers on a different machine.
+- **Restore-test sandboxes.** `--network none`, memory, CPU and PID limits, `no-new-privileges`, data on tmpfs, restored files mounted read-only, and the image recorded by digest.
+- **Ransomware.** Use S3 Object Lock in COMPLIANCE mode and storage credentials that cannot delete. Prune skips locked objects. Run restore tests on a different server.
 
-## Building
+## Documentation
 
-```bash
-make test        # go test ./...
-make build       # bin/backupproof (static, CGO_ENABLED=0)
-make dist        # linux/darwin/windows × amd64/arm64 + SHA256SUMS
-docker build --target server -t backupproof-server .
-docker build --target agent  -t backupproof-agent  .
-```
-
-Requires Go 1.27+ (see `go.mod`). The binary is pure Go: SQLite via `modernc.org/sqlite`, no cgo.
-
-## What changed from v13
-
-The original BackupProof (TypeScript, v13) proved the product idea: a backup only counts once recovery is shown to work. This version keeps that idea and rebuilds the parts that couldn't carry it.
-
-| BackupProof v13 (TypeScript) | BackupProof (Go rewrite) |
-|---|---|
-| The database "proof check" passed whenever a target string was set; it never restored the DB | Databases are restored into version-matched sandbox containers, with engine integrity checks, row-count reconciliation and SQL assertions |
-| Proof reports were plain JSON files anyone could edit | Signed in-toto/DSSE attestations, a hash-chained append-only ledger, RFC 3161 timestamps and offline-verifiable bundles |
-| Whole files read into memory (5 GB guard), so dedup only covered identical files | Streaming FastCDC chunking with constant memory, dedup within and across files |
-| Fixed scrypt salt, scrypt run on every chunk, chunk names were the plaintext SHA-256 (leaks content), manifests stored in plaintext | Argon2id with random salt, keyed BLAKE3 IDs, XChaCha20-Poly1305, encrypted manifests |
-| Prune deleted manifests but never chunks, so storage grew forever | Reference-counted prune with grace period and object-lock awareness |
-| Checksum proof compared restored data against the *live* source (false failures) | Restored bytes are compared with the snapshot's own Merkle root |
-| Default `admin`/`admin` | First-run setup, Argon2id, CSRF, roles |
-| Single host; agent was a heartbeat stub | Outbound-only agents with single-use enrollment, job leases, and separate verifier hosts |
+- [Getting started](docs/GETTING-STARTED.md): plain-language guide for non-technical users
+- [Example item settings](examples/): PostgreSQL, MySQL in Docker, WordPress, SQLite, MongoDB, Docker Compose apps
+- [Research notes](docs/RESEARCH.md): market and technical research behind the design
+- [Changelog](CHANGELOG.md)
 
 ## Roadmap
 
@@ -163,6 +191,10 @@ The original BackupProof (TypeScript, v13) proved the product idea: a backup onl
 - Object Lock retention extension during maintenance; repository-to-repository copy for 3-2-1
 - Docker volume and Kubernetes PVC sources; Windows VSS snapshots
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and the pull-request checklist.
+
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 chmuzamil

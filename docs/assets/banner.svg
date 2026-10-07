@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-labelledby="t d">
+  <title id="t">BackupProof</title>
+  <desc id="d">Backups you can prove: self-hosted backups for servers, apps and databases, each one restore-tested and cryptographically signed.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="0.55" stop-color="#0f1b33"/>
+      <stop offset="1" stop-color="#132447"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.78" cy="0.45" r="0.55">
+      <stop offset="0" stop-color="#3b6cff" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#3b6cff" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.1" fill="#ffffff" fill-opacity="0.06"/>
+    </pattern>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8fb0ff"/>
+      <stop offset="1" stop-color="#4d7cff"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b2a4a"/>
+      <stop offset="1" stop-color="#15223d"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="400" fill="url(#bg)"/>
+  <rect width="1280" height="400" fill="url(#dots)"/>
+  <rect width="1280" height="400" fill="url(#glow)"/>
+
+  <!-- Brand -->
+  <g transform="translate(88 92)">
+    <path d="M36 0 L70 12 V40 C70 62 55 79 36 86 C17 79 2 62 2 40 V12 Z" fill="url(#shield)"/>
+    <path d="M21 43 L32 54 L52 32" fill="none" stroke="#0b1220" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="178" y="152" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="64" font-weight="700" letter-spacing="-1.5" fill="#ffffff">Backup<tspan fill="#8fb0ff">Proof</tspan></text>
+
+  <text x="90" y="232" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="38" font-weight="600" letter-spacing="-0.5" fill="#e8eefc">Backups you can prove.</text>
+  <text x="90" y="278" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#9fb0d0">Self-hosted backups for servers, apps and databases —</text>
+  <text x="90" y="308" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="21" fill="#9fb0d0">every one restore-tested and cryptographically signed.</text>
+
+  <!-- Proof chain: backup → restore test → signed proof -->
+  <g font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+    <g stroke="#4d7cff" stroke-width="3" stroke-linecap="round" fill="none" stroke-opacity="0.8">
+      <path d="M1010 128 V156"/>
+      <path d="M1010 228 V256"/>
+    </g>
+    <g fill="#4d7cff">
+      <circle cx="1010" cy="142" r="5"/>
+      <circle cx="1010" cy="242" r="5"/>
+    </g>
+
+    <g transform="translate(860 64)">
+      <rect width="300" height="64" rx="14" fill="url(#card)" stroke="#2c4378"/>
+      <circle cx="34" cy="32" r="14" fill="#1f9d6b"/>
+      <path d="M27 32 l5 5 l10 -10" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="60" y="29" font-size="19" font-weight="600" fill="#e8eefc">Backup</text>
+      <text x="60" y="50" font-size="14" fill="#8a9bbd">encrypted · deduplicated</text>
+    </g>
+
+    <g transform="translate(860 164)">
+      <rect width="300" height="64" rx="14" fill="url(#card)" stroke="#2c4378"/>
+      <circle cx="34" cy="32" r="14" fill="#1f9d6b"/>
+      <path d="M27 32 l5 5 l10 -10" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="60" y="29" font-size="19" font-weight="600" fill="#e8eefc">Restore test</text>
+      <text x="60" y="50" font-size="14" fill="#8a9bbd">restored · checked · row-counted</text>
+    </g>
+
+    <g transform="translate(860 264)">
+      <rect width="300" height="64" rx="14" fill="url(#card)" stroke="#4d7cff" stroke-width="1.5"/>
+      <g transform="translate(20 18)">
+        <path d="M14 0 L27 5 V15 C27 23 21 29 14 32 C7 29 1 23 1 15 V5 Z" fill="url(#shield)"/>
+      </g>
+      <text x="60" y="29" font-size="19" font-weight="600" fill="#e8eefc">Signed proof</text>
+      <text x="60" y="50" font-size="14" fill="#8a9bbd">in-toto · ledger · RFC 3161</text>
+    </g>
+  </g>
+</svg>

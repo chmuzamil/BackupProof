@@ -41,7 +41,7 @@ Direct, small competitors in this niche:
 | Concern | Choice | Reason / prior art |
 |---|---|---|
 | Chunking | FastCDC, normalized level 2, keyed gear table | FastCDC paper; Borg uses a secret chunker seed against fingerprinting |
-| Blob ID | BLAKE3 keyed with a MAC key | Borg's keyed IDs; avoids the confirmation-of-file attack that plaintext SHA-256 allows (as BackupProof v13 did) |
+| Blob ID | BLAKE3 keyed with a MAC key | Borg's keyed IDs; avoids the confirmation-of-file attack that plaintext SHA-256 allows |
 | AEAD | XChaCha20-Poly1305 with random 24-byte nonce | Random nonces are safe at this size; restic still uses CTR+Poly1305-AES rather than an AEAD |
 | KDF | Argon2id t=3, 64 MiB, p=4, random salt per key slot | Borg 2 default; restic and Kopia use scrypt |
 | Content commitment | Unkeyed BLAKE3 Merkle tree with RFC 6962/9162 structure and inclusion proofs | Third parties can recompute it from restored data without the repo key |

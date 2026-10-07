@@ -1,0 +1,54 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: go mod tidy is clean
+        if: runner.os == 'Linux'
+        run: go mod tidy && git diff --exit-code -- go.mod go.sum
+
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+      - name: go vet
+        run: go vet ./...
+
+      # The race detector needs cgo on Windows, so it runs on Linux only.
+      - name: go test (race)
+        if: runner.os == 'Linux'
+        run: go test -race -shuffle=on -count=1 ./...
+
+      - name: go test
+        if: runner.os != 'Linux'
+        run: go test -shuffle=on -count=1 ./...
+
+      - name: build (all platforms)
+        if: runner.os == 'Linux'
+        run: |
+          for p in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
+            GOOS=${p%/*} GOARCH=${p#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/backupproof
+          done
