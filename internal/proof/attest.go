@@ -10,6 +10,9 @@ const (
 	StatementType   = "https://in-toto.io/Statement/v1"
 	PredicateBackup = "https://backupproof.dev/attestation/backup/v1"
 	PredicateDrill  = "https://backupproof.dev/attestation/restore-drill/v1"
+	// PredicateCopy: a backup was copied to a second storage. The subject is
+	// the copy, whose content root equals the original's.
+	PredicateCopy = "https://backupproof.dev/attestation/copy/v1"
 )
 
 type Subject struct {
@@ -47,6 +50,24 @@ type BackupPredicate struct {
 	Storage    StorageInfo    `json:"storage"`
 	SourceMeta map[string]any `json:"sourceMeta,omitempty"`
 	Engine     string         `json:"engine"`
+}
+
+type CopyPredicate struct {
+	RepoID         string      `json:"repoId"`     // the second storage
+	SnapshotID     string      `json:"snapshotId"` // the copy
+	FromRepoID     string      `json:"fromRepoId"`
+	FromSnapshotID string      `json:"fromSnapshotId"`
+	Source         string      `json:"source"`
+	Kind           string      `json:"kind"`
+	Time           time.Time   `json:"time"` // when the original was taken
+	Entries        int         `json:"entries"`
+	Bytes          int64       `json:"bytes"`
+	Chunks         int         `json:"chunks"`
+	NewChunks      int         `json:"newChunks"`
+	Uploaded       int64       `json:"uploaded"`
+	DurationMs     int64       `json:"durationMs"`
+	Storage        StorageInfo `json:"storage"`
+	Engine         string      `json:"engine"`
 }
 
 type StorageInfo struct {

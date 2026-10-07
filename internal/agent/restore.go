@@ -10,8 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chmuzamil/backupproof/internal/backend"
+	"github.com/chmuzamil/backupproof/internal/chunker"
 	bpcrypto "github.com/chmuzamil/backupproof/internal/crypto"
 	"github.com/chmuzamil/backupproof/internal/engine"
+	"github.com/chmuzamil/backupproof/internal/ops"
+	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/protocol"
 	"github.com/chmuzamil/backupproof/internal/repo"
 	"github.com/chmuzamil/backupproof/internal/snapshot"
@@ -231,4 +235,38 @@ func (a *Agent) runRestoreDB(ctx context.Context, r *repo.Repo, lease *protocol.
 	}
 	jl.Logf("restored into %s", where)
 	return map[string]any{"into": where, "durationMs": time.Since(start).Milliseconds()}, nil
+}
+
+// runCopy copies the backup the server named into the item's second storage.
+func (a *Agent) runCopy(ctx context.Context, env *ops.Env, lease *protocol.Lease, jl *jobLog) (any, error) {
+	c := lease.Copy
+	if c == nil || lease.SnapshotID == "" {
+		return nil, errors.New("the copy job is missing its settings")
+	}
+	if c.Repository.Type == "local" {
+		if err := ops.StorageDenied(c.Repository.Path, a.deny); err != nil {
+			return nil, err
+		}
+	}
+	be, err := backend.Open(ctx, c.Repository, c.Creds)
+	if err != nil {
+		return nil, fmt.Errorf("second storage: %w", err)
+	}
+	be = backend.Throttle(be, lease.UploadBps, lease.DownloadBps)
+	dst, err := repo.Open(ctx, be, []byte(c.Password))
+	if errors.Is(err, repo.ErrNotARepo) {
+		jl.Logf("initializing the second storage at %s", be.Location())
+		dst, err = repo.Init(ctx, be, []byte(c.Password), chunker.DefaultParams)
+	}
+	if err != nil {
+		be.Close()
+		return nil, err
+	}
+	defer dst.Close()
+	info := proof.StorageInfo{Location: be.Location(), ObjectLockMode: c.Repository.ObjectLockMode, ObjectLockDays: c.Repository.ObjectLockDays}
+	rec, err := ops.Copy(ctx, env, dst, info, lease.SnapshotID, lease.ExpectedRoot, lease.Source.Name, lease.Retention)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"snapshotId": rec.SnapshotID}, nil
 }

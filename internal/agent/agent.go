@@ -380,6 +380,8 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 			out["snapshotId"] = rec.SnapshotID
 		}
 		return out, err
+	case "copy":
+		return a.runCopy(ctx, env, lease, jl)
 	case "restore":
 		return a.runRestore(ctx, r, lease, jl)
 	case "restore-db":

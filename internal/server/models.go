@@ -60,7 +60,7 @@ func (e ErrRepositoryInUse) Error() string {
 // DeleteRepository forgets a storage location. The backups already in it are
 // not touched; with its password (the recovery kit) it can be added again.
 func (s *Store) DeleteRepository(id int64) error {
-	rows, err := s.db.Query("SELECT name FROM sources WHERE repo_id=? ORDER BY name", id)
+	rows, err := s.db.Query("SELECT name FROM sources WHERE repo_id=? OR copy_repo_id=? ORDER BY name", id, id)
 	if err != nil {
 		return err
 	}
@@ -135,10 +135,12 @@ func (s *Store) SetRepoID(id int64, repoID string) error {
 // --- sources -------------------------------------------------------------
 
 type Source struct {
-	ID               int64            `json:"id"`
-	Name             string           `json:"name"`
-	AgentID          int64            `json:"agentId"`
-	VerifierID       *int64           `json:"verifierId,omitempty"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	AgentID    int64  `json:"agentId"`
+	VerifierID *int64 `json:"verifierId,omitempty"`
+	// CopyRepoID is a second storage that gets a copy of every backup.
+	CopyRepoID       *int64           `json:"copyRepoId,omitempty"`
 	RepoID           int64            `json:"repoId"`
 	Spec             source.Spec      `json:"spec"`
 	BackupCron       string           `json:"backupCron"`
@@ -226,15 +228,15 @@ func (s *Store) SaveSource(src *Source, sec *SourceSecret) (int64, error) {
 		}
 	}
 	if src.ID == 0 {
-		res, err := s.db.Exec(`INSERT INTO sources(name,agent_id,verifier_id,repo_id,spec,secret,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,created)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, src.Name, src.AgentID, src.VerifierID, src.RepoID, string(spec), ct, src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled, now())
+		res, err := s.db.Exec(`INSERT INTO sources(name,agent_id,verifier_id,repo_id,spec,secret,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,created,copy_repo_id)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, src.Name, src.AgentID, src.VerifierID, src.RepoID, string(spec), ct, src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled, now(), src.CopyRepoID)
 		if err != nil {
 			return 0, err
 		}
 		return res.LastInsertId()
 	}
-	q := `UPDATE sources SET agent_id=?,verifier_id=?,repo_id=?,spec=?,backup_cron=?,drill_cron=?,retention=?,proof_max_age_hours=?,enabled=?,next_backup=NULL,next_drill=NULL`
-	args := []any{src.AgentID, src.VerifierID, src.RepoID, string(spec), src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled}
+	q := `UPDATE sources SET agent_id=?,verifier_id=?,repo_id=?,spec=?,backup_cron=?,drill_cron=?,retention=?,proof_max_age_hours=?,enabled=?,copy_repo_id=?,next_backup=NULL,next_drill=NULL`
+	args := []any{src.AgentID, src.VerifierID, src.RepoID, string(spec), src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled, src.CopyRepoID}
 	if ct != nil {
 		q += ",secret=?"
 		args = append(args, ct)
@@ -243,18 +245,21 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, src.Name, src.AgentID, src.VerifierID, src.Rep
 	return src.ID, err
 }
 
-const sourceCols = "id,name,agent_id,verifier_id,repo_id,spec,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,next_backup,next_drill,created"
+const sourceCols = "id,name,agent_id,verifier_id,repo_id,spec,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,next_backup,next_drill,created,copy_repo_id"
 
 func scanSource(row interface{ Scan(...any) error }) (*Source, error) {
 	var src Source
 	var spec, ret string
-	var verifier sql.NullInt64
+	var verifier, copyRepo sql.NullInt64
 	var nb, nd sql.NullString
-	if err := row.Scan(&src.ID, &src.Name, &src.AgentID, &verifier, &src.RepoID, &spec, &src.BackupCron, &src.DrillCron, &ret, &src.ProofMaxAgeHours, &src.Enabled, &nb, &nd, &src.Created); err != nil {
+	if err := row.Scan(&src.ID, &src.Name, &src.AgentID, &verifier, &src.RepoID, &spec, &src.BackupCron, &src.DrillCron, &ret, &src.ProofMaxAgeHours, &src.Enabled, &nb, &nd, &src.Created, &copyRepo); err != nil {
 		return nil, err
 	}
 	if verifier.Valid {
 		src.VerifierID = &verifier.Int64
+	}
+	if copyRepo.Valid {
+		src.CopyRepoID = &copyRepo.Int64
 	}
 	if err := json.Unmarshal([]byte(spec), &src.Spec); err != nil {
 		return nil, fmt.Errorf("source %q: spec: %w", src.Name, err)

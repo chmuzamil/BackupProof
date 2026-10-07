@@ -58,6 +58,15 @@ type Lease struct {
 	DownloadBps int64 `json:"downloadBps,omitempty"`
 	// Restore is set for "restore" and "restore-db" jobs.
 	Restore *Restore `json:"restore,omitempty"`
+	// Copy is the second storage for "copy" jobs (SnapshotID is the backup to copy).
+	Copy *CopyTarget `json:"copy,omitempty"`
+}
+
+type CopyTarget struct {
+	Repository backend.Config      `json:"repository"`
+	RepoID     int64               `json:"repositoryId"`
+	Password   string              `json:"password"`
+	Creds      backend.Credentials `json:"credentials"`
 }
 
 // Restore says what to restore and where. The backup is SnapshotID, which

@@ -237,6 +237,14 @@ func (r *Repo) LoadIndex(ctx context.Context) error {
 	return nil
 }
 
+// HasBlob reports whether a data blob is stored (after LoadIndex).
+func (r *Repo) HasBlob(id bpcrypto.ID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.index[id]
+	return ok
+}
+
 // PutBlob stores plain data and returns its ID and the number of bytes
 // uploaded (0 when the blob was already present).
 func (r *Repo) PutBlob(ctx context.Context, plain []byte) (bpcrypto.ID, int, error) {

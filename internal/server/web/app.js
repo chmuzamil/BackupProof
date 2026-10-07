@@ -263,7 +263,7 @@ const STATUS = {
   failing: { cls: 'bad', label: 'Problem', help: 'The last backup or restore test failed.' },
 };
 
-const JOB_WORDS = { backup: 'Backup', drill: 'Restore test', check: 'Storage health check', maintain: 'Cleanup' };
+const JOB_WORDS = { backup: 'Backup', drill: 'Restore test', check: 'Storage health check', maintain: 'Cleanup', copy: 'Copy to second storage', restore: 'Restore', 'restore-db': 'Database restore' };
 function jobWord(kind, isImport) { return kind === 'backup' && isImport ? 'Conversion' : JOB_WORDS[kind] || kind; }
 const STATE_WORDS = { queued: 'Waiting', running: 'Running', succeeded: 'Done ✓', failed: 'Failed' };
 
@@ -1511,10 +1511,11 @@ async function pageRestore(id) {
 // ---------------------------------------------------------- item detail
 
 async function pageSource(id) {
-  let st, jobs, proofs;
+  let st, jobs, proofs, repos;
   try {
-    [st, jobs, proofs] = await Promise.all([
+    [st, jobs, proofs, repos] = await Promise.all([
       api(`/sources/${id}`), api(`/jobs?${qs({ source: id, limit: 50 })}`), api(`/proofs?${qs({ source: id, limit: 100 })}`),
+      api('/repositories').catch(() => []),
     ]);
   } catch (e) {
     if (e.status !== 404) throw e;
@@ -1613,7 +1614,19 @@ async function pageSource(id) {
     h('p', { class: 'muted small' }, 'Each backup and restore test leaves a proof: a tamper-proof record that it really happened.'),
     (proofs || []).length ? details(`Show ${plural(proofs.length, 'proof')}`, table(PH, proofs.map((p) => proofRow(p, PH, false)))) : empty('No proofs yet.'));
 
-  return h('div', null, head, hero, h('div', { class: 'grid2' }, drillCard, backupCard), jobsCard, proofsCard);
+  // Second copy (3-2-1): another storage that gets a copy of every backup.
+  const lastCopy = (proofs || []).find((p) => p.kind === 'copy' && p.passed);
+  const copyRepo = src.copyRepoId ? (repos || []).find((r) => r.id === src.copyRepoId) : null;
+  const copySel = select([['', 'No second copy'], ...(repos || []).filter((r) => r.id !== src.repoId).map((r) => [String(r.id), r.name])], src.copyRepoId ? String(src.copyRepoId) : '', { name: 'copy-storage', 'aria-label': 'Second storage' });
+  const copyCard = h('section', { class: 'card' }, cardHead('Second copy'),
+    h('p', { class: 'muted small' }, 'Keep a copy of every backup in another storage, ideally somewhere else entirely, such as a different cloud. Each copy gets its own signed proof.'),
+    copyRepo ? h('p', null, 'Copies go to ', h('strong', null, copyRepo.name), '. ', lastCopy ? ['Last copied ', timeEl(lastCopy.created), '.'] : h('span', { class: 'muted' }, 'Not copied yet.')) : null,
+    canOperate() ? h('div', { class: 'form-actions start' }, copySel, btn('Save', busy(async () => {
+      await put(`/sources/${id}/copy`, { repoId: copySel.value ? Number(copySel.value) : null });
+      toast(copySel.value ? 'Second copy turned on. The newest backup is being copied now.' : 'Second copy turned off', 'ok');
+      reload();
+    }), 'sm')) : null);
+  return h('div', null, head, hero, h('div', { class: 'grid2' }, drillCard, backupCard), copyCard, jobsCard, proofsCard);
 }
 
 async function showJobLog(box, sourceId, jobId, isImport) {
@@ -1652,7 +1665,7 @@ async function showJobLog(box, sourceId, jobId, isImport) {
 
 function proofRow(p, headers, withSource) {
   const rto = p.rtoMs != null ? p.rtoMs : null;
-  const what = p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind;
+  const what = p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind === 'copy' ? 'Copy in second storage' : p.kind;
   const ctx = `${what} proof${p.sourceName ? ' for ' + p.sourceName : ''}, ${absTime(p.created)}`;
   const cells = [
     timeEl(p.created),
@@ -1671,7 +1684,7 @@ function hostOf(u) { try { return new URL(u).host; } catch { return u || ''; } }
 async function viewProof(id) {
   const p = await api(`/proofs/${id}`);
   const env = p.envelope || {};
-  const what = p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind;
+  const what = p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind === 'copy' ? 'Copy in second storage' : p.kind;
   modal(`Proof: ${what}`, h('div', null,
     h('p', { class: 'muted small' }, 'A tamper-proof record that this really happened. Anyone with the public keys can check it, even without this dashboard.'),
     h('dl', { class: 'kv' },

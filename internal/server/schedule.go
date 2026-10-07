@@ -175,5 +175,5 @@ func since(last, created, now time.Time) string {
 }
 
 func plainKind(k string) string {
-	return map[string]string{"backup": "backup", "drill": "restore test", "check": "storage check"}[k]
+	return map[string]string{"backup": "backup", "drill": "restore test", "check": "storage check", "copy": "copy to the second storage"}[k]
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	bpcrypto "github.com/chmuzamil/backupproof/internal/crypto"
 	"github.com/chmuzamil/backupproof/internal/drill"
 	"github.com/chmuzamil/backupproof/internal/engine"
 	"github.com/chmuzamil/backupproof/internal/importer"
@@ -152,6 +153,35 @@ func Backup(ctx context.Context, e *Env, spec source.Spec, tags []string) (snaps
 	}
 	rec, err := e.attest(ctx, "backup", proof.SnapshotSubject(pred.RepoID, pred.SnapshotID, snap.Root), proof.PredicateBackup, pred, pred.SnapshotID, spec.Name, true)
 	return snap, rec, err
+}
+
+// Copy copies an attested backup into dst (a second storage), signs a copy
+// statement and applies the same retention there.
+func Copy(ctx context.Context, e *Env, dst *repo.Repo, dstStorage proof.StorageInfo, snapID, expectedRoot, sourceName string, policy retention.Policy) (*Record, error) {
+	id, err := bpcrypto.ParseID(snapID)
+	if err != nil {
+		return nil, err
+	}
+	cp, st, err := engine.CopySnapshot(ctx, e.Repo, dst, id, expectedRoot, e.Log)
+	if err != nil {
+		return nil, err
+	}
+	de := *e
+	de.Repo, de.Storage = dst, dstStorage
+	pred := proof.CopyPredicate{
+		RepoID: dst.Config().ID, SnapshotID: cp.ID.String(), FromRepoID: e.Repo.Config().ID, FromSnapshotID: snapID,
+		Source: sourceName, Kind: cp.Source.Kind, Time: cp.Time, Entries: cp.Entries, Bytes: cp.Stats.Bytes,
+		Chunks: st.Chunks, NewChunks: st.NewChunks, Uploaded: st.Uploaded, DurationMs: st.DurationMs,
+		Storage: dstStorage, Engine: engine.Version,
+	}
+	rec, err := de.attest(ctx, "copy", proof.SnapshotSubject(pred.RepoID, pred.SnapshotID, cp.Root), proof.PredicateCopy, pred, pred.SnapshotID, sourceName, true)
+	if err != nil {
+		return rec, err
+	}
+	if _, _, merr := Maintain(ctx, &de, sourceName, policy, nil); merr != nil {
+		e.log("warning: retention in the second storage failed: %v", merr)
+	}
+	return rec, nil
 }
 
 // publicMeta drops fields that may contain paths of secrets; table names and

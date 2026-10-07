@@ -108,6 +108,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sources/{id}/download", s.auth("admin", s.handleDownloadFiles))
 	mux.HandleFunc("POST /api/sources/{id}/restore", s.auth("admin", s.handleRestore))
 	mux.HandleFunc("POST /api/sources/{id}/restore-db", s.auth("admin", s.handleRestoreDB))
+	mux.HandleFunc("PUT /api/sources/{id}/copy", s.auth("operator", s.handleSetCopy))
 
 	mux.HandleFunc("GET /api/jobs", s.auth("auditor", s.handleListJobs))
 	mux.HandleFunc("GET /api/jobs/{id}", s.auth("auditor", s.handleGetJob))

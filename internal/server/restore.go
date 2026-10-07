@@ -37,7 +37,7 @@ import (
 // Only backups this item's own server signed a proof for can be used, so a
 // snapshot planted in shared storage can never be restored.
 
-var restoreMigrations = []string{"ALTER TABLE jobs ADD COLUMN params TEXT"}
+var restoreMigrations = []string{"ALTER TABLE jobs ADD COLUMN params TEXT", "ALTER TABLE sources ADD COLUMN copy_repo_id INTEGER"}
 
 func restoreKind(kind string) bool { return kind == "restore" || kind == "restore-db" }
 

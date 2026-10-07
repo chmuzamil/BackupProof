@@ -159,6 +159,11 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 			return nil, err
 		}
 	}
+	if job.Kind == "copy" {
+		if err := s.copyLease(job, src, lease); err != nil {
+			return nil, err
+		}
+	}
 	return lease, nil
 }
 
@@ -238,7 +243,7 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, fmt.Errorf("attestation predicate: %w", err))
 		return
 	}
-	wantType := map[string]string{"backup": proof.PredicateBackup, "drill": proof.PredicateDrill}[req.Kind]
+	wantType := map[string]string{"backup": proof.PredicateBackup, "drill": proof.PredicateDrill, "copy": proof.PredicateCopy}[req.Kind]
 	if st.PredicateType != wantType || req.Kind != job.Kind {
 		writeErr(w, 400, errors.New("attestation kind does not match job"))
 		return
@@ -257,8 +262,26 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 			req.Timestamp = nil // keep the proof, drop an invalid timestamp
 		}
 	}
-	if err := s.store.SetRepoID(src.RepoID, pred.RepoID); err != nil {
-		s.log.Printf("repository #%d: could not record repository ID: %v", src.RepoID, err)
+	repoRow := src.RepoID
+	if req.Kind == "copy" {
+		// A copy must hold exactly the data of a backup this server verified.
+		var cp struct {
+			FromSnapshotID string `json:"fromSnapshotId"`
+		}
+		_ = json.Unmarshal(st.Predicate, &cp)
+		root, err := s.attestedRoot(src.ID, cp.FromSnapshotID)
+		if err != nil || len(st.Subject) == 0 || st.Subject[0].Digest["blake3"] != root {
+			writeErr(w, 400, errors.New("the copy's content root doesn't match the backup it says it copies"))
+			return
+		}
+		if src.CopyRepoID == nil {
+			writeErr(w, 400, errors.New("this item has no second storage"))
+			return
+		}
+		repoRow = *src.CopyRepoID
+	}
+	if err := s.store.SetRepoID(repoRow, pred.RepoID); err != nil {
+		s.log.Printf("repository #%d: could not record repository ID: %v", repoRow, err)
 	}
 	sid := src.ID
 	row := &ProofRow{Kind: req.Kind, SourceID: &sid, SourceName: src.Name, SnapshotID: req.SnapshotID, Passed: passed,
@@ -330,6 +353,10 @@ func (s *Server) handleFinish(w http.ResponseWriter, r *http.Request) {
 			name = src.Name + ": "
 		}
 		s.alert(kind, &sid, nil, fmt.Sprintf("%sthe %s failed: %s", name, plainKind(job.Kind), req.Error))
+	}
+	// Every successful backup of an item with a second storage is copied there.
+	if job.Kind == "backup" && req.OK {
+		s.queueCopy(sid, req.Result)
 	}
 	// The first successful backup of a source is immediately restore-tested,
 	// so new users see "Restore tested ✓" without waiting for the schedule.
