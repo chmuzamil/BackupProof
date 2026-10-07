@@ -81,7 +81,7 @@ func OpenStore(dataDir string, secret []byte) (*Store, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	// Additive migrations for databases created by older versions.
-	for _, m := range append(append([]string{"ALTER TABLE agents ADD COLUMN inventory TEXT"}, accountMigrations...), storageMigrations...) {
+	for _, m := range append(append([]string{"ALTER TABLE agents ADD COLUMN inventory TEXT"}, accountMigrations...), append(storageMigrations, limitMigrations...)...) {
 		// "duplicate column" on up-to-date databases is expected.
 		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
@@ -403,6 +403,7 @@ type Agent struct {
 	// Builtin is the agent embedded in the server ("This server").
 	Builtin   bool            `json:"builtin"`
 	Inventory json.RawMessage `json:"inventory,omitempty"`
+	Limits    Limits          `json:"limits"`
 }
 
 func (s *Store) CreateEnrollToken(by string, ttl time.Duration) (string, error) {
@@ -447,13 +448,14 @@ func (s *Store) Enroll(token string, a Agent) (int64, string, error) {
 	return id, agentToken, tx.Commit()
 }
 
-const agentCols = "id,name,IFNULL(hostname,''),IFNULL(os,''),IFNULL(version,''),public_key,last_seen,created,revoked,docker,IFNULL(inventory,'')"
+const agentCols = "id,name,IFNULL(hostname,''),IFNULL(os,''),IFNULL(version,''),public_key,last_seen,created,revoked,docker,IFNULL(inventory,''),upload_kbps,download_kbps,window_start,window_end"
 
 func scanAgent(row interface{ Scan(...any) error }) (*Agent, error) {
 	var a Agent
 	var seen sql.NullString
 	var inv string
-	if err := row.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Version, &a.PublicKey, &seen, &a.Created, &a.Revoked, &a.Docker, &inv); err != nil {
+	if err := row.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Version, &a.PublicKey, &seen, &a.Created, &a.Revoked, &a.Docker, &inv,
+		&a.Limits.UploadKBps, &a.Limits.DownloadKBps, &a.Limits.WindowStart, &a.Limits.WindowEnd); err != nil {
 		return nil, err
 	}
 	a.LastSeen = parseTime(seen)

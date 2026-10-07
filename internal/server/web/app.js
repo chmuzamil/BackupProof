@@ -2817,6 +2817,46 @@ function agentStatus(a) {
   return a.lastSeen ? `Offline since ${rel(a.lastSeen)}` : 'Never connected';
 }
 
+// Speeds are shown in megabits per second (how internet links are sold) and
+// stored as kilobytes per second.
+const mbitToKB = (v) => Math.round((Number(v) || 0) * 1000 / 8);
+const kbToMbit = (kb) => kb ? +(kb * 8 / 1000).toFixed(1) : 0;
+
+function limitsWords(l) {
+  const parts = [];
+  if (l.uploadKBps) parts.push(`upload up to ${kbToMbit(l.uploadKBps)} Mbit/s`);
+  if (l.downloadKBps) parts.push(`download up to ${kbToMbit(l.downloadKBps)} Mbit/s`);
+  if (l.windowStart) parts.push(`scheduled jobs between ${l.windowStart} and ${l.windowEnd}`);
+  return parts.length ? parts.join(' · ') : 'No limits: full speed, any time';
+}
+
+function limitsBox(a) {
+  const l = a.limits || {};
+  const up = input({ name: 'upload-mbit', type: 'number', inputmode: 'decimal', min: 0, step: 'any', value: kbToMbit(l.uploadKBps) || '', placeholder: 'No limit…' });
+  const down = input({ name: 'download-mbit', type: 'number', inputmode: 'decimal', min: 0, step: 'any', value: kbToMbit(l.downloadKBps) || '', placeholder: 'No limit…' });
+  const from = h('input', { type: 'time', name: 'window-start', value: l.windowStart || '' });
+  const to = h('input', { type: 'time', name: 'window-end', value: l.windowEnd || '' });
+  const form = h('form', {
+    novalidate: true,
+    onsubmit: busy(async (e) => {
+      e.preventDefault();
+      clearErrors(form);
+      if (!!from.value !== !!to.value) return fieldError(from.value ? to : from, 'Give both a start and an end time, or leave both empty.');
+      if (from.value && from.value === to.value) return fieldError(to, 'The end time must be different from the start time.');
+      await put(`/agents/${a.id}/limits`, { uploadKBps: mbitToKB(up.value), downloadKBps: mbitToKB(down.value), windowStart: from.value, windowEnd: to.value });
+      S.dirty = false;
+      toast('Limits saved for ' + agentTitle(a), 'ok');
+      reload();
+    }),
+  },
+  h('div', { class: 'row' }, field('Upload limit (Mbit/s)', up, 'For backups. Empty means no limit.'), field('Download limit (Mbit/s)', down, 'For restore tests and restores.')),
+  h('div', { class: 'row' }, field('Run scheduled jobs from', from), field('until', to, 'In the dashboard server’s time zone. Crossing midnight is fine, for example 22:00 to 06:00.')),
+  h('p', { class: 'hint' }, 'Outside the window, scheduled backups and restore tests wait for it to open. Jobs you start yourself always run straight away.'),
+  h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary sm' }, 'Save limits')));
+  return h('div', { class: 'limits' }, h('p', { class: 'small' }, h('span', { class: 'muted' }, 'Speed and timing: '), limitsWords(l)),
+    canOperate() ? details('Change speed limits and time window', form) : null);
+}
+
 async function pageAgents() {
   const agents = agentOrder((await api('/agents')) || []);
   if (S.openConnect) { S.openConnect = false; if (isAdmin()) setTimeout(() => connectModal(), 0); }
@@ -2830,6 +2870,7 @@ async function pageAgents() {
         h('dt', null, 'System'), h('dd', null, osName(a.os)),
         h('dt', null, 'Can test databases'), h('dd', null, a.docker ? 'Yes' : 'No (needs Docker)'),
         !a.builtin ? [h('dt', null, 'Server name'), h('dd', null, a.hostname || '—')] : null),
+      !a.revoked ? limitsBox(a) : null,
       tech(h('dl', { class: 'kv' },
         h('dt', null, 'Name'), h('dd', null, a.name),
         h('dt', null, 'Host name'), h('dd', null, a.hostname || '—'),

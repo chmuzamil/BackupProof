@@ -93,7 +93,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	deadline := time.NewTimer(25 * time.Second)
 	defer deadline.Stop()
 	for {
-		job, err := s.store.LeaseJob(a.ID, leaseDuration)
+		job, err := s.store.LeaseJob(a.ID, leaseDuration, a.Limits.open(time.Now()))
 		if err != nil {
 			writeErr(w, 500, err)
 			return
@@ -140,6 +140,9 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 		JobID: job.ID, Kind: job.Kind, Source: src.Spec, Repository: repo.Backend, RepoID: repo.ID,
 		Password: sec.Password, Creds: sec.Credentials, Retention: src.Retention,
 		Verified: verified, TSAs: s.tsaURLs(), LeaseSecs: int(leaseDuration.Seconds()),
+	}
+	if lim, err := s.store.AgentLimits(job.AgentID); err == nil {
+		lease.UploadBps, lease.DownloadBps = int64(lim.UploadKBps)*1024, int64(lim.DownloadKBps)*1024
 	}
 	if head, _ := s.store.LedgerHead(); head != nil {
 		lease.SampleSeed = head.Hash

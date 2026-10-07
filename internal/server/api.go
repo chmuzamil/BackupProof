@@ -110,6 +110,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", s.auth("auditor", s.handleListAgents))
 	mux.HandleFunc("POST /api/agents/enroll-token", s.auth("admin", s.handleEnrollToken))
 	mux.HandleFunc("POST /api/agents/{id}/revoke", s.auth("admin", s.handleRevokeAgent))
+	mux.HandleFunc("PUT /api/agents/{id}/limits", s.auth("operator", s.handlePutLimits))
 
 	mux.HandleFunc("GET /api/repositories", s.auth("auditor", s.handleListRepos))
 	mux.HandleFunc("POST /api/repositories", s.auth("operator", s.handleCreateRepo))

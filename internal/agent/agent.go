@@ -328,6 +328,9 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 		}
 	}
 	be, err := backend.Open(ctx, lease.Repository, lease.Creds)
+	if err == nil {
+		be = backend.Throttle(be, lease.UploadBps, lease.DownloadBps)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("storage: %w", err)
 	}

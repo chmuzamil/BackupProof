@@ -53,6 +53,9 @@ type Lease struct {
 	SnapshotID   string `json:"snapshotId,omitempty"`
 	ExpectedRoot string `json:"expectedRoot,omitempty"`
 	LeaseSecs    int    `json:"leaseSecs"`
+	// Speed limits for this server's storage traffic, bytes per second (0 = none).
+	UploadBps   int64 `json:"uploadBps,omitempty"`
+	DownloadBps int64 `json:"downloadBps,omitempty"`
 }
 
 type LogRequest struct {

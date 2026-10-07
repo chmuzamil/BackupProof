@@ -372,11 +372,17 @@ func (s *Store) EnqueueJob(kind string, sourceID, agentID int64, trigger string)
 }
 
 // LeaseJob hands the oldest queued job for agentID to that agent.
-func (s *Store) LeaseJob(agentID int64, lease time.Duration) (*Job, error) {
+// Outside the server's time window only jobs started by a person (or the
+// first test after a first backup) are handed out; scheduled ones wait.
+func (s *Store) LeaseJob(agentID int64, lease time.Duration, windowOpen bool) (*Job, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	var id int64
-	err := s.db.QueryRow("SELECT id FROM jobs WHERE agent_id=? AND state='queued' ORDER BY id LIMIT 1", agentID).Scan(&id)
+	q := "SELECT id FROM jobs WHERE agent_id=? AND state='queued'"
+	if !windowOpen {
+		q += " AND trigger <> 'schedule'"
+	}
+	err := s.db.QueryRow(q+" ORDER BY id LIMIT 1", agentID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
