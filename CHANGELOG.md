@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-08
+
+The first published 0.2 release: no binaries were published for 0.2.0 or 0.2.1, whose release builds stopped at a failing test. It includes everything listed under them.
+
+### Fixed
+
+- Docker volumes backed up or restored through the helper container (Docker Desktop, or an agent that isn't root) keep their files' real owners. Before, they took the owner of the BackupProof agent.
+
 ## [0.2.1] - 2026-10-08
 
 ### Fixed

@@ -274,32 +274,38 @@ func addVolumeViaHelper(ctx context.Context, b *engine.Builder, v string) error 
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	xerr := untar(out, tmp)
+	owners, xerr := untar(out, tmp)
 	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("helper container: %v %s", err, strings.TrimSpace(stderr.String()))
 	}
 	if xerr != nil {
 		return xerr
 	}
-	return b.AddTree(ctx, tmp, "docker/volumes/"+v)
+	if err := b.AddTree(ctx, tmp, "docker/volumes/"+v); err != nil {
+		return err
+	}
+	// Without root the unpacked files belong to this user; keep the real owners.
+	b.SetOwners("docker/volumes/"+v, owners)
+	return nil
 }
 
 // untar unpacks regular files, folders and symlinks into dir, refusing any
-// path that would leave it.
-func untar(r io.Reader, dir string) error {
+// path that would leave it. It returns each path's owner from the archive.
+func untar(r io.Reader, dir string) (map[string][2]int, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer root.Close()
+	owners := map[string][2]int{}
 	tr := tar.NewReader(r)
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return nil
+			return owners, nil
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		name := filepath.FromSlash(strings.TrimPrefix(filepath.ToSlash(filepath.Clean(h.Name)), "./"))
 		if name == "." || name == "" {
@@ -308,22 +314,22 @@ func untar(r io.Reader, dir string) error {
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := root.MkdirAll(name, 0o700); err != nil {
-				return err
+				return nil, err
 			}
 			_ = root.Chmod(name, os.FileMode(h.Mode).Perm())
 		case tar.TypeReg:
 			if d := filepath.Dir(name); d != "." {
 				if err := root.MkdirAll(d, 0o700); err != nil {
-					return err
+					return nil, err
 				}
 			}
 			f, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, os.FileMode(h.Mode).Perm())
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if _, err := io.Copy(f, tr); err != nil {
 				f.Close()
-				return err
+				return nil, err
 			}
 			f.Close()
 		case tar.TypeSymlink:
@@ -331,6 +337,7 @@ func untar(r io.Reader, dir string) error {
 		default:
 			continue
 		}
+		owners[filepath.ToSlash(name)] = [2]int{h.Uid, h.Gid}
 		_ = root.Lchown(name, h.Uid, h.Gid)
 		_ = root.Chtimes(name, h.ModTime, h.ModTime)
 	}
@@ -338,7 +345,15 @@ func untar(r io.Reader, dir string) error {
 
 // RestoreVolume replaces the contents of volume v with the restored files in
 // src (a folder), stopping and restarting the containers that use it.
-func RestoreVolume(ctx context.Context, v, src string, restore func(target string) error, log func(string, ...any)) error {
+// Owner is a file's owner as recorded in the backup.
+type Owner struct{ UID, GID int }
+
+// RestoreVolume replaces volume v's contents using restore. owners maps each
+// path inside the volume (slash-separated) to its backed-up owner, for when
+// the files go in through a helper container: then they are written here
+// first, possibly without the right to set owners, and the tar stream sets
+// them instead.
+func RestoreVolume(ctx context.Context, v, src string, owners map[string]Owner, restore func(target string) error, log func(string, ...any)) error {
 	if !dockerNameRe.MatchString(v) {
 		return fmt.Errorf("%q isn't a valid volume name", v)
 	}
@@ -365,7 +380,7 @@ func RestoreVolume(ctx context.Context, v, src string, restore func(target strin
 	}
 	log("replacing the contents of volume %s through a helper container", v)
 	pr, pw := io.Pipe()
-	go func() { pw.CloseWithError(writeTar(pw, src)) }()
+	go func() { pw.CloseWithError(writeTar(pw, src, owners)) }()
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--network", "none", "-v", v+":/v", HelperImage,
 		"sh", "-c", "find /v -mindepth 1 -delete && tar -C /v -xf -")
 	cmd.Stdin = pr
@@ -377,7 +392,7 @@ func RestoreVolume(ctx context.Context, v, src string, restore func(target strin
 	return nil
 }
 
-func writeTar(w io.Writer, dir string) error {
+func writeTar(w io.Writer, dir string, owners map[string]Owner) error {
 	tw := tar.NewWriter(w)
 	err := filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
 		if err != nil || p == dir {
@@ -398,6 +413,9 @@ func writeTar(w io.Writer, dir string) error {
 			return err
 		}
 		h.Name = filepath.ToSlash(rel)
+		if o, ok := owners[h.Name]; ok {
+			h.Uid, h.Gid, h.Uname, h.Gname = o.UID, o.GID, "", ""
+		}
 		if err := tw.WriteHeader(h); err != nil {
 			return err
 		}

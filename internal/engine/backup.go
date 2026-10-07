@@ -372,6 +372,21 @@ func (b *Builder) AddReader(ctx context.Context, name string, mode uint32, mtime
 	return e, b.add(e)
 }
 
+// SetOwners records owners for entries already added under prefix, keyed by
+// their path below it. For files staged by someone who couldn't set their
+// owners (such as a Docker volume unpacked without root), so the backup still
+// has the real ones. Owners are not part of the content root.
+func (b *Builder) SetOwners(prefix string, owners map[string][2]int) {
+	for _, e := range b.entries {
+		if rel, ok := strings.CutPrefix(e.Path, prefix+"/"); ok {
+			if o, ok := owners[rel]; ok {
+				uid, gid := o[0], o[1]
+				e.UID, e.GID = &uid, &gid
+			}
+		}
+	}
+}
+
 // AddTree adds the contents of osRoot with manifest paths relative to it,
 // placed under prefix (e.g. a restic restore staged in a temp dir).
 func (b *Builder) AddTree(ctx context.Context, osRoot, prefix string) error {

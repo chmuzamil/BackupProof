@@ -110,7 +110,13 @@ func (a *Agent) runRestore(ctx context.Context, r *repo.Repo, lease *protocol.Le
 			if err != nil {
 				return nil, err
 			}
-			err = source.RestoreVolume(ctx, v, tmp, func(target string) error {
+			owners := map[string]source.Owner{}
+			for _, e := range entries {
+				if rel, ok := strings.CutPrefix(e.Path, "docker/volumes/"+v+"/"); ok && e.UID != nil && e.GID != nil {
+					owners[rel] = source.Owner{UID: *e.UID, GID: *e.GID}
+				}
+			}
+			err = source.RestoreVolume(ctx, v, tmp, owners, func(target string) error {
 				o := engine.RestoreOptions{StripPrefix: "docker/volumes/" + v, Original: true, Log: jl.Logf}
 				res, err := engine.Restore(ctx, r, s, target, o)
 				add(res)
