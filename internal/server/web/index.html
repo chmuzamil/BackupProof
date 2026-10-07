@@ -2,15 +2,21 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f3f5f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1318" media="(prefers-color-scheme: dark)">
 <title>BackupProof</title>
 <link rel="stylesheet" href="style.css">
 <script type="module" src="app.js"></script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to main content</a>
 <div id="app" class="boot">Loading…</div>
+<div class="toast-stack">
+<div id="toasts-alert" class="toasts" role="alert"></div>
 <div id="toasts" class="toasts" aria-live="polite"></div>
+</div>
 <noscript>BackupProof requires JavaScript.</noscript>
 </body>
 </html>

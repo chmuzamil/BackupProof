@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/chmuzamil/backupproof/internal/backend"
+	"github.com/chmuzamil/backupproof/internal/engine"
 	"github.com/chmuzamil/backupproof/internal/importer"
 	"github.com/chmuzamil/backupproof/internal/repo"
 )
@@ -26,7 +27,7 @@ func (s *Server) onboardingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/inventory", s.agentAuth(s.handleInventory))
 	mux.HandleFunc("GET /api/browse", s.auth("operator", s.handleBrowse))
 	mux.HandleFunc("POST /api/repositories/test", s.auth("operator", s.handleTestStorage))
-	mux.HandleFunc("POST /api/import/scan", s.auth("operator", s.handleImportScan))
+	mux.HandleFunc("POST /api/import/scan", s.auth("admin", s.handleImportScan))
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript("sh"))
 	mux.HandleFunc("GET /install.ps1", s.handleInstallScript("ps1"))
 	mux.HandleFunc("GET /download/{file}", s.handleDownload)
@@ -129,6 +130,10 @@ func (s *Server) handleTestStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err)
+		return
+	}
+	if req.Backend.Type == "local" && engine.IsDenied(req.Backend.Path, []string{s.cfg.DataDir}) {
+		writeJSON(w, 200, storageTest{Message: "This folder belongs to the BackupProof server itself. Choose a different folder or disk."})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)

@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/chmuzamil/backupproof/internal/backend"
 	"github.com/chmuzamil/backupproof/internal/chunker"
+	"github.com/chmuzamil/backupproof/internal/importer"
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/repo"
+	"github.com/chmuzamil/backupproof/internal/snapshot"
 	"github.com/chmuzamil/backupproof/internal/source"
 	_ "modernc.org/sqlite"
 )
@@ -144,5 +147,62 @@ func TestFilesDrillDetectsMissingExpectedPath(t *testing.T) {
 	spec.Drill.ExpectPaths = append(spec.Drill.ExpectPaths, filepath.Join(src, "wp-config.php"))
 	if res, _, _ := Drill(ctx, env, spec, "", dir); res.Passed {
 		t.Fatal("missing expected path must fail the drill")
+	}
+}
+
+func TestDrillRefusesSnapshotThatDoesNotMatchProof(t *testing.T) {
+	ctx := context.Background()
+	env, dir, _ := setup(t)
+	src := filepath.Join(dir, "site")
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "index.html"), []byte("real"), 0o644)
+	spec := source.Spec{Name: "site", Kind: "files", Paths: []string{src}}
+	snap, _, err := Backup(ctx, env, spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A planted snapshot would have a different content root than the one
+	// in the verified backup attestation the server hands to the agent.
+	if _, _, err := DrillAttested(ctx, env, spec, snap.ID.String(), strings.Repeat("0", 64), dir); err == nil {
+		t.Fatal("drill must refuse a snapshot whose root differs from the attested one")
+	}
+	if res, _, err := DrillAttested(ctx, env, spec, snap.ID.String(), snap.Root, dir); err != nil || !res.Passed {
+		t.Fatalf("attested snapshot must pass: %v", err)
+	}
+}
+
+func TestDenyPathsProtectServerData(t *testing.T) {
+	ctx := context.Background()
+	env, dir, _ := setup(t)
+	parent := filepath.Join(dir, "srv")
+	secretDir := filepath.Join(parent, "backupproof-data")
+	os.MkdirAll(secretDir, 0o755)
+	os.WriteFile(filepath.Join(secretDir, "secret.key"), []byte("TOP SECRET"), 0o600)
+	os.WriteFile(filepath.Join(parent, "app.txt"), []byte("normal data"), 0o644)
+	env.DenyPaths = []string{secretDir}
+
+	// Backing up a parent folder silently skips the protected folder.
+	snap, _, err := Backup(ctx, env, source.Spec{Name: "all", Kind: "files", Paths: []string{parent}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := snapshot.ReadManifest(ctx, env.Repo, snap.Snapshot)
+	for _, e := range entries {
+		if strings.Contains(e.Path, "secret.key") {
+			t.Fatal("protected server data was backed up")
+		}
+	}
+	if snap.Stats.Files != 1 {
+		t.Fatalf("expected only app.txt, got %d files", snap.Stats.Files)
+	}
+	// Pointing directly at protected data is refused.
+	if _, _, err := Backup(ctx, env, source.Spec{Name: "db", Kind: "sqlite", Paths: []string{filepath.Join(secretDir, "backupproof.db")}}, nil); err == nil {
+		t.Fatal("sqlite source inside protected data must be refused")
+	}
+	if _, err := Import(ctx, env, source.Spec{Name: "imp", Kind: "import", Import: &importer.Spec{Format: "files", Storage: backend.Config{Type: "local", Path: secretDir}}}); err == nil {
+		t.Fatal("import from protected data must be refused")
+	}
+	if StorageDenied(filepath.Join(secretDir, "repo"), env.DenyPaths) == nil {
+		t.Fatal("storage inside protected data must be refused")
 	}
 }

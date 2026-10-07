@@ -5,12 +5,16 @@
 
 'use strict';
 
-const S = { status: null, user: null, csrf: '', gen: 0, timers: [], openAlerts: 0, ledgerFrom: 1, detailJob: null, importPrefill: null, openConnect: false };
+const S = {
+  status: null, user: null, csrf: '', gen: 0, timers: [], openAlerts: 0, detailJob: null, importPrefill: null, openConnect: false,
+  uid: 0, dirty: false, curHash: '', stepHandler: null,
+};
 
 // ---------------------------------------------------------------- helpers
 
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
+  if (tag === 'code' || tag === 'pre') el.setAttribute('translate', 'no');
   if (attrs != null && (typeof attrs !== 'object' || attrs instanceof Node || Array.isArray(attrs))) {
     kids.unshift(attrs);
     attrs = null;
@@ -41,11 +45,25 @@ function add(el, kids) {
 function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); return el; }
 function fill(el, ...kids) { return add(clear(el), kids); }
 
+const uid = (p = 'u') => `${p}-${++S.uid}`;
+const srOnly = (text) => h('span', { class: 'sr-only' }, text);
+// mark shows ✓/✗ to the eye and "passed"/"failed" to screen readers.
+const mark = (ok, words = ok ? 'passed' : 'failed') => [h('span', { 'aria-hidden': 'true' }, ok ? '✓' : '✗'), srOnly(words)];
+// glyph is a decorative ✓/✗ prefix (the words next to it carry the meaning).
+const glyph = (ok) => h('span', { class: 'glyph', 'aria-hidden': 'true' }, ok ? '✓ ' : '✗ ');
+// glyphLabel turns "Restore tested ✓" into text plus a hidden check mark.
+function glyphLabel(label) {
+  const m = /^(.*?)\s*([✓✗])$/.exec(label || '');
+  return m ? [m[1], h('span', { 'aria-hidden': 'true' }, ' ' + m[2])] : label;
+}
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+
+// Errors go to the assertive region so screen readers announce them at once.
 function toast(msg, kind = '') {
-  const box = document.getElementById('toasts');
-  const t = h('div', { class: 'toast ' + kind, role: 'status' }, msg);
+  const box = document.getElementById(kind === 'bad' ? 'toasts-alert' : 'toasts') || document.getElementById('toasts');
+  const t = h('div', { class: 'toast ' + kind }, msg);
   box.append(t);
-  setTimeout(() => t.remove(), kind === 'bad' ? 8000 : 4000);
+  setTimeout(() => t.remove(), kind === 'bad' ? 9000 : 4500);
 }
 
 class ApiError extends Error {
@@ -60,7 +78,9 @@ async function api(path, opts = {}) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(opts.body);
   }
-  const r = await fetch('/api' + path, init);
+  let r;
+  try { r = await fetch('/api' + path, init); }
+  catch { throw new ApiError('Can’t reach the BackupProof server. Check that it is running and your network is connected, then try again.', 0); }
   const txt = await r.text();
   let data = null;
   try { data = txt ? JSON.parse(txt) : null; } catch { data = txt; }
@@ -69,7 +89,11 @@ async function api(path, opts = {}) {
     renderAuth();
     throw new ApiError('Your session has expired. Please sign in again.', 401);
   }
-  if (!r.ok) throw new ApiError((data && data.error) || `${r.status} ${r.statusText}`, r.status);
+  if (!r.ok) {
+    throw new ApiError((data && data.error) || (r.status >= 500
+      ? `The server ran into a problem (error ${r.status}). Try again in a moment; if it keeps happening, check the BackupProof server log.`
+      : `The request was refused (error ${r.status} ${r.statusText}). Reload the page and try again.`), r.status);
+  }
   return data;
 }
 
@@ -92,7 +116,21 @@ function toDate(t) {
   return d;
 }
 
-const plural = (n, unit) => `${n} ${unit}${n === 1 ? '' : 's'}`;
+const NUM = new Intl.NumberFormat();
+const nf = (n) => NUM.format(n);
+const plural = (n, unit) => `${nf(n)} ${unit}${n === 1 ? '' : 's'}`;
+const RTF = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+const LIST_AND = new Intl.ListFormat(undefined, { style: 'long', type: 'conjunction' });
+const LIST_UNIT = new Intl.ListFormat(undefined, { style: 'long', type: 'unit' });
+const CLOCK = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+// clock(2, 0) → "2:00 AM" (or "02:00" where people use a 24-hour clock).
+const clock = (hr, min = 0) => CLOCK.format(new Date(2000, 0, 2, hr, min));
+const unitFmt = {};
+function unitNum(n, unit, display = 'long') {
+  const k = unit + display;
+  unitFmt[k] = unitFmt[k] || new Intl.NumberFormat(undefined, { style: 'unit', unit, unitDisplay: display, maximumFractionDigits: 1 });
+  return unitFmt[k].format(n);
+}
 
 // rel renders a time the way people say it: "3 hours ago", "in 5 minutes".
 function rel(t) {
@@ -102,9 +140,10 @@ function rel(t) {
   const a = Math.abs(s);
   if (a < 45) return s < 0 ? 'just now' : 'in a moment';
   const units = [[60, 'minute', 3600], [3600, 'hour', 86400 * 2], [86400, 'day', 86400 * 60], [86400 * 30, 'month', 86400 * 730], [86400 * 365, 'year', Infinity]];
-  let w = '';
-  for (const [size, name, max] of units) { if (a < max) { w = plural(Math.max(1, Math.round(a / size)), name); break; } }
-  return s < 0 ? w + ' ago' : 'in ' + w;
+  for (const [size, name, max] of units) {
+    if (a < max) return RTF.format(Math.sign(s) * Math.max(1, Math.round(a / size)), name);
+  }
+  return '—';
 }
 
 function absTime(t) { const d = toDate(t); return d ? d.toLocaleString() : ''; }
@@ -120,32 +159,34 @@ function bytes(n) {
   const u = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
   let i = 0, v = Number(n);
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return (i === 0 ? v : v.toFixed(v < 10 ? 1 : 0)) + ' ' + u[i];
+  const digits = i === 0 || v >= 10 ? 0 : 1;
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(v) + ' ' + u[i];
 }
 
-// dur is the compact technical form; durWords is for plain summaries.
+// dur is the compact technical form ("3m 5s"); durWords is for plain summaries.
 function dur(ms) {
   if (ms == null || isNaN(ms)) return '—';
   ms = Number(ms);
-  if (ms < 1000) return Math.round(ms) + ' ms';
+  const n = (v, u) => unitNum(v, u, 'narrow');
+  if (ms < 1000) return n(Math.round(ms), 'millisecond');
   const s = ms / 1000;
-  if (s < 60) return s.toFixed(s < 10 ? 1 : 0) + 's';
+  if (s < 60) return n(s < 10 ? Math.round(s * 10) / 10 : Math.round(s), 'second');
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${Math.round(s % 60)}s`;
+  if (m < 60) return `${n(m, 'minute')} ${n(Math.round(s % 60), 'second')}`;
   const hr = Math.floor(m / 60);
-  if (hr < 48) return `${hr}h ${m % 60}m`;
-  return `${Math.floor(hr / 24)}d ${hr % 24}h`;
+  if (hr < 48) return `${n(hr, 'hour')} ${n(m % 60, 'minute')}`;
+  return `${n(Math.floor(hr / 24), 'day')} ${n(hr % 24, 'hour')}`;
 }
 
 function durWords(ms) {
   if (ms == null || isNaN(ms)) return '—';
   const s = Math.round(Number(ms) / 1000);
   if (s < 1) return 'less than a second';
-  if (s < 60) return plural(s, 'second');
+  if (s < 60) return unitNum(s, 'second');
   const m = Math.floor(s / 60);
-  if (m < 60) return plural(m, 'minute') + (s % 60 ? ' ' + plural(s % 60, 'second') : '');
+  if (m < 60) return LIST_UNIT.format([unitNum(m, 'minute'), s % 60 ? unitNum(s % 60, 'second') : null].filter(Boolean));
   const hr = Math.floor(m / 60);
-  return plural(hr, 'hour') + (m % 60 ? ' ' + plural(m % 60, 'minute') : '');
+  return LIST_UNIT.format([unitNum(hr, 'hour'), m % 60 ? unitNum(m % 60, 'minute') : null].filter(Boolean));
 }
 
 function short(id, n = 8) { return id ? String(id).slice(0, n) : '—'; }
@@ -159,7 +200,7 @@ function pred(p) {
 function lines(text) { return String(text || '').split('\n').map((s) => s.trim()).filter(Boolean); }
 function list(text) { return String(text || '').split(/[\n,]/).map((s) => s.trim()).filter(Boolean); }
 function num(v) { const n = Number(v); return v === '' || isNaN(n) ? 0 : n; }
-function joinWords(arr) { return arr.length < 2 ? arr.join('') : arr.slice(0, -1).join(', ') + ' and ' + arr[arr.length - 1]; }
+function joinWords(arr) { return LIST_AND.format(arr.map(String)); }
 function baseName(p) { const parts = String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/); return parts[parts.length - 1] || p; }
 
 // role checks
@@ -189,6 +230,9 @@ const ICONS = {
   bell: ['M6 16V11a6 6 0 0 1 12 0v5l2 2H4z', 'M10 21h4'],
   plus: ['M12 5v14', 'M5 12h14'],
   history: ['M3 12a9 9 0 1 0 3-6.7', 'M3 4v5h5', 'M12 7v5l3 3'],
+  info: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M12 11v5', 'M12 8h.01'],
+  menu: ['M4 7h16', 'M4 12h16', 'M4 17h16'],
+  close: ['M6 6l12 12', 'M18 6L6 18'],
 };
 
 function icon(name, cls = '') {
@@ -273,13 +317,13 @@ function lockWords(b) {
 
 const CRON_WORDS = {
   '@hourly': 'every hour',
-  '0 2 * * *': 'every night at 2:00',
+  '0 2 * * *': `every night at ${clock(2)}`,
   '@every 6h': 'every 6 hours',
-  '0 3 * * 0': 'every Sunday at 3:00',
-  '0 5 * * *': 'every day at 5:00',
-  '0 4 * * *': 'every day at 4:00',
-  '0 4 * * 0': 'every Sunday at 4:00',
-  '0 4 1 * *': 'on the 1st of every month at 4:00',
+  '0 3 * * 0': `every Sunday at ${clock(3)}`,
+  '0 5 * * *': `every day at ${clock(5)}`,
+  '0 4 * * *': `every day at ${clock(4)}`,
+  '0 4 * * 0': `every Sunday at ${clock(4)}`,
+  '0 4 1 * *': `on the 1st of every month at ${clock(4)}`,
   '@daily': 'every day at midnight',
   '@weekly': 'every Sunday at midnight',
   manual: 'only when you click the button',
@@ -291,7 +335,7 @@ function cronWords(c) {
   let m = /^@every\s+(\d+)([smhd])$/.exec(c);
   if (m) return 'every ' + plural(Number(m[1]), { s: 'second', m: 'minute', h: 'hour', d: 'day' }[m[2]]);
   m = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(c);
-  if (m) return `every day at ${m[2]}:${m[1].padStart(2, '0')}`;
+  if (m && Number(m[2]) < 24 && Number(m[1]) < 60) return `every day at ${clock(Number(m[2]), Number(m[1]))}`;
   return `on a custom schedule (${c})`;
 }
 
@@ -326,9 +370,9 @@ const CHECK_WORDS = [
 function checkWords(name) {
   const m = /^assert:\s*(.*)$/.exec(name || '');
   if (m) return 'Your check: ' + m[1];
-  const dd = /^database-dump:s*(.*)$/.exec(name || '');
+  const dd = /^database-dump:\s*(.*)$/.exec(name || '');
   if (dd) return `Loaded ${dd[1]} into a test database`;
-  const di = /^database-dump-integrity:s*(.*)$/.exec(name || '');
+  const di = /^database-dump-integrity:\s*(.*)$/.exec(name || '');
   if (di) return `${di[1]}: database structure is healthy`;
   if (name === 'database-dumps') return 'Database dumps found';
   for (const [re, w] of CHECK_WORDS) if (re.test(name || '')) return w;
@@ -342,35 +386,110 @@ const ALERT_WORDS = {
 
 // --------------------------------------------------------------- widgets
 
+// statusPill is a real button that shows what the status means in a small
+// note right below it (instead of a tooltip that disappears).
 function statusPill(status, reason) {
   const s = STATUS[status] || { cls: '', label: status || 'Unknown', help: '' };
-  const tip = reason || s.help;
-  return h('span', { class: 'pill ' + s.cls, title: tip, tabindex: '0', role: 'button', onclick: (e) => { e.stopPropagation(); e.preventDefault(); toast(tip || s.label); } }, s.label);
+  const text = reason ? s.help || reason : s.help;
+  if (!text) return h('span', { class: 'pill ' + s.cls }, glyphLabel(s.label));
+  const id = uid('pill');
+  const note = h('span', { class: 'pill-note', id, hidden: true }, text);
+  const b = h('button', {
+    type: 'button', class: 'pill pill-btn ' + s.cls, 'aria-expanded': 'false', 'aria-controls': id,
+    onclick: (e) => { e.preventDefault(); const open = note.hidden; note.hidden = !open; b.setAttribute('aria-expanded', String(open)); },
+    onkeydown: (e) => { if (e.key === 'Escape' && !note.hidden) { e.stopPropagation(); note.hidden = true; b.setAttribute('aria-expanded', 'false'); } },
+  }, glyphLabel(s.label), icon('info', 'pill-i'), srOnly(' – what does this mean?'));
+  return [b, note];
 }
 
 function statePill(state) {
   const cls = { succeeded: 'ok', failed: 'bad', running: 'warn', queued: '' }[state] ?? '';
-  return h('span', { class: 'pill ' + cls }, STATE_WORDS[state] || state || '—');
+  return h('span', { class: 'pill ' + cls }, glyphLabel(STATE_WORDS[state] || state || '—'));
 }
 
 function passPill(passed) { return h('span', { class: 'pill ' + (passed ? 'ok' : 'bad') }, passed ? 'Passed' : 'Failed'); }
 
-function btn(label, onclick, cls = '') { return h('button', { type: 'button', class: 'btn ' + cls, onclick }, label); }
+function btn(label, onclick, cls = '', attrs = {}) { return h('button', { type: 'button', class: 'btn ' + cls, onclick, ...attrs }, label); }
 
-// Runs an async action with the button disabled and errors toasted.
-function busy(fn) {
+// busy runs an async action. On a button it disables that button; used as a
+// form's onsubmit it disables the form's submit button. While it runs the
+// button shows a spinner and "Working…"/"Saving…". Errors are toasted.
+function busy(fn, label) {
   return async (e) => {
-    const b = e && e.currentTarget;
-    if (b) b.disabled = true;
-    try { await fn(e); } catch (err) { if (err.status !== 401) toast(err.message, 'bad'); } finally { if (b) b.disabled = false; }
+    const el = e && e.currentTarget;
+    const b = el && el.tagName === 'FORM' ? el.querySelector('button[type=submit]') : el && el.tagName === 'BUTTON' ? el : null;
+    if (b && b.disabled) return;
+    let kids = null, hadFocus = false, w = 0;
+    if (b) {
+      hadFocus = document.activeElement === b;
+      kids = [...b.childNodes];
+      w = b.offsetWidth;
+      b.disabled = true;
+      b.setAttribute('aria-busy', 'true');
+      b.style.minWidth = w + 'px';
+      fill(b, h('span', { class: 'spinner sm', 'aria-hidden': 'true' }), label || (el.tagName === 'FORM' ? 'Saving…' : 'Working…'));
+    }
+    try { await fn(e); } catch (err) { if (err.status !== 401) toast(err.message, 'bad'); } finally {
+      if (b) {
+        fill(b, kids);
+        b.disabled = false;
+        b.removeAttribute('aria-busy');
+        b.style.minWidth = '';
+        if (hadFocus && b.isConnected && document.activeElement === document.body) b.focus({ preventScroll: true });
+      }
+    }
   };
 }
 
-function field(label, input, hint) {
-  return h('label', { class: 'field' }, h('span', null, label), input, hint ? h('span', { class: 'hint' }, hint) : null);
+function describe(el, id) {
+  if (!el || !el.setAttribute) return;
+  const cur = (el.getAttribute('aria-describedby') || '').split(' ').filter((x) => x && x !== id);
+  el.setAttribute('aria-describedby', [...cur, id].join(' '));
 }
 
-function input(attrs = {}) { return h('input', { type: 'text', ...attrs }); }
+function field(label, control, hint) {
+  let hintEl = null;
+  if (hint) { hintEl = h('span', { class: 'hint', id: uid('hint') }, hint); describe(control, hintEl.id); }
+  return h('label', { class: 'field' }, h('span', { class: 'field-label' }, label), control, hintEl);
+}
+
+// fieldError shows a message right under a field, marks it invalid, and
+// moves focus there. clearErrors removes all of them inside a container.
+function fieldError(control, msg) {
+  const f = control.closest('.field') || control.parentNode;
+  let e = f.querySelector('.field-error');
+  if (!e) { e = h('span', { class: 'field-error', id: uid('err'), role: 'alert' }); f.append(e); }
+  e.textContent = msg;
+  control.setAttribute('aria-invalid', 'true');
+  describe(control, e.id);
+  control.focus({ preventScroll: true });
+  control.scrollIntoView({ block: 'center', behavior: motionOK() ? 'smooth' : 'auto' });
+  return false;
+}
+function clearErrors(root) {
+  root.querySelectorAll('.field-error').forEach((e) => e.remove());
+  root.querySelectorAll('[aria-invalid]').forEach((c) => c.removeAttribute('aria-invalid'));
+}
+
+const motionOK = () => !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// errBox is a form-level error line that is announced when it changes.
+function errBox() { return h('div', { class: 'form-error', role: 'alert', tabindex: '-1' }); }
+// showErr writes into an errBox and brings it into view.
+function showErr(box, msg) {
+  box.textContent = msg;
+  if (!msg) return;
+  box.scrollIntoView({ block: 'center', behavior: motionOK() ? 'smooth' : 'auto' });
+  box.focus({ preventScroll: true });
+}
+
+// input builds a text field. Extra keys: code: true turns off spellcheck and
+// auto-capitalisation (for hosts, usernames, paths, keys).
+function input(attrs = {}) {
+  const { code, ...rest } = attrs;
+  if (code) Object.assign(rest, { spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off' });
+  return h('input', { type: 'text', ...rest });
+}
 
 function select(options, value, attrs = {}) {
   return h('select', attrs, options.map(([v, l]) => h('option', { value: String(v), selected: String(v) === String(value ?? '') }, l)));
@@ -378,7 +497,9 @@ function select(options, value, attrs = {}) {
 
 function checkbox(label, checked, hint) {
   const cb = h('input', { type: 'checkbox', checked });
-  return { el: h('label', { class: 'check' }, cb, h('span', null, label, hint ? h('span', { class: 'hint block' }, hint) : null)), cb };
+  const hid = hint ? uid('hint') : null;
+  if (hid) describe(cb, hid);
+  return { el: h('label', { class: 'check' }, cb, h('span', null, label, hint ? h('span', { class: 'hint block', id: hid }, hint) : null)), cb };
 }
 
 function card(title, ...body) {
@@ -403,7 +524,18 @@ function tr(cells, headers, attrs = {}) {
 function empty(msg, ...extra) { return h('div', { class: 'empty' }, h('p', null, msg), ...extra); }
 
 function pageHead(title, sub, right) {
-  return h('div', { class: 'page-head' }, h('div', null, h('h1', null, title), sub ? h('p', { class: 'muted' }, sub) : null), right || null);
+  return h('div', { class: 'page-head' }, h('div', { class: 'page-title' }, h('h1', { tabindex: '-1' }, title), sub ? h('p', { class: 'muted lede' }, sub) : null), right || null);
+}
+
+function focusHeading(root, sel) {
+  const el = root.querySelector(sel);
+  if (!el) return;
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+  el.focus({ preventScroll: true });
+}
+
+function backLink(href, label) {
+  return h('div', { class: 'back small' }, h('a', { href }, h('span', { 'aria-hidden': 'true' }, '← '), label));
 }
 
 // details() hides technical or optional content behind a toggle.
@@ -420,12 +552,12 @@ async function copyText(text) {
   }
 }
 
-function copyBtn(getText, label = 'Copy') {
+function copyBtn(getText, label = 'Copy', ariaLabel) {
   const b = btn(label, async () => {
     await copyText(getText());
-    b.textContent = 'Copied ✓';
+    fill(b, 'Copied ', h('span', { 'aria-hidden': 'true' }, '✓'));
     setTimeout(() => { b.textContent = label; }, 1500);
-  }, 'sm');
+  }, 'sm', { 'aria-label': ariaLabel || null });
   return b;
 }
 
@@ -437,68 +569,155 @@ function download(filename, text) {
   setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
 }
 
+// Open dialogs, topmost last. Only the topmost one reacts to Escape and Tab;
+// everything behind it is inert.
+const MODALS = [];
+
+function syncInert() {
+  const app = document.getElementById('app');
+  if (app) app.inert = MODALS.length > 0;
+  MODALS.forEach((m, i) => { m.bg.inert = i !== MODALS.length - 1; });
+  document.body.classList.toggle('modal-open', MODALS.length > 0);
+}
+
+document.addEventListener('keydown', (e) => {
+  const top = MODALS[MODALS.length - 1];
+  if (!top) return;
+  if (e.key === 'Escape') { e.preventDefault(); top.close(); return; }
+  if (e.key !== 'Tab') return;
+  const items = [...top.dlg.querySelectorAll(FOCUSABLE)].filter((x) => x.offsetParent !== null || x === document.activeElement);
+  if (!items.length) { e.preventDefault(); top.heading.focus(); return; }
+  const first = items[0], last = items[items.length - 1];
+  const inside = top.dlg.contains(document.activeElement);
+  if (e.shiftKey && (document.activeElement === first || !inside || document.activeElement === top.heading)) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || !inside)) { e.preventDefault(); first.focus(); }
+});
+
+// modal opens a dialog. opts: wide, closeLabel, onClose, initialFocus
+// ('close' for the close button, or an element; default: the heading).
+// lastFocus remembers the control that last had focus, so a dialog opened by
+// a busy (temporarily disabled) button can still return focus to it.
+document.addEventListener('focusin', (e) => { if (e.target !== document.body) S.lastFocus = e.target; });
+
 function modal(title, body, actions = [], opts = {}) {
+  const ae = document.activeElement;
+  const trigger = ae && ae !== document.body ? ae : S.lastFocus;
   let closed = false;
+  const id = uid('dlg');
+  const heading = h('h2', { id, tabindex: '-1' }, title);
+  const closeBtn = btn(opts.closeLabel || 'Close', () => close());
+  const dlg = h('div', { class: 'modal' + (opts.wide ? ' wide' : ''), role: opts.alert ? 'alertdialog' : 'dialog', 'aria-modal': 'true', 'aria-labelledby': id },
+    heading, body, h('div', { class: 'modal-foot' }, actions, closeBtn));
+  let downOnBg = false;
+  const bg = h('div', {
+    class: 'modal-bg',
+    onmousedown: (e) => { downOnBg = e.target === bg; },
+    onclick: (e) => { if (e.target === bg && downOnBg) close(); },
+  }, dlg);
+  const entry = { bg, dlg, heading, close: () => close() };
   const close = () => {
     if (closed) return;
     closed = true;
+    const i = MODALS.indexOf(entry);
+    if (i >= 0) MODALS.splice(i, 1);
     bg.remove();
-    document.removeEventListener('keydown', onKey);
+    syncInert();
+    if (trigger && trigger.isConnected && trigger.focus) trigger.focus({ preventScroll: true });
     if (opts.onClose) opts.onClose();
   };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
-  const bg = h('div', { class: 'modal-bg', onclick: (e) => { if (e.target === bg) close(); } },
-    h('div', { class: 'modal' + (opts.wide ? ' wide' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-      h('h2', null, title), body,
-      h('div', { class: 'modal-foot' }, actions, btn(opts.closeLabel || 'Close', () => close()))));
-  document.addEventListener('keydown', onKey);
+  MODALS.push(entry);
   document.body.append(bg);
+  syncInert();
+  const start = opts.initialFocus === 'close' ? closeBtn : opts.initialFocus || heading;
+  start.focus({ preventScroll: true });
   return close;
 }
 
-function confirmDlg(msg, okLabel = 'Confirm') {
+// confirmDlg asks a yes/no question. Destructive actions (the default) get a
+// red confirm button, and focus starts on Cancel so Enter never destroys.
+function confirmDlg(msg, okLabel = 'Confirm', { danger = true, title = 'Please confirm' } = {}) {
   return new Promise((resolve) => {
     let ok = false;
-    const close = modal('Please confirm', h('p', null, msg), [btn(okLabel, () => { ok = true; close(); }, 'primary')], { closeLabel: 'Cancel', onClose: () => resolve(ok) });
+    const close = modal(title, h('p', null, msg), [btn(okLabel, () => { ok = true; close(); }, danger ? 'danger solid' : 'primary')],
+      { closeLabel: 'Cancel', alert: true, initialFocus: 'close', onClose: () => resolve(ok) });
   });
 }
 
-function every(ms, fn) { const id = setInterval(fn, ms); S.timers.push(id); return id; }
+// every runs fn on an interval while the tab is visible; the timer stops when
+// the page changes.
+function every(ms, fn) { const id = setInterval(() => { if (!document.hidden) fn(); }, ms); S.timers.push(id); return id; }
 
-// choices renders big clickable cards. Options: {value,title,desc,icon,badge,extra,disabled}.
-function choices(options, { value, onPick, multi = false, small = false } = {}) {
+// choices renders big clickable cards. Options: {value,title,desc,icon,badge,extra,disabled,notranslate}.
+// Single choice is a radio group with one tab stop: arrow keys move between
+// cards, Space/Enter picks one. label names the group for screen readers.
+function choices(options, { value, onPick, multi = false, small = false, label = '' } = {}) {
   let sel = multi ? new Set(value || []) : value;
-  const wrap = h('div', { class: 'choices' + (small ? ' small' : ''), role: multi ? 'group' : 'radiogroup' });
+  const key = label || uid('ch');
+  const wrap = h('div', { class: 'choices' + (small ? ' small' : ''), role: multi ? 'group' : 'radiogroup', 'aria-label': label || null, 'data-key': key });
   const btns = options.map((o) => {
     const b = h('button', {
-      type: 'button', class: 'choice', disabled: o.disabled, role: multi ? 'checkbox' : 'radio',
+      type: 'button', class: 'choice', disabled: o.disabled, role: multi ? 'checkbox' : 'radio', 'data-v': String(o.value),
       onclick: () => {
         if (multi) { if (sel.has(o.value)) sel.delete(o.value); else sel.add(o.value); } else sel = o.value;
         paint();
         if (onPick) onPick(multi ? [...sel] : sel, o);
+        // A pick often re-renders the step; keep keyboard focus on the same card.
+        if (!b.isConnected) {
+          setTimeout(() => {
+            const n = [...document.querySelectorAll('.choices[data-key]')].find((x) => x.dataset.key === key);
+            const c = n && [...n.querySelectorAll('.choice')].find((x) => x.dataset.v === String(o.value));
+            if (c) c.focus({ preventScroll: true });
+          }, 0);
+        }
       },
     },
     o.icon ? h('span', { class: 'choice-ico' }, icon(o.icon)) : null,
     h('span', { class: 'choice-body' },
-      h('span', { class: 'choice-title' }, o.title, o.badge ? [' ', h('span', { class: 'pill' + (o.badgeCls ? ' ' + o.badgeCls : '') }, o.badge)] : null),
+      h('span', { class: 'choice-title', translate: o.notranslate ? 'no' : null }, o.title, o.badge ? [' ', h('span', { class: 'pill' + (o.badgeCls ? ' ' + o.badgeCls : '') }, o.badge)] : null),
       o.desc ? h('span', { class: 'choice-desc' }, o.desc) : null,
       o.extra || null));
     b.pvValue = o.value;
     return b;
   });
-  const paint = () => btns.forEach((b) => {
-    const on = multi ? sel.has(b.pvValue) : sel === b.pvValue;
-    b.classList.toggle('on', on);
-    b.setAttribute('aria-checked', String(on));
-  });
+  const paint = () => {
+    btns.forEach((b) => {
+      const on = multi ? sel.has(b.pvValue) : sel === b.pvValue;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', String(on));
+    });
+    if (!multi) {
+      const enabled = btns.filter((b) => !b.disabled);
+      const stop = enabled.find((b) => b.pvValue === sel) || enabled[0];
+      btns.forEach((b) => { b.tabIndex = b === stop ? 0 : -1; });
+    }
+  };
+  if (!multi) {
+    wrap.addEventListener('keydown', (e) => {
+      const enabled = btns.filter((b) => !b.disabled);
+      const i = enabled.indexOf(document.activeElement);
+      if (i < 0) return;
+      let j = -1;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') j = (i + 1) % enabled.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') j = (i - 1 + enabled.length) % enabled.length;
+      else if (e.key === 'Home') j = 0;
+      else if (e.key === 'End') j = enabled.length - 1;
+      if (j < 0) return;
+      e.preventDefault();
+      enabled.forEach((b) => { b.tabIndex = -1; });
+      enabled[j].tabIndex = 0;
+      enabled[j].focus();
+    });
+  }
   add(wrap, btns);
   paint();
   return wrap;
 }
 
 function stepsBar(labels, cur) {
-  return h('ol', { class: 'wsteps' }, labels.map((l, i) => h('li', { class: i < cur ? 'done' : i === cur ? 'cur' : '' },
-    h('span', { class: 'n' }, i < cur ? '✓' : String(i + 1)), h('span', { class: 'l' }, l))));
+  return h('ol', { class: 'wsteps', 'aria-label': 'Steps' }, labels.map((l, i) => h('li', { class: i < cur ? 'done' : i === cur ? 'cur' : '', 'aria-current': i === cur ? 'step' : null },
+    h('span', { class: 'n', 'aria-hidden': 'true' }, i < cur ? '✓' : String(i + 1)),
+    srOnly(i < cur ? `Step ${i + 1}, completed: ` : `Step ${i + 1}: `),
+    h('span', { class: 'l' }, l))));
 }
 
 function spaceBar(free, total) {
@@ -516,16 +735,22 @@ function inventory(a) {
   return inv || { items: [], databases: [], drives: [] };
 }
 
-// pickFolder opens a folder browser for this server's own disks.
+// pickFolder opens a folder browser for this server’s own disks.
 function pickFolder(start = '') {
   return new Promise((resolve) => {
     let chosen = null, cur = '', up = '';
     const listBox = h('div', { class: 'picker-list' });
     const pathEl = h('code', { class: 'break' });
-    const upBtn = btn('↑ Up', () => go(up), 'sm');
+    const upBtn = btn([h('span', { 'aria-hidden': 'true' }, '↑ '), 'Up'], () => go(up), 'sm', { 'aria-label': 'Up one folder' });
     const pickBtn = btn('Choose this folder', () => { chosen = cur; close(); }, 'primary');
     const go = async (p) => {
-      fill(listBox, h('p', { class: 'muted' }, 'Loading…'));
+      const refocus = listBox.contains(document.activeElement) || document.activeElement === upBtn;
+      fill(listBox, h('p', { class: 'muted', role: 'status' }, 'Loading…'));
+      const after = () => {
+        if (!refocus) return;
+        const t = listBox.querySelector('.picker-item') || (upBtn.disabled ? pickBtn : upBtn);
+        if (t && !t.disabled) t.focus({ preventScroll: true });
+      };
       try {
         const r = await api('/browse?' + qs({ path: p }));
         cur = r.path || '';
@@ -535,10 +760,11 @@ function pickFolder(start = '') {
         pickBtn.disabled = !cur;
         const dirs = (r.entries || []).filter((e) => e.dir);
         const files = (r.entries || []).length - dirs.length;
-        fill(listBox, 
+        fill(listBox,
           dirs.length ? h('ul', null, dirs.map((e) => h('li', null, h('button', { type: 'button', class: 'picker-item', onclick: () => go(e.path) }, icon(cur ? 'folder' : 'disk'), h('span', null, e.name))))) : h('p', { class: 'muted' }, 'No folders inside.'),
           files > 0 ? h('p', { class: 'hint' }, `${plural(files, 'file')} in this folder (not shown).`) : null);
-      } catch (e) { fill(listBox, h('p', { class: 'form-error' }, e.message)); }
+        after();
+      } catch (e) { fill(listBox, h('p', { class: 'form-error', role: 'alert' }, e.message), h('p', null, btn('Try again', () => go(p), 'sm'))); }
     };
     const close = modal('Choose a folder', h('div', null, h('div', { class: 'picker-head' }, upBtn, pathEl), listBox), [pickBtn], { closeLabel: 'Cancel', onClose: () => resolve(chosen) });
     go(start);
@@ -552,39 +778,48 @@ function renderAuth(errMsg) {
   const app = clear(document.getElementById('app'));
   app.className = '';
   const setup = S.status && S.status.setupRequired;
-  const user = input({ autocomplete: 'username', required: true, autofocus: true });
-  const pass = input({ type: 'password', autocomplete: setup ? 'new-password' : 'current-password', required: true, minlength: setup ? 10 : null });
-  const pass2 = input({ type: 'password', autocomplete: 'new-password', required: true });
-  const err = h('div', { class: 'form-error' }, errMsg || '');
+  const user = input({ name: 'username', autocomplete: 'username', required: true, code: true });
+  const pass = input({ name: 'password', type: 'password', autocomplete: setup ? 'new-password' : 'current-password', required: true, minlength: setup ? 10 : null });
+  const pass2 = input({ name: 'password2', type: 'password', autocomplete: 'new-password', required: true });
+  const err = errBox();
+  err.textContent = errMsg || '';
   const form = h('form', {
-    onsubmit: async (e) => {
+    onsubmit: busy(async (e) => {
       e.preventDefault();
       err.textContent = '';
-      if (setup && pass.value !== pass2.value) { err.textContent = 'The passwords do not match.'; return; }
-      if (setup && pass.value.length < 10) { err.textContent = 'The password must be at least 10 characters.'; return; }
-      const b = form.querySelector('button'); b.disabled = true;
+      clearErrors(form);
+      if (setup && pass.value.length < 10) return fieldError(pass, 'The password must be at least 10 characters.');
+      if (setup && pass.value !== pass2.value) return fieldError(pass2, 'The passwords do not match. Type the same password twice.');
       try {
         const r = await api(setup ? '/setup' : '/login', { method: 'POST', body: { username: user.value.trim(), password: pass.value }, noAuthRedirect: true });
         S.user = r.user; S.csrf = r.csrf || S.csrf;
         if (S.status) S.status.setupRequired = false;
-        if (!location.hash || location.hash === '#/') location.hash = '#/dashboard';
+        if (!location.hash || location.hash === '#/') history.replaceState(null, '', '#/dashboard');
         renderShell();
-      } catch (ex) { err.textContent = ex.status === 401 ? 'Wrong username or password.' : ex.message; b.disabled = false; }
-    },
+      } catch (ex) { showErr(err, ex.status === 401 ? 'Wrong username or password. Check both and try again.' : ex.message); }
+    }, setup ? 'Creating…' : 'Signing in…'),
   },
   field('Username', user),
   field('Password', pass, setup ? 'At least 10 characters. You will use it to sign in to this dashboard.' : null),
   setup ? field('Type the password again', pass2) : null,
   err,
-  h('button', { type: 'submit', class: 'btn primary block' }, setup ? 'Create my account' : 'Sign in'));
-  app.append(h('div', { class: 'auth' },
+  h('button', { type: 'submit', class: 'btn primary block lg' }, setup ? 'Create my account' : 'Sign in'));
+  app.append(h('main', { class: 'auth', id: 'main', tabindex: '-1' },
     h('div', { class: 'card' },
-      h('div', { class: 'brand' }, 'Proof', h('span', null, 'Vault')),
-      h('p', { class: 'muted' }, setup ? 'Welcome! Create your administrator account to get started.' : 'Sign in to continue.'),
+      brand(),
+      h('h1', { class: 'auth-title' }, setup ? 'Create your administrator account' : 'Sign in'),
+      h('p', { class: 'muted' }, setup ? 'This account manages backups, storage and the people who can sign in.' : 'Use the account an administrator gave you.'),
       form),
-    h('p', { class: 'muted small' }, 'Auditors: ', h('a', { href: '/api/public/keys', target: '_blank', rel: 'noopener' }, 'public keys for checking proofs'),
-      S.status && S.status.version ? ` · v${S.status.version}` : '')));
-  user.focus();
+    h('p', { class: 'muted small auth-foot' }, 'Auditors: ', h('a', { href: '/api/public/keys', target: '_blank', rel: 'noopener' }, 'public keys for checking proofs'),
+      S.status && S.status.version ? ` · ${verLabel()}` : '')));
+  document.title = (setup ? 'Create account' : 'Sign in') + ' · BackupProof';
+  if (window.matchMedia('(pointer: fine)').matches) user.focus();
+}
+
+function verLabel() { const v = String(S.status.version); return /^\d/.test(v) ? 'v' + v : v; }
+
+function brand() {
+  return h('div', { class: 'brand', translate: 'no' }, h('span', { class: 'brand-mark', 'aria-hidden': 'true' }, icon('shieldCheck')), h('span', null, 'Backup', h('span', { class: 'brand-accent' }, 'Proof')));
 }
 
 // ----------------------------------------------------------------- shell
@@ -606,25 +841,40 @@ function renderShell() {
   const app = clear(document.getElementById('app'));
   app.className = '';
   const layout = h('div', { class: 'layout' });
-  const toggle = () => layout.classList.toggle('nav-open');
-  const nav = h('nav', { class: 'nav', id: 'nav' }, NAV.map(([k, l, ic]) =>
-    h('a', { href: '#/' + k, 'data-k': k, onclick: () => layout.classList.remove('nav-open') }, h('span', { class: 'nav-l' }, icon(ic), h('span', null, l)),
+  const mq = window.matchMedia('(max-width: 800px)');
+  // On small screens the sidebar is a drawer: closed it is inert, so its
+  // links can't be reached with Tab while off-screen.
+  const setNav = (open, focus) => {
+    layout.classList.toggle('nav-open', open);
+    menuBtn.setAttribute('aria-expanded', String(open));
+    menuBtn.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    sidebar.inert = mq.matches && !open;
+    if (open && focus) { const a = sidebar.querySelector('a[aria-current="page"]') || sidebar.querySelector('a'); if (a) a.focus({ preventScroll: true }); }
+    if (!open && focus) menuBtn.focus({ preventScroll: true });
+  };
+  const navOpen = () => layout.classList.contains('nav-open');
+  const menuBtn = h('button', { type: 'button', class: 'btn icon', 'aria-label': 'Open menu', 'aria-expanded': 'false', 'aria-controls': 'sidebar', onclick: () => setNav(!navOpen(), true) }, icon('menu'));
+  const nav = h('nav', { class: 'nav', id: 'nav', 'aria-label': 'Main' }, NAV.map(([k, l, ic]) =>
+    h('a', { href: '#/' + k, 'data-k': k, onclick: () => { if (navOpen()) setNav(false, false); } }, h('span', { class: 'nav-l' }, icon(ic), h('span', null, l)),
       k === 'alerts' ? h('span', { class: 'count hidden', id: 'alert-count' }) : null)));
+  const sidebar = h('aside', { class: 'sidebar', id: 'sidebar' },
+    brand(),
+    nav,
+    h('div', { class: 'userbox' },
+      h('div', { class: 'who' }, S.user.username), h('div', { class: 'role' }, { admin: 'Administrator', operator: 'Can set up backups', auditor: 'View only' }[S.user.role] || S.user.role),
+      h('div', { class: 'btns' }, btn('Sign out', busy(logout, 'Signing out…'), 'sm')),
+      S.status && S.status.version ? h('div', { class: 'role', translate: 'no' }, verLabel()) : null));
   add(layout, [
-    h('div', { class: 'topbar' },
-      h('button', { type: 'button', class: 'btn icon', 'aria-label': 'Menu', onclick: toggle }, '☰'),
-      h('div', { class: 'brand' }, 'Proof', h('span', null, 'Vault'))),
-    h('div', { class: 'scrim', onclick: toggle }),
-    h('aside', { class: 'sidebar' },
-      h('div', { class: 'brand' }, 'Proof', h('span', null, 'Vault')),
-      nav,
-      h('div', { class: 'userbox' },
-        h('div', null, S.user.username), h('div', { class: 'role' }, { admin: 'Administrator', operator: 'Can set up backups', auditor: 'View only' }[S.user.role] || S.user.role),
-        h('div', { class: 'btns' }, btn('Sign out', busy(logout), 'sm')),
-        S.status && S.status.version ? h('div', { class: 'role' }, 'v' + S.status.version) : null)),
-    h('main', { class: 'main', id: 'main' }),
+    h('header', { class: 'topbar' }, menuBtn, brand()),
+    h('div', { class: 'scrim', onclick: () => setNav(false, true) }),
+    sidebar,
+    h('main', { class: 'main', id: 'main', tabindex: '-1' }),
   ]);
+  layout.addEventListener('keydown', (e) => { if (e.key === 'Escape' && navOpen()) { e.stopPropagation(); setNav(false, true); } });
+  const onMq = () => setNav(false, false);
+  if (mq.addEventListener) mq.addEventListener('change', onMq);
   app.append(layout);
+  setNav(false, false);
   route();
   refreshAlertCount();
   clearInterval(S.alertTimer);
@@ -640,13 +890,14 @@ async function logout() {
 
 async function refreshAlertCount() {
   if (!S.user) return;
+  if (document.hidden) return;
   try { setAlertCount((await api('/alerts?open=1')) || []); } catch { /* ignore */ }
 }
 
 function setAlertCount(alerts) {
   const el = document.getElementById('alert-count');
   if (!el) return;
-  el.textContent = String(alerts.length);
+  fill(el, nf(alerts.length), srOnly(alerts.length === 1 ? ' open alert' : ' open alerts'));
   el.classList.toggle('hidden', alerts.length === 0);
 }
 
@@ -669,38 +920,132 @@ const ROUTES = [
   [/^\/settings$/, pageSettings],
 ];
 
+// hashParts splits "#/proofs?from=101" into its path and query parameters.
+function hashParts(hash = location.hash) {
+  const raw = (hash || '#/dashboard').slice(1) || '/dashboard';
+  const [path, q] = raw.split('?');
+  return { path: path || '/dashboard', params: new URLSearchParams(q || '') };
+}
+
 async function route(keepScroll) {
   if (!S.user) return;
   const main = document.getElementById('main');
   if (!main) return;
   stopTimers();
-  const path = (location.hash || '#/dashboard').slice(1) || '/dashboard';
+  S.stepHandler = null;
+  const { path, params } = hashParts();
+  S.curHash = location.hash;
   const top = path.split('/')[1];
   const navKey = NAV_ALIAS[top] || top;
-  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.k === navKey));
+  document.querySelectorAll('#nav a').forEach((a) => {
+    const on = a.dataset.k === navKey;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
   const gen = ++S.gen;
+  // Remember which control had focus so a refresh can put it back.
+  const focusables = [...main.querySelectorAll(FOCUSABLE)];
+  const fIdx = keepScroll ? focusables.indexOf(document.activeElement) : -1;
+  const fText = fIdx >= 0 ? document.activeElement.textContent : '';
   let node;
   try {
     const r = ROUTES.find(([re]) => re.test(path));
-    node = r ? await r[1](path.match(r[0])) : card('Page not found', h('p', null, 'There is no such page. '), h('a', { href: '#/dashboard' }, 'Go to Home'));
+    node = r ? await r[1](path.match(r[0]), params) : h('div', null, pageHead('Page not found'), card(null, h('p', null, 'There is no page at this address. It may have moved.'), h('a', { class: 'btn primary', href: '#/dashboard' }, 'Go to Home')));
   } catch (err) {
     if (err.status === 401) return;
-    node = h('div', { class: 'banner bad' }, 'Could not load this page: ', err.message);
+    node = h('div', null, pageHead('Couldn’t load this page'),
+      h('div', { class: 'banner bad', role: 'alert' }, h('p', null, err.message),
+        h('div', { class: 'btns' }, btn('Try again', () => route(), 'sm primary'), h('a', { class: 'btn sm', href: '#/dashboard' }, 'Go to Home'))));
   }
   if (gen !== S.gen) return;
   const y = window.scrollY;
   fill(main, node);
-  window.scrollTo(0, keepScroll ? y : 0);
+  S.dirty = false;
+  const h1 = main.querySelector('h1');
+  document.title = (h1 && h1.textContent.trim() ? h1.textContent.trim() + ' · ' : '') + 'BackupProof';
+  if (keepScroll) {
+    window.scrollTo(0, y);
+    if (fIdx >= 0) {
+      const again = [...main.querySelectorAll(FOCUSABLE)][fIdx];
+      if (again && again.textContent === fText) again.focus({ preventScroll: true });
+    }
+  } else {
+    window.scrollTo(0, 0);
+    if (h1 && S.routed) h1.focus({ preventScroll: true });
+    S.routed = true;
+  }
 }
 
 const reload = () => route(true);
 
-// Periodic refresh that never interrupts someone reading details or typing.
+// Periodic refresh that never interrupts someone: it skips while a dialog is
+// open, details are expanded, or keyboard focus is inside the page.
 function autoRefresh() {
-  if (document.querySelector('.modal-bg') || document.querySelector('#main details[open]')) return;
+  if (document.hidden || MODALS.length || document.querySelector('#main details[open], #main .pill-note:not([hidden])')) return;
   const a = document.activeElement;
-  if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+  const main = document.getElementById('main');
+  if (a && a !== document.body && a !== main && main && main.contains(a)) return;
   reload();
+}
+
+// ---------------------------------------------------- unsaved-changes guard
+// Pages with forms call guardDirty(root): typing marks the page dirty, and
+// leaving it (link, Back button, closing the tab) asks first.
+
+function guardDirty(root) {
+  const mark = (e) => { if (e.target && e.target.matches && e.target.matches('input, textarea, select')) S.dirty = true; };
+  root.addEventListener('input', mark);
+  root.addEventListener('change', mark);
+  return root;
+}
+
+const LEAVE_MSG = 'You have entered information on this page that isn’t saved yet. Leave without saving?';
+
+window.addEventListener('beforeunload', (e) => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// In-app links: ask before following them.
+document.addEventListener('click', async (e) => {
+  if (!S.dirty || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest && e.target.closest('a[href^="#/"]');
+  if (!a || a.target) return;
+  if (hashParts(a.getAttribute('href')).path === hashParts().path) return;
+  e.preventDefault();
+  if (await confirmDlg(LEAVE_MSG, 'Leave without saving', { title: 'Leave this page?' })) { S.dirty = false; location.hash = a.getAttribute('href'); }
+}, true);
+
+window.addEventListener('hashchange', async () => {
+  const to = location.hash;
+  if (!to.startsWith('#/')) { if (S.curHash) history.replaceState(null, '', S.curHash); return; }
+  const next = hashParts(to), cur = hashParts(S.curHash);
+  if (S.curHash && next.path === cur.path && S.stepHandler) { S.curHash = to; S.stepHandler(next.params); return; }
+  if (S.dirty && S.curHash && next.path !== cur.path) {
+    history.replaceState(null, '', S.curHash); // stay here until they decide
+    if (!(await confirmDlg(LEAVE_MSG, 'Leave without saving', { title: 'Leave this page?' }))) return;
+    S.dirty = false;
+    location.hash = to;
+    return;
+  }
+  route();
+});
+
+// wizardHistory lets the browser Back button step back through a wizard.
+// Each step gets its own entry like #/protect?step=2.
+function wizardHistory(base, getStep, setStep) {
+  let depth = 0;
+  const url = (n) => `#${base}?step=${n}`;
+  history.replaceState(null, '', url(getStep()));
+  S.curHash = location.hash;
+  S.stepHandler = (params) => {
+    const n = Number(params.get('step'));
+    if (!Number.isFinite(n)) return;
+    if (n < getStep()) { depth = Math.max(0, depth - 1); setStep(n); }
+    else if (n > getStep()) { history.replaceState(null, '', url(getStep())); S.curHash = location.hash; }
+  };
+  return {
+    forward(n) { depth++; history.pushState(null, '', url(n)); S.curHash = location.hash; setStep(n); },
+    back(n) { if (depth > 0) history.back(); else { history.replaceState(null, '', url(n)); S.curHash = location.hash; setStep(n); } },
+    done() { S.stepHandler = null; history.replaceState(null, '', `#${base}?step=done`); S.curHash = location.hash; },
+  };
 }
 
 // ------------------------------------------------------------------ home
@@ -712,34 +1057,37 @@ async function runJob(id, kind, after, isImport) {
   else reload();
 }
 
-function runButtons(id, running, after, withCheck, isImport) {
+function runButtons(id, running, after, withCheck, isImport, name) {
   if (!canOperate()) return null;
+  const al = (verb) => (name ? { 'aria-label': `${verb}: ${name}` } : {});
+  const backupWord = isImport ? 'Convert again' : 'Back up now';
   return h('div', { class: 'btns' },
-    btn(isImport ? 'Convert again' : 'Back up now', busy(() => runJob(id, 'backup', after, isImport)), 'sm primary'),
-    btn('Test restore', busy(() => runJob(id, 'drill', after, isImport)), 'sm'),
-    withCheck ? btn('Check storage health', busy(() => runJob(id, 'check', after, isImport)), 'sm') : null);
+    btn(backupWord, busy(() => runJob(id, 'backup', after, isImport), 'Starting…'), 'sm primary', al(backupWord)),
+    btn('Test restore', busy(() => runJob(id, 'drill', after, isImport), 'Starting…'), 'sm', al('Test restore')),
+    withCheck ? btn('Check storage health', busy(() => runJob(id, 'check', after, isImport), 'Starting…'), 'sm', al('Check storage health')) : null);
 }
 
 function runningLine(j, isImport) {
   if (!j) return null;
   const what = j.kind === 'drill' ? 'Testing the restore' : j.kind === 'check' ? 'Checking storage health' : isImport ? 'Converting' : 'Backing up';
-  return h('div', { class: 'running' }, h('span', { class: 'spinner' }), j.state === 'queued' ? `${what} — waiting for the server to start…` : `${what} now…`);
+  return h('div', { class: 'running', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), j.state === 'queued' ? `${what} — waiting for the server to start…` : `${what} now…`);
 }
 
 function itemCard(s) {
   const src = s.source, k = kindInfo(src.spec), isImp = src.spec && src.spec.kind === 'import';
   const lb = s.lastBackup, ld = s.lastDrill;
-  return h('article', { class: 'item' },
+  const st = STATUS[s.status] || { cls: '' };
+  return h('article', { class: 'item ' + (st.cls ? 'is-' + st.cls : 'is-none') },
     h('div', { class: 'item-ico' }, icon(k.icon)),
     h('div', { class: 'item-main' },
       h('div', { class: 'item-title' }, h('a', { href: `#/sources/${src.id}` }, src.name), statusPill(s.status, s.reason)),
       h('div', { class: 'item-sub' }, [k.label, s.agentName ? 'on ' + s.agentName : '', s.repoName ? 'stored in ' + s.repoName : '', src.enabled === false ? 'paused' : ''].filter(Boolean).join(' · ')),
       s.reason ? h('p', { class: 'item-reason' }, s.reason) : null,
       h('div', { class: 'item-facts' },
-        h('span', null, isImp ? 'Last conversion: ' : 'Last backup: ', lb ? [timeEl(lb.created), lb.passed === false ? ' (failed)' : ''] : h('span', { class: 'muted' }, 'not yet')),
-        h('span', null, 'Last restore test: ', ld ? [ld.passed ? 'passed ' : 'failed ', timeEl(ld.created)] : h('span', { class: 'muted' }, 'not yet'))),
+        h('span', null, h('span', { class: 'fact-l' }, isImp ? 'Last conversion ' : 'Last backup '), lb ? [timeEl(lb.created), lb.passed === false ? h('span', { class: 'fact-bad' }, ' (failed)') : ''] : h('span', { class: 'muted' }, 'not yet')),
+        h('span', null, h('span', { class: 'fact-l' }, 'Last restore test '), ld ? [h('span', { class: ld.passed ? 'fact-ok' : 'fact-bad' }, ld.passed ? 'passed ' : 'failed '), timeEl(ld.created)] : h('span', { class: 'muted' }, 'not yet'))),
       runningLine(s.running, isImp)),
-    h('div', { class: 'item-actions' }, runButtons(src.id, s.running, null, false, isImp)));
+    h('div', { class: 'item-actions' }, runButtons(src.id, s.running, null, false, isImp, src.name)));
 }
 
 function itemList(sources) {
@@ -749,17 +1097,19 @@ function itemList(sources) {
 function welcomeCard() {
   return h('section', { class: 'card welcome' },
     h('div', { class: 'welcome-ico' }, icon('shieldCheck')),
-    h('h2', { class: 'big' }, "Let's protect your first thing"),
+    h('h2', { class: 'big' }, 'Let’s protect your first thing'),
     h('p', { class: 'muted' }, 'BackupProof backs up your files, websites and databases, then regularly tests that each backup really restores — so you know it works before you need it.'),
-    stepsBar(['Choose what', 'Choose where', 'How often', 'Done'], -1),
+    h('ol', { class: 'welcome-steps' }, ['Choose what', 'Choose where', 'How often', 'Done'].map((l) => h('li', null, l))),
     canOperate() ? h('div', { class: 'btns center' },
       h('a', { class: 'btn primary lg', href: '#/protect' }, 'Protect something'),
       h('a', { class: 'btn lg stack', href: '#/import' }, 'Import old backups', h('span', { class: 'btn-sub' }, 'from S3, B2, a disk or another server')))
       : h('p', { class: 'hint' }, 'Ask an administrator to set up the first backup.'));
 }
 
-function tile(n, label, cls) {
-  return h('div', { class: 'tile ' + (cls || '') }, h('div', { class: 'num' }, String(n)), h('div', { class: 'lbl' }, label));
+function tile(n, label, cls, of) {
+  return h('div', { class: 'tile ' + (cls || '') },
+    h('div', { class: 'num' }, nf(n), of != null ? h('span', { class: 'of' }, ' of ' + nf(of)) : null),
+    h('div', { class: 'lbl' }, label));
 }
 
 async function pageDashboard() {
@@ -773,18 +1123,19 @@ async function pageDashboard() {
   if (!sources.length) return h('div', null, head, welcomeCard());
 
   const total = c.sources ?? sources.length;
+  const proven = c.proven ?? 0;
   const tiles = h('div', { class: 'tiles' },
-    tile(`${c.proven ?? 0}/${total}`, 'restore tested ✓', 'ok'),
+    tile(proven, 'restore tested', 'ok lead' + (proven === total ? ' all' : ''), total),
     tile(c.atRisk ?? 0, 'need attention or not tested yet', c.atRisk ? 'warn' : ''),
     tile(c.failing ?? 0, (c.failing === 1 ? 'problem' : 'problems'), c.failing ? 'bad' : ''),
-    tile(`${c.agentsOnline ?? 0}/${c.agentsTotal ?? agents.length}`, 'servers online', c.agentsTotal && c.agentsOnline < c.agentsTotal ? 'warn' : ''));
+    tile(c.agentsOnline ?? 0, 'servers online', c.agentsTotal && c.agentsOnline < c.agentsTotal ? 'warn' : '', c.agentsTotal ?? agents.length));
 
   const banner = alerts.length ? h('div', { class: 'banner bad' },
-    h('strong', null, `${alerts.length} thing${alerts.length > 1 ? 's need' : ' needs'} your attention`), ' · ', h('a', { href: '#/alerts' }, 'see all alerts'),
+    h('p', null, h('strong', null, `${nf(alerts.length)} thing${alerts.length > 1 ? 's need' : ' needs'} your attention`), ' · ', h('a', { href: '#/alerts' }, 'See all alerts')),
     h('ul', null, alerts.slice(0, 5).map((a) => h('li', null, a.message, ' ', h('span', { class: 'small' }, '(', rel(a.created), ')'))))) : null;
 
   return h('div', null, head, tiles, banner,
-    h('section', { class: 'card' }, cardHead('What\'s protected', h('a', { href: '#/protected', class: 'small' }, 'See all')), itemList(sources)));
+    h('section', { class: 'card' }, cardHead('What’s protected', h('a', { href: '#/protected', class: 'small' }, 'See all')), itemList(sources)));
 }
 
 async function pageProtected() {
@@ -797,7 +1148,7 @@ async function pageProtected() {
   return h('div', null,
     pageHead('Protected', 'Everything BackupProof backs up and restore-tests.', actions),
     sources.length ? h('section', { class: 'card' }, itemList(sources),
-      h('div', { class: 'legend' }, Object.values(STATUS).map((x) => h('span', null, h('span', { class: 'pill ' + x.cls }, x.label), ' ', x.help))))
+      h('div', { class: 'legend' }, h('h2', { class: 'sr-only' }, 'What the labels mean'), Object.values(STATUS).map((x) => h('span', null, h('span', { class: 'pill ' + x.cls }, glyphLabel(x.label)), ' ', x.help))))
       : welcomeCard());
 }
 
@@ -815,26 +1166,26 @@ async function pageSource(id) {
   const after = (jid) => { S.detailJob = { source: id, id: jid }; reload(); };
 
   const head = h('div', { class: 'page-head' },
-    h('div', null,
-      h('div', { class: 'small' }, h('a', { href: '#/protected' }, '← Protected')),
-      h('h1', { class: 'with-ico' }, icon(k.icon), h('span', null, src.name)),
-      h('p', { class: 'muted' }, k.label)),
+    h('div', { class: 'page-title' },
+      backLink('#/protected', 'Protected'),
+      h('h1', { class: 'with-ico', tabindex: '-1' }, icon(k.icon), h('span', null, src.name)),
+      h('p', { class: 'muted lede' }, k.label)),
     canOperate() ? h('div', { class: 'btns' },
       h('a', { class: 'btn', href: `#/sources/${id}/edit` }, 'Edit (advanced)'),
       isAdmin() ? btn('Delete', busy(async () => {
-        if (!(await confirmDlg(`Stop protecting "${src.name}"? Backup copies already in storage and the proof history are kept.`, 'Stop protecting'))) return;
+        if (!(await confirmDlg(`Stop protecting “${src.name}”? Backup copies already in storage and the proof history are kept.`, 'Stop protecting'))) return;
         await del(`/sources/${id}`); toast('Removed', 'ok'); location.hash = '#/protected';
       }), 'danger') : null) : null);
 
   const rto = drill ? (drill.rtoMs ?? dp.rtoMs) : null;
   const hero = h('section', { class: 'card hero ' + statusInfo.cls },
-    h('div', { class: 'hero-status' }, h('span', { class: 'hero-label' }, statusInfo.label), h('span', { class: 'hero-reason' }, st.reason || statusInfo.help || '')),
+    h('div', { class: 'hero-status' }, h('h2', { class: 'hero-label' }, glyphLabel(statusInfo.label)), h('p', { class: 'hero-reason' }, st.reason || statusInfo.help || '')),
     runningLine(st.running, isImp),
     h('dl', { class: 'kv' },
       h('dt', null, isImp ? 'Last conversion' : 'Last backup'),
       h('dd', null, backup ? [timeEl(backup.created), backup.passed === false ? ' — failed' : '', bp.bytes != null ? ` · ${bytes(bp.bytes)}` : '', bp.entries != null ? ` · ${plural(bp.entries, 'file')}` : ''] : 'not yet'),
       h('dt', null, 'Last restore test'),
-      h('dd', null, drill ? [drill.passed ? 'passed ' : 'failed ', timeEl(drill.created)] : 'not yet'),
+      h('dd', null, drill ? [h('span', { class: drill.passed ? 'fact-ok' : 'fact-bad' }, drill.passed ? 'passed ' : 'failed '), timeEl(drill.created)] : 'not yet'),
       h('dt', null, 'Time to restore'), h('dd', null, rto != null ? durWords(rto) : '—'),
       h('dt', null, isImp ? 'Converts' : 'Backs up'), h('dd', null, cronWords(src.backupCron), src.nextBackup && src.backupCron !== 'manual' ? [' (next ', timeEl(src.nextBackup), ')'] : ''),
       h('dt', null, 'Tests a restore'), h('dd', null, cronWords(src.drillCron), src.nextDrill ? [' (next ', timeEl(src.nextDrill), ')'] : ''),
@@ -844,6 +1195,7 @@ async function pageSource(id) {
       h('dt', null, 'Restore tests run on'), h('dd', null, st.verifierName ? `${st.verifierName} (a different server)` : 'the same server'),
       src.enabled === false ? [h('dt', null, 'Schedule'), h('dd', null, 'Paused — nothing runs automatically')] : null),
     h('div', { class: 'form-actions start' }, runButtons(id, st.running, after, true, isImp)));
+  hero.setAttribute('aria-label', 'Status');
 
   const checks = dp.checks || [];
   const rootsMatch = dp.restoredRoot && dp.restoredRoot === dp.expectedRoot;
@@ -851,7 +1203,7 @@ async function pageSource(id) {
     h('p', { class: 'muted' }, `The backup copy from ${day(dp.snapshotTime || drill.created)} was restored into a safe, separate place and checked. `,
       drill.passed ? 'Everything passed.' : 'Something did not pass — see below.'),
     checks.length ? h('ul', { class: 'checks' }, checks.map((c) => h('li', null,
-      h('span', { class: 'ico ' + (c.passed ? 'ok' : 'bad'), 'aria-label': c.passed ? 'passed' : 'failed' }, c.passed ? '✓' : '✗'),
+      h('span', { class: 'ico ' + (c.passed ? 'ok' : 'bad') }, mark(c.passed)),
       h('div', null, h('div', null, checkWords(c.name)), (!c.passed || c.name === 'database-dumps') && c.detail ? h('div', { class: 'detail' }, c.detail) : null),
       h('span', { class: 'muted small' }, c.durationMs ? durWords(c.durationMs) : '')))) : h('p', { class: 'muted' }, 'No checks were recorded.'),
     tech(h('dl', { class: 'kv' },
@@ -860,10 +1212,10 @@ async function pageSource(id) {
       h('dt', null, 'Test environment'), h('dd', null, dp.sandbox || '—'),
       h('dt', null, 'Tested by'), h('dd', null, dp.verifier || drill.signer || '—'),
       h('dt', null, 'Expected root'), h('dd', null, h('code', { class: 'break' }, dp.expectedRoot || '—')),
-      h('dt', null, 'Restored root'), h('dd', null, h('code', { class: 'break' }, dp.restoredRoot || '—'), ' ', rootsMatch ? h('span', { class: 'pill ok' }, '✓ match') : h('span', { class: 'pill bad' }, '✗ differ'))),
+      h('dt', null, 'Restored root'), h('dd', null, h('code', { class: 'break' }, dp.restoredRoot || '—'), ' ', rootsMatch ? h('span', { class: 'pill ok' }, h('span', { 'aria-hidden': 'true' }, '✓ '), 'match') : h('span', { class: 'pill bad' }, h('span', { 'aria-hidden': 'true' }, '✗ '), 'differ'))),
     h('h3', null, 'Raw checks'),
     h('ul', { class: 'checks' }, checks.map((c) => h('li', null,
-      h('span', { class: 'ico ' + (c.passed ? 'ok' : 'bad') }, c.passed ? '✓' : '✗'),
+      h('span', { class: 'ico ' + (c.passed ? 'ok' : 'bad') }, mark(c.passed)),
       h('div', null, h('code', null, c.name), c.detail ? h('div', { class: 'detail' }, c.detail) : null),
       h('span', { class: 'muted small' }, c.durationMs ? dur(c.durationMs) : ''))))))
     : empty('No restore test has run yet. One runs automatically right after the first backup.'));
@@ -887,7 +1239,7 @@ async function pageSource(id) {
     (jobs || []).length ? table(JH, jobs.map((j) => tr([
       jobWord(j.kind, isImp), h('div', null, statePill(j.state), j.error ? h('div', { class: 'sub break' }, j.error) : null), trig(j.trigger), timeEl(j.created),
       j.started && j.finished ? durWords(toDate(j.finished) - toDate(j.started)) : j.started ? 'running…' : '—',
-      btn('Show details', () => { S.detailJob = { source: id, id: j.id }; showJobLog(logBox, id, j.id, isImp); logBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 'sm'),
+      btn('Show details', () => { S.detailJob = { source: id, id: j.id }; showJobLog(logBox, id, j.id, isImp); logBox.scrollIntoView({ behavior: motionOK() ? 'smooth' : 'auto', block: 'nearest' }); }, 'sm', { 'aria-label': `Show details: ${jobWord(j.kind, isImp)}, ${absTime(j.created)}` }),
     ], JH))) : empty('Nothing has run yet.'),
     logBox);
   if (S.detailJob) showJobLog(logBox, id, S.detailJob.id, isImp);
@@ -905,7 +1257,7 @@ async function showJobLog(box, sourceId, jobId, isImport) {
   const gen = S.gen;
   const tok = {};
   box.pvTok = tok; // a newer viewer in the same box cancels this one
-  const pre = h('pre', { class: 'log' }, 'Loading…');
+  const pre = h('pre', { class: 'log', tabindex: '0', 'aria-label': 'Log' }, 'Loading…');
   const title = h('span');
   fill(box, h('h3', null, title), pre);
   let timer = null;
@@ -925,20 +1277,27 @@ async function showJobLog(box, sourceId, jobId, isImport) {
         S.detailJob = { source: sourceId, id: jobId };
         reload();
       }
-    } catch (err) { pre.textContent = 'Could not load the details: ' + err.message; if (timer) clearInterval(timer); }
+    } catch (err) {
+      if (timer) clearInterval(timer);
+      timer = null;
+      pre.textContent = 'Couldn’t load the details: ' + err.message;
+      if (box.isConnected) box.append(h('p', null, btn('Try again', () => showJobLog(box, sourceId, jobId, isImport), 'sm')));
+    }
   };
   await tick();
 }
 
 function proofRow(p, headers, withSource) {
   const rto = p.rtoMs != null ? p.rtoMs : null;
+  const what = p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind;
+  const ctx = `${what} proof${p.sourceName ? ' for ' + p.sourceName : ''}, ${absTime(p.created)}`;
   const cells = [
     timeEl(p.created),
-    p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind,
+    what,
     passPill(p.passed),
     rto != null ? durWords(rto) : '—',
-    h('div', { class: 'btns' }, btn('View', busy(() => viewProof(p.id)), 'sm'),
-      h('a', { class: 'btn sm', href: `/api/proofs/${p.id}/bundle`, download: `proof-${p.id}.json` }, 'Download')),
+    h('div', { class: 'btns' }, btn('View', busy(() => viewProof(p.id), 'Opening…'), 'sm', { 'aria-label': 'View ' + ctx }),
+      h('a', { class: 'btn sm', href: `/api/proofs/${p.id}/bundle`, download: `proof-${p.id}.json`, 'aria-label': 'Download ' + ctx }, 'Download')),
   ];
   if (withSource) cells.splice(1, 0, p.sourceId ? h('a', { href: `#/sources/${p.sourceId}` }, p.sourceName) : p.sourceName || '—');
   return tr(cells, headers);
@@ -964,7 +1323,7 @@ async function viewProof(id) {
       h('dt', null, 'Backup copy ID'), h('dd', null, h('code', { class: 'break' }, p.snapshotId || '—')),
       h('dt', null, 'Ledger entry'), h('dd', null, p.ledgerSeq ? '#' + p.ledgerSeq : '—'),
       h('dt', null, 'Signatures'), h('dd', null, (env.signatures || []).map((s) => h('div', null, h('code', { class: 'break' }, s.keyid || '(no key id)'))))),
-    h('pre', { class: 'log' }, JSON.stringify(pred(p), null, 2)))),
+    h('pre', { class: 'log', tabindex: '0', 'aria-label': 'Proof contents' }, JSON.stringify(pred(p), null, 2)))),
   [h('a', { class: 'btn primary', href: `/api/proofs/${p.id}/bundle`, download: `proof-${p.id}.json` }, 'Download proof file')]);
 }
 
@@ -973,16 +1332,19 @@ async function viewProof(id) {
 // starts automatically after the first backup, in plain words.
 
 function jobProgress(sourceId, jobId, name, isImport) {
-  const line = h('div', { class: 'progress' });
-  const pre = h('pre', { class: 'log' }, '');
+  const line = h('div', { class: 'progress', role: 'status' });
+  const pre = h('pre', { class: 'log', tabindex: '0', 'aria-label': 'Log' }, '');
   const el = h('div', { class: 'prog' }, h('div', { class: 'prog-name' }, h('a', { href: `#/sources/${sourceId}` }, name)), line, details('Show details', pre));
   const gen = S.gen;
   const started = Date.now();
   let phase = 'backup', cur = jobId, findStart = 0, first = true;
   const logs = {};
+  let last = '';
   const set = (cls, text, spin, extra) => {
+    if (last === cls + text) return; // don't re-announce the same words
+    last = cls + text;
     line.className = 'progress ' + cls;
-    fill(line, spin ? h('span', { class: 'spinner' }) : h('span', { class: 'prog-ico' }, cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '•'), h('span', null, text), extra || null);
+    fill(line, spin ? h('span', { class: 'spinner', 'aria-hidden': 'true' }) : h('span', { class: 'prog-ico', 'aria-hidden': 'true' }, cls === 'ok' ? '✓' : cls === 'bad' ? '✗' : '•'), h('span', null, text), extra || null);
   };
   const showLogs = () => { pre.textContent = Object.values(logs).join('\n\n') || '(nothing written yet)'; };
   const doing = isImport ? 'Converting old backups…' : 'Backing up…';
@@ -998,14 +1360,14 @@ function jobProgress(sourceId, jobId, name, isImport) {
         if (phase === 'backup') {
           if (j.state === 'queued') set('', Date.now() - started > 60000 ? 'Still waiting for the server — is it switched on and online?' : 'Waiting for the server to start…', true);
           else if (j.state === 'running') set('', doing, true);
-          else if (j.state === 'failed') { set('bad', (isImport ? 'The conversion didn\'t finish: ' : 'The backup didn\'t finish: ') + (j.error || 'unknown error')); return; }
+          else if (j.state === 'failed') { set('bad', (isImport ? 'The conversion didn’t finish: ' : 'The backup didn’t finish: ') + (j.error || 'no reason was given. Open “Show details” below to read the log.')); return; }
           else if (j.state === 'succeeded') { phase = 'find'; findStart = Date.now(); set('', isImport ? 'Converted. Starting the restore test…' : 'Backed up. Starting the restore test…', true); }
         } else {
           if (j.state === 'queued' || j.state === 'running') set('', 'Testing the restore…', true);
           else {
             const st = await api(`/sources/${sourceId}`);
             if (j.state === 'succeeded' && st.status === 'proven') { set('ok', 'Protected and restore tested'); return; }
-            set('bad', 'The restore test did not pass: ' + (j.error || st.reason || 'see details'), false, h('a', { href: `#/sources/${sourceId}`, class: 'small' }, ' Open'));
+            set('bad', 'The restore test did not pass: ' + (j.error || st.reason || 'see details'), false, h('a', { href: `#/sources/${sourceId}`, class: 'small' }, 'Open the item to see what failed'));
             return;
           }
         }
@@ -1016,9 +1378,10 @@ function jobProgress(sourceId, jobId, name, isImport) {
         else if (Date.now() - findStart > 120000) { set('ok', 'Backed up. A restore test will run soon.'); return; }
       }
     } catch (err) { if (err.status === 401) return; }
-    setTimeout(tick, 2000);
+    setTimeout(poll, 2000);
   };
-  setTimeout(tick, 300);
+  const poll = () => { if (document.hidden) { setTimeout(poll, 2000); return; } tick(); };
+  setTimeout(poll, 300);
   return el;
 }
 
@@ -1071,25 +1434,25 @@ function storageFields({ mode, agent, initial }) {
   const ta = (attrs, val) => { const el = h('textarea', attrs, val || ''); el.addEventListener('input', changed); return el; };
   const ihost = hostOnly(ib.endpoint);
   const f = {
-    path: inp({ value: ib.type === 'local' ? ib.path || '' : '', placeholder: mode === 'import' ? 'e.g. D:\\OldBackups or /mnt/backups' : 'e.g. D:\\ or /mnt/backup-disk' }),
-    bucket: inp({ value: ib.bucket || '', autocomplete: 'off' }),
-    prefix: inp({ value: initial ? ib.prefix || '' : mode === 'repo' ? 'backupproof' : '', placeholder: mode === 'repo' ? 'backupproof' : 'leave empty if the backups are at the top' }),
-    accessKey: inp({ value: ic.accessKey || '', autocomplete: 'off', spellcheck: 'false' }),
-    secretKey: inp({ type: 'password', value: ic.secretKey || '', autocomplete: 'new-password' }),
-    b2Endpoint: inp({ value: type === 'b2' ? ihost : '', placeholder: 's3.us-west-004.backblazeb2.com' }),
-    s3Region: select([...S3_REGIONS.map((r) => [r, r]), ['_other', 'Other…']], type === 's3' ? (S3_REGIONS.includes(ib.region) ? ib.region : ib.region ? '_other' : 'us-east-1') : 'us-east-1'),
-    s3RegionOther: inp({ value: type === 's3' && !S3_REGIONS.includes(ib.region) ? ib.region || '' : '', placeholder: 'e.g. ap-east-1' }),
-    r2Account: inp({ value: type === 'r2' ? ihost.split('.')[0] : '', autocomplete: 'off', spellcheck: 'false' }),
-    wasabiRegion: select(WASABI_REGIONS.map((r) => [r, r]), type === 'wasabi' ? ib.region : 'us-east-1'),
-    endpoint: inp({ value: type === 'other' ? ib.endpoint || '' : '', placeholder: 'https://s3.example.com' }),
-    region: inp({ value: type === 'other' ? ib.region || '' : '', placeholder: 'us-east-1' }),
-    host: inp({ value: ib.host || '', placeholder: 'backup.example.com' }),
-    port: inp({ type: 'number', min: 1, max: 65535, value: ib.port || 22 }),
-    user: inp({ value: ib.user || '', autocomplete: 'off' }),
-    sftpPass: inp({ type: 'password', value: ic.password || '', autocomplete: 'new-password' }),
-    privateKey: ta({ rows: 3, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----', spellcheck: 'false' }, ic.privateKey),
-    sftpPath: inp({ value: ib.type === 'sftp' ? ib.path || '' : '', placeholder: mode === 'repo' ? '/home/me/backupproof' : '/backups' }),
-    hostKey: ta({ rows: 2, placeholder: 'backup.example.com ssh-ed25519 AAAA…', spellcheck: 'false' }, ib.hostKey),
+    path: inp({ name: 'path', code: true, value: ib.type === 'local' ? ib.path || '' : '', placeholder: mode === 'import' ? '/mnt/backups…' : '/mnt/backup-disk…' }),
+    bucket: inp({ name: 'bucket', code: true, value: ib.bucket || '', autocomplete: 'off', placeholder: 'my-backups…' }),
+    prefix: inp({ name: 'prefix', code: true, value: initial ? ib.prefix || '' : mode === 'repo' ? 'backupproof' : '', placeholder: mode === 'repo' ? 'backupproof…' : 'backups/server1…' }),
+    accessKey: inp({ name: 'access-key', code: true, value: ic.accessKey || '', autocomplete: 'off' }),
+    secretKey: inp({ name: 'secret-key', type: 'password', value: ic.secretKey || '', autocomplete: 'off' }),
+    b2Endpoint: inp({ name: 'b2-endpoint', code: true, inputmode: 'url', value: type === 'b2' ? ihost : '', placeholder: 's3.us-west-004.backblazeb2.com…' }),
+    s3Region: select([...S3_REGIONS.map((r) => [r, r]), ['_other', 'Other…']], type === 's3' ? (S3_REGIONS.includes(ib.region) ? ib.region : ib.region ? '_other' : 'us-east-1') : 'us-east-1', { name: 's3-region' }),
+    s3RegionOther: inp({ name: 's3-region-other', code: true, value: type === 's3' && !S3_REGIONS.includes(ib.region) ? ib.region || '' : '', placeholder: 'ap-east-1…' }),
+    r2Account: inp({ name: 'r2-account', code: true, value: type === 'r2' ? ihost.split('.')[0] : '', autocomplete: 'off' }),
+    wasabiRegion: select(WASABI_REGIONS.map((r) => [r, r]), type === 'wasabi' ? ib.region : 'us-east-1', { name: 'wasabi-region' }),
+    endpoint: inp({ name: 'endpoint', type: 'url', code: true, value: type === 'other' ? ib.endpoint || '' : '', placeholder: 'https://s3.example.com…' }),
+    region: inp({ name: 'region', code: true, value: type === 'other' ? ib.region || '' : '', placeholder: 'us-east-1…' }),
+    host: inp({ name: 'host', code: true, value: ib.host || '', placeholder: 'backup.example.com…' }),
+    port: inp({ name: 'port', type: 'number', inputmode: 'numeric', min: 1, max: 65535, value: ib.port || 22 }),
+    user: inp({ name: 'sftp-user', code: true, value: ib.user || '', autocomplete: 'off' }),
+    sftpPass: inp({ name: 'sftp-password', type: 'password', value: ic.password || '', autocomplete: 'off' }),
+    privateKey: ta({ name: 'private-key', rows: 3, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----…', spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off' }, ic.privateKey),
+    sftpPath: inp({ name: 'sftp-path', code: true, value: ib.type === 'sftp' ? ib.path || '' : '', placeholder: mode === 'repo' ? '/home/me/backupproof…' : '/backups…' }),
+    hostKey: ta({ name: 'host-key', rows: 2, placeholder: 'backup.example.com ssh-ed25519 AAAA…', spellcheck: 'false', autocapitalize: 'off' }, ib.hostKey),
   };
   [f.s3Region, f.wasabiRegion].forEach((s) => s.addEventListener('change', () => { renderType(); changed(); }));
 
@@ -1112,7 +1475,7 @@ function storageFields({ mode, agent, initial }) {
     field(secretLabel, f.secretKey, 'Kept encrypted on this server.'));
   const bucketRow = (bucketHelp) => h('div', { class: 'row' },
     field('Bucket name', f.bucket, bucketHelp || 'The bucket you created for backups.'),
-    field('Folder inside the bucket', f.prefix, mode === 'repo' ? 'Optional. Keeps BackupProof files tidy in their own folder.' : 'Where the old backups are, e.g. “backups/server1”. For example the folder your backup script uploads to.'));
+    field('Folder inside the bucket', f.prefix, mode === 'repo' ? 'Optional. Keeps BackupProof files tidy in their own folder.' : 'Where the old backups are, for example the folder your backup script uploads to. Leave empty if the backups are at the top of the bucket.'));
 
   const renderType = () => {
     const t = type;
@@ -1121,18 +1484,18 @@ function storageFields({ mode, agent, initial }) {
       t === 'local' ? [
         mode === 'repo' && drives.length ? [h('p', { class: 'label' }, 'Disks on ' + (agent ? agentTitle(agent) : 'the server')),
           choices(drives.map((d) => ({ value: d.path, title: d.label || d.path, desc: d.path, icon: 'disk', extra: d.total ? spaceBar(d.free, d.total) : null })),
-            { value: f.path.value.trim(), small: true, onPick: (v) => { f.path.value = v; updWhere(); changed(); } })] : null,
+            { value: f.path.value.trim(), small: true, label: 'Disks', onPick: (v) => { f.path.value = v; updWhere(); changed(); } })] : null,
         h('div', { class: 'inline-field' },
           field(mode === 'repo' ? 'Folder or disk' : 'Folder where the old backups are', f.path,
             builtin ? (mode === 'repo' ? 'Pick a disk above, browse, or type a folder path.' : 'Browse or type the folder path.') : 'Type the folder path on that server (for example D:\\Backups or /mnt/backup).'),
           browseBtn(f.path, () => f.path.value.trim())),
         where,
-        mode === 'repo' ? h('div', { class: 'banner warn' }, 'Keep at least one copy somewhere else too (another disk or the cloud). A backup on the same disk won\'t help if that disk breaks.') : null,
+        mode === 'repo' ? h('div', { class: 'banner warn' }, 'Keep at least one copy somewhere else too (another disk or the cloud). A backup on the same disk won’t help if that disk breaks.') : null,
       ] : null,
       t === 'b2' ? [
         keyFields('Key ID', 'Application Key', 'From Backblaze: App Keys → Add a New Application Key.'),
         bucketRow(),
-        field('Endpoint', f.b2Endpoint, 'Shown on the bucket page, like s3.us-west-004.backblazeb2.com'),
+        field('Endpoint', f.b2Endpoint, 'Shown on the bucket page in Backblaze.'),
       ] : null,
       t === 's3' ? [
         keyFields('Access key', 'Secret key', 'From AWS: IAM → Users → Security credentials.'),
@@ -1150,22 +1513,22 @@ function storageFields({ mode, agent, initial }) {
         field('Region', f.wasabiRegion, 'The region shown next to your bucket.'),
       ] : null,
       t === 'other' ? [
-        h('div', { class: 'row' }, field('Endpoint (address)', f.endpoint, 'From your provider, e.g. https://fsn1.your-objectstorage.com'), field('Region', f.region, 'Often “us-east-1” if your provider doesn\'t mention one.')),
+        h('div', { class: 'row' }, field('Endpoint (address)', f.endpoint, 'From your provider, e.g. https://fsn1.your-objectstorage.com'), field('Region', f.region, 'Often “us-east-1” if your provider doesn’t mention one.')),
         keyFields('Access key', 'Secret key'),
         bucketRow(),
       ] : null,
       t === 'sftp' ? [
         h('div', { class: 'row' }, field('Server address', f.host, 'Name or IP address of the server.'), field('Port', f.port, 'Usually 22.'), field('Username', f.user)),
-        h('div', { class: 'row' }, field('Password', f.sftpPass, 'Leave empty if you use a private key.'), field('Private key (optional)', f.privateKey, 'Paste the whole key file if you log in with a key.')),
-        field(mode === 'repo' ? 'Folder on the server' : 'Folder where the old backups are', f.sftpPath, mode === 'repo' ? 'Created if it doesn\'t exist.' : null),
-        field('Server fingerprint', f.hostKey, 'Proves you\'re talking to the right server. Run “ssh-keyscan your-server” on any server and paste one of the lines.'),
+        h('div', { class: 'row' }, field('Password', f.sftpPass, 'Leave empty if you use a private key. Kept encrypted on this server.'), field('Private key (optional)', f.privateKey, 'Paste the whole key file if you log in with a key.')),
+        field(mode === 'repo' ? 'Folder on the server' : 'Folder where the old backups are', f.sftpPath, mode === 'repo' ? 'Created if it doesn’t exist.' : null),
+        field('Server fingerprint', f.hostKey, 'Proves you’re talking to the right server. Run “ssh-keyscan your-server” on any server and paste one of the lines.'),
       ] : null,
     ]);
     updWhere();
   };
 
   const typePicker = choices(STORE_TYPES.map((o) => ({ ...o, desc: o.value === 'local' && mode === 'import' ? 'A folder or disk on this server.' : o.desc })),
-    { value: type, small: true, onPick: (v) => { type = v; renderType(); changed(); } });
+    { value: type, small: true, label: 'Type of storage', onPick: (v) => { type = v; renderType(); changed(); } });
   renderType();
 
   // collect returns {backend, credentials, label} or {error}.
@@ -1268,9 +1631,10 @@ function recoveryKit(name, kindLabel, b, password) {
 }
 
 // storageChooser: full "add storage" form. Calls onSaved(id) after creating it.
-function storageChooser({ agent, onSaved, onCancel }) {
+// title: optional heading shown above the form.
+function storageChooser({ agent, onSaved, onCancel, title }) {
   const sf = storageFields({ mode: 'repo', agent });
-  const name = input({ required: true });
+  const name = input({ name: 'storage-name', required: true, autocomplete: 'off' });
   let nameTouched = false;
   name.addEventListener('input', () => { nameTouched = true; });
   const autoName = () => { if (!nameTouched) { const c = sf.collect(); name.value = c.label || name.value; } };
@@ -1278,13 +1642,13 @@ function storageChooser({ agent, onSaved, onCancel }) {
 
   // ransomware protection
   let lock = '';
-  const lockDays = input({ type: 'number', min: 1, value: 30 });
+  const lockDays = input({ name: 'lock-days', type: 'number', inputmode: 'numeric', min: 1, value: 30 });
   const lockBox = h('div', null,
     choices([
       { value: '', title: 'Off', desc: 'Backups can be deleted normally.' },
       { value: 'GOVERNANCE', title: 'Protect for some days', desc: 'Nobody can delete or change backups for N days. An admin of the bucket can still lift it.' },
       { value: 'COMPLIANCE', title: 'Locked — nobody can delete', desc: 'Not even you, the bucket owner, or the provider, until the days are over. Use with care.' },
-    ], { value: '', small: true, onPick: (v) => { lock = v; lockExtra.classList.toggle('hidden', !v); } }),
+    ], { value: '', small: true, label: 'Ransomware protection', onPick: (v) => { lock = v; lockExtra.classList.toggle('hidden', !v); } }),
     h('div', { class: 'hidden' }));
   const lockExtra = lockBox.lastChild;
   add(lockExtra, [field('Number of days', lockDays, 'Each backup copy is protected for this many days after it is made.'),
@@ -1296,9 +1660,9 @@ function storageChooser({ agent, onSaved, onCancel }) {
   // encryption password
   let pwMode = 'auto';
   let pw = genPassword();
-  const pwShow = h('code', { class: 'pw' }, pw);
-  const own1 = input({ type: 'password', autocomplete: 'new-password', minlength: 12 });
-  const own2 = input({ type: 'password', autocomplete: 'new-password' });
+  const pwShow = h('code', { class: 'pw', 'aria-label': 'Encryption password' }, pw);
+  const own1 = input({ name: 'encryption-password', type: 'password', autocomplete: 'new-password', minlength: 12 });
+  const own2 = input({ name: 'encryption-password-2', type: 'password', autocomplete: 'new-password' });
   const saved = checkbox('I saved the password somewhere safe — without it nobody can restore', false);
   const kitBtn = btn('Download recovery kit', () => {
     const c = sf.collect();
@@ -1306,8 +1670,16 @@ function storageChooser({ agent, onSaved, onCancel }) {
     const kindLabel = (STORE_TYPES.find((x) => x.value === sf.kind()) || {}).title || '';
     download(`backupproof-recovery-kit-${(name.value || 'storage').replace(/[^\w.-]+/g, '-')}.txt`, recoveryKit(name.value, kindLabel, c.backend, currentPw()));
   }, 'sm');
+  const regen = btn('Make a new one', async () => {
+    const ok = await confirmDlg('Make a new encryption password? If you already wrote down or downloaded the current one, that copy won’t work for this storage — you’ll need to save the new one instead.', 'Make a new one', { danger: false, title: 'Replace the password?' });
+    if (!ok) return;
+    pw = genPassword();
+    pwShow.textContent = pw;
+    saved.cb.checked = false;
+    toast('New password made. Save it before you continue.', 'ok');
+  }, 'sm');
   const autoBox = h('div', null,
-    h('div', { class: 'pwbox' }, pwShow, h('div', { class: 'btns' }, copyBtn(() => pw), btn('Make a new one', () => { pw = genPassword(); pwShow.textContent = pw; }, 'sm'), kitBtn)),
+    h('div', { class: 'pwbox' }, pwShow, h('div', { class: 'btns' }, copyBtn(() => pw, 'Copy', 'Copy the encryption password'), regen, kitBtn)),
     h('p', { class: 'hint' }, 'Write it down or download the recovery kit and keep it somewhere other than this server.'));
   const ownBox = h('div', { class: 'hidden' }, h('div', { class: 'row' }, field('Password', own1, 'At least 12 characters.'), field('Type it again', own2)));
   const modePick = h('div', { class: 'btns' });
@@ -1321,23 +1693,25 @@ function storageChooser({ agent, onSaved, onCancel }) {
   const currentPw = () => pwMode === 'auto' ? pw : own1.value;
 
   // test + save
-  const result = h('div');
+  const result = h('div', { 'aria-live': 'polite' });
   const backendWithLock = (c) => {
     const b = { ...c.backend };
     if (lock && isS3Like(sf.kind())) { b.objectLockMode = lock; b.objectLockDays = num(lockDays.value) || 30; }
     return b;
   };
   const showTest = (r, c) => {
-    fill(result, h('div', { class: 'banner ' + (r.ok ? (r.existing && r.passwordOk !== true ? 'warn' : 'ok') : 'bad') }, r.ok ? '✓ ' : '✗ ', r.message));
+    fill(result, h('div', { class: 'banner ' + (r.ok ? (r.existing && r.passwordOk !== true ? 'warn' : 'ok') : 'bad') }, glyph(r.ok), r.message,
+      r.ok ? null : h('p', { class: 'small' }, 'Check the details above, then click “Test connection” again.')));
     if (r.existing && r.passwordOk !== true) {
       result.append(h('p', { class: 'hint' }, 'This storage already contains BackupProof backups — enter its existing password instead.'));
       if (pwMode !== 'own') setMode('own');
     }
     if (r.oldBackups) {
-      result.append(h('div', { class: 'callout' }, h('strong', null, `We found old ${r.oldBackups} backups here.`), ' ',
+      result.append(h('div', { class: 'callout' }, h('strong', null, `Found old ${r.oldBackups} backups here.`), ' ',
         'You can convert them so they are restore-tested and proven too. ',
         btn('Convert them', () => {
           S.importPrefill = { format: /restic/i.test(r.oldBackups) ? 'restic' : /kopia/i.test(r.oldBackups) ? 'kopia' : 'files', backend: c.backend, credentials: c.credentials };
+          S.dirty = false;
           location.hash = '#/import';
         }, 'sm primary')));
     }
@@ -1350,43 +1724,49 @@ function storageChooser({ agent, onSaved, onCancel }) {
       if (!quiet) fill(result, h('div', { class: 'banner info' }, 'This folder is on another server, so it can only be checked when the first backup runs there.'));
       return { ok: true };
     }
-    if (!quiet) fill(result, h('p', { class: 'muted' }, 'Checking the connection…'));
+    if (!quiet) fill(result, h('p', { class: 'running' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Checking the connection…'));
     const r = await post('/repositories/test', { backend: backendWithLock(c), credentials: c.credentials, password: pwMode === 'own' ? own1.value : '' });
     showTest(r, c);
     return r;
   };
-  const err = h('div', { class: 'form-error' });
+  const err = errBox();
   const save = async () => {
     err.textContent = '';
+    clearErrors(el);
     const c = sf.collect();
-    if (c.error) { err.textContent = c.error; return; }
-    if (!name.value.trim()) { err.textContent = 'Give this storage a name.'; return; }
+    if (c.error) return showErr(err, c.error);
+    if (!name.value.trim()) return fieldError(name, 'Give this storage a name.');
     if (pwMode === 'own') {
-      if (own1.value.length < 12) { err.textContent = 'The password must be at least 12 characters.'; return; }
-      if (own1.value !== own2.value) { err.textContent = 'The two passwords are different.'; return; }
+      if (own1.value.length < 12) return fieldError(own1, 'The password must be at least 12 characters.');
+      if (own1.value !== own2.value) return fieldError(own2, 'The two passwords are different. Type the same password twice.');
     }
-    if (!saved.cb.checked) { err.textContent = 'Please save the password first and tick the box — without it nobody can restore.'; return; }
+    if (!saved.cb.checked) return fieldError(saved.cb, 'Save the password first and tick this box — without it nobody can restore.');
+    if (lock === 'COMPLIANCE' && isS3Like(sf.kind())) {
+      const days = num(lockDays.value) || 30;
+      const ok = await confirmDlg(`Lock every backup copy for ${plural(days, 'day')}? Nobody — not you, the bucket owner or the provider — can delete them until the days are over, and this can’t be undone.`, 'Lock the backups');
+      if (!ok) return;
+    }
     const r = await test(true);
-    if (!r || !r.ok) { err.textContent = 'The connection test failed — see the message above.'; return; }
-    if (r.existing && r.passwordOk !== true) { err.textContent = 'This storage already has backups. Enter its existing password (the test must say it works).'; return; }
+    if (!r || !r.ok) return showErr(err, 'The connection test failed — read the message above, fix the details, and save again.');
+    if (r.existing && r.passwordOk !== true) return showErr(err, 'This storage already has backups. Enter its existing password (the test must say it works).');
     const res = await post('/repositories', { name: name.value.trim(), backend: backendWithLock(c), password: currentPw(), credentials: c.credentials });
     toast('Storage added', 'ok');
     if (onSaved) onSaved(res.id);
   };
 
   const el = h('div', { class: 'storage-chooser' },
-    h('h3', null, 'Where should backups be stored?'),
+    title ? h('h3', null, title) : null,
     sf.el,
     field('Name', name, 'So you can recognise it later.'),
     lockSection,
     h('fieldset', null, h('legend', null, 'Encryption password'),
-      h('p', { class: 'muted small' }, 'Everything is encrypted before it leaves the server. The storage provider can\'t read your files — but you need this password to restore if this server is ever lost.'),
+      h('p', { class: 'muted small' }, 'Everything is encrypted before it leaves the server. The storage provider can’t read your files — but you need this password to restore if this server is ever lost.'),
       autoBox, ownBox, modePick, saved.el),
     result, err,
     h('div', { class: 'form-actions' },
       onCancel ? btn('Cancel', onCancel) : null,
-      btn('Test connection', busy(() => test(false))),
-      btn('Save storage', busy(save), 'primary')));
+      btn('Test connection', busy(() => test(false), 'Testing…')),
+      btn('Save storage', busy(save, 'Saving…'), 'primary')));
   autoName();
   showLock();
   return el;
@@ -1396,10 +1776,10 @@ async function pageStorageNew() {
   if (!canOperate()) return h('div', { class: 'banner warn' }, 'Your account can only view. Ask an administrator to add storage.');
   const agents = ((await api('/agents')) || []).filter((a) => !a.revoked);
   const agent = agents.find((a) => a.builtin) || agents[0] || null;
-  return h('div', null,
-    h('div', { class: 'small' }, h('a', { href: '#/repositories' }, '← Storage')),
+  return guardDirty(h('div', null,
+    backLink('#/repositories', 'Storage'),
     pageHead('Add backup storage', 'Choose where encrypted backup copies are kept.'),
-    h('section', { class: 'card' }, storageChooser({ agent, onSaved: () => { location.hash = '#/repositories'; }, onCancel: () => { location.hash = '#/repositories'; } })));
+    h('section', { class: 'card' }, storageChooser({ agent, onSaved: () => { S.dirty = false; location.hash = '#/repositories'; }, onCancel: () => { location.hash = '#/repositories'; } }))));
 }
 
 async function pageRepositories() {
@@ -1425,15 +1805,15 @@ async function pageRepositories() {
 
 const BACKUP_CHOICES = [
   { value: '@hourly', title: 'Every hour', desc: 'For things that change all day.' },
-  { value: '0 2 * * *', title: 'Every night', desc: 'At 2:00 at night.', badge: 'recommended', badgeCls: 'ok' },
-  { value: '@every 6h', title: 'Every 6 hours', desc: 'Four times a day.' },
-  { value: '0 3 * * 0', title: 'Every week', desc: 'Sundays at 3:00 at night.' },
+  { value: '0 2 * * *', title: 'Every night', desc: `At ${clock(2)}.`, badge: 'recommended', badgeCls: 'ok' },
+  { value: '@every 6h', title: 'Every 6 hours', desc: '4 times a day.' },
+  { value: '0 3 * * 0', title: 'Every week', desc: `Sundays at ${clock(3)}.` },
   { value: 'custom', title: 'Custom', desc: 'Advanced: your own schedule.' },
 ];
 const DRILL_CHOICES = [
-  { value: 'daily', title: 'Every day', desc: 'At 5:00 in the morning.', cron: '0 5 * * *', maxAge: 26, words: 'every day' },
-  { value: 'weekly', title: 'Every week', desc: 'Sundays at 4:00 in the morning.', cron: '0 4 * * 0', maxAge: 192, words: 'every week', badge: 'recommended', badgeCls: 'ok' },
-  { value: 'monthly', title: 'Every month', desc: 'On the 1st at 4:00 in the morning.', cron: '0 4 1 * *', maxAge: 768, words: 'every month' },
+  { value: 'daily', title: 'Every day', desc: `At ${clock(5)}.`, cron: '0 5 * * *', maxAge: 26, words: 'every day' },
+  { value: 'weekly', title: 'Every week', desc: `Sundays at ${clock(4)}.`, cron: '0 4 * * 0', maxAge: 192, words: 'every week', badge: 'recommended', badgeCls: 'ok' },
+  { value: 'monthly', title: 'Every month', desc: `On the 1st at ${clock(4)}.`, cron: '0 4 1 * *', maxAge: 768, words: 'every month' },
 ];
 const KEEP_CHOICES = [
   { value: '30d', title: 'Last 30 days', desc: 'One copy for each of the last 30 days.', retention: { keepDaily: 30 } },
@@ -1449,15 +1829,15 @@ function bind(el, obj, key, after) {
   return el;
 }
 
-function storageStep({ repos, value, adding, agent, onPick, onAdded }) {
+function storageStep({ repos, value, adding, agent, onPick, onAdded, label = 'Backup storage' }) {
   const opts = repos.map((r) => {
     const k = repoKind(r.backend);
     return { value: r.id, title: r.name, desc: `${k.label} · ${repoLocation(r.backend)}`, icon: k.icon, badge: r.backend && r.backend.objectLockMode ? 'Ransomware protection' : null, badgeCls: 'ok' };
   });
   opts.push({ value: 'new', title: 'Add new storage', desc: 'A disk, a cloud bucket (Backblaze B2, S3…) or another server.', icon: 'plus' });
   return h('div', null,
-    choices(opts, { value: adding ? 'new' : value, onPick }),
-    adding ? h('div', { class: 'card inset' }, storageChooser({ agent, onSaved: onAdded, onCancel: repos.length ? () => onPick(value || repos[0].id) : null })) : null);
+    choices(opts, { value: adding ? 'new' : value, onPick, label }),
+    adding ? h('div', { class: 'card inset' }, storageChooser({ agent, title: 'New storage', onSaved: onAdded, onCancel: repos.length ? () => onPick(value || repos[0].id) : null })) : null);
 }
 
 async function pageProtect() {
@@ -1480,10 +1860,10 @@ async function pageProtect() {
   };
   const STEPS = ['Server', 'What', 'Where', 'How often', 'Review'];
   const first = agents.length > 1 ? 0 : 1;
-  const root = h('div');
+  const root = guardDirty(h('div'));
   const agent = () => agents.find((a) => a.id === W.agentId) || agents[0];
   const inv = () => inventory(agent());
-  const err = h('div', { class: 'form-error' });
+  const err = errBox();
 
   const siteItems = () => (inv().items || []).filter((i) => i.kind === 'website' || i.kind === 'wordpress');
   const siteItem = () => siteItems().find((i) => i.path === W.site) || null;
@@ -1514,7 +1894,7 @@ async function pageProtect() {
     }
     return '';
   };
-  const nameInput = input();
+  const nameInput = input({ name: 'item-name', autocomplete: 'off' });
   nameInput.addEventListener('input', () => { W.name = nameInput.value; W.nameTouched = true; });
   const autoName = () => { if (!W.nameTouched) { W.name = suggestName(); nameInput.value = W.name; } };
 
@@ -1558,11 +1938,11 @@ async function pageProtect() {
   };
 
   const stepComputer = () => h('div', null,
-    h('h2', null, 'Which server has the data?'),
+    h('h2', { tabindex: '-1' }, 'Which server has the data?'),
     choices(agents.map((a) => ({
       value: a.id, title: agentTitle(a), badge: a.builtin ? 'built in' : null, icon: 'computer',
       desc: [a.online ? 'Online' : 'Offline', osName(a.os), a.builtin ? 'the server running this dashboard' : a.hostname].filter(Boolean).join(' · '),
-    })), { value: W.agentId, onPick: (v) => { W.agentId = v; W.folders = []; W.site = null; W.dbVal = null; autoName(); } }),
+    })), { value: W.agentId, label: 'Server', onPick: (v) => { W.agentId = v; W.folders = []; W.site = null; W.dbVal = null; autoName(); } }),
     h('p', { class: 'small' }, h('a', { href: '#/agents', onclick: () => { S.openConnect = true; } }, '+ Connect another server')));
 
   const foldersForm = () => {
@@ -1571,40 +1951,40 @@ async function pageProtect() {
     const listBox = h('div');
     const renderCustom = () => {
       const custom = W.folders.filter((p) => !sugg.some((s) => s.path === p));
-      fill(listBox, custom.length ? h('ul', { class: 'path-list' }, custom.map((p) => h('li', null, icon('folder'), h('span', { class: 'break' }, p),
-        btn('Remove', () => { W.folders = W.folders.filter((x) => x !== p); renderCustom(); autoName(); }, 'sm')))) : null);
+      fill(listBox, custom.length ? h('ul', { class: 'path-list', 'aria-label': 'Folders you added' }, custom.map((p) => h('li', null, icon('folder'), h('code', { class: 'break' }, p),
+        btn('Remove', () => { W.folders = W.folders.filter((x) => x !== p); renderCustom(); autoName(); newIn.focus(); }, 'sm', { 'aria-label': 'Remove ' + p })))) : null);
     };
     const addPath = (p) => { p = String(p || '').trim(); if (p && !W.folders.includes(p)) W.folders.push(p); renderCustom(); autoName(); };
-    const newIn = input({ placeholder: agent().os && agent().os.startsWith('windows') ? 'C:\\Users\\Me\\Documents' : '/home/me/documents' });
+    const newIn = input({ name: 'folder-path', code: true, placeholder: agent().os && agent().os.startsWith('windows') ? 'C:\\Users\\Me\\Documents…' : '/home/me/documents…' });
     newIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addPath(newIn.value); newIn.value = ''; } });
-    const ex = bind(input({ placeholder: '*.tmp, cache' }), W, 'excludes');
+    const ex = bind(input({ name: 'excludes', code: true, placeholder: '*.tmp, cache…' }), W, 'excludes');
     renderCustom();
     return h('div', null,
-      sugg.length ? [h('p', { class: 'label' }, 'Folders we found on ' + agentTitle(agent())),
-        h('div', { class: 'check-list' }, sugg.map((i) => {
+      sugg.length ? [h('p', { class: 'label', id: 'sugg-label' }, 'Folders found on ' + agentTitle(agent())),
+        h('div', { class: 'check-list', role: 'group', 'aria-labelledby': 'sugg-label' }, sugg.map((i) => {
           const cb = h('input', { type: 'checkbox', checked: W.folders.includes(i.path), onchange: () => { if (cb.checked) addPath(i.path); else { W.folders = W.folders.filter((x) => x !== i.path); autoName(); } } });
           return h('label', { class: 'check-card' }, cb, h('span', null, h('strong', null, i.label), h('span', { class: 'hint block break' }, i.path)));
-        }))] : h('p', { class: 'hint' }, inv().collected ? 'We didn\'t find the usual folders on this server — add one below.' : 'This server hasn\'t reported its folders yet — add one below.'),
+        }))] : h('p', { class: 'hint' }, inv().collected ? 'No usual folders were found on this server — add one below.' : 'This server hasn’t reported its folders yet — add one below.'),
       listBox,
       h('div', { class: 'inline-field' },
         field('Add a folder path', newIn, builtin ? 'Type a path and press Enter, or browse.' : 'Type the folder path on that server and press Enter. (Browsing works only for this server.)'),
-        btn('Add', () => { addPath(newIn.value); newIn.value = ''; }, 'sm'),
+        btn('Add folder', () => { addPath(newIn.value); newIn.value = ''; newIn.focus(); }, 'sm'),
         builtin ? btn('Browse…', async () => { const p = await pickFolder(''); if (p) addPath(p); }, 'sm') : null),
       details('More options', field('Skip these files', ex, 'Separate with commas. Files and folders matching these names are not backed up, e.g. *.tmp, cache, node_modules.')));
   };
 
   const websiteForm = () => {
     const items = siteItems();
-    const manual = bind(input({ placeholder: '/var/www/mysite' }), W, 'sitePath', () => { W.site = null; autoName(); });
+    const manual = bind(input({ name: 'site-path', code: true, placeholder: '/var/www/mysite…' }), W, 'sitePath', () => { W.site = null; autoName(); });
     const it = siteItem();
-    const dbCb = checkbox('Also back up its database (found automatically)', W.siteDb, 'The login is read from the WordPress settings file, so you don\'t need to type a password.');
+    const dbCb = checkbox('Also back up its database (found automatically)', W.siteDb, 'The login is read from the WordPress settings file, so you don’t need to type a password.');
     dbCb.cb.addEventListener('change', () => { W.siteDb = dbCb.cb.checked; });
     return h('div', null,
       items.length ? choices(items.map((i) => ({ value: i.path, title: i.label, desc: i.path, icon: 'globe', badge: i.kind === 'wordpress' ? 'WordPress' : null })),
-        { value: W.site, onPick: (v) => { W.site = v; W.sitePath = ''; W.nameTouched = false; autoName(); render(); } })
-        : h('p', { class: 'hint' }, 'We didn\'t find any websites on this server. Type the website\'s folder below, or choose “Folders & files”.'),
+        { value: W.site, label: 'Websites found', onPick: (v) => { W.site = v; W.sitePath = ''; W.nameTouched = false; autoName(); render(); } })
+        : h('p', { class: 'hint' }, 'No websites were found on this server. Type the website’s folder below, or choose “Folders & files”.'),
       it && it.wpConfig ? dbCb.el : null,
-      field(items.length ? 'Or type the website\'s folder' : 'Website folder', manual, 'The folder that contains the website files.'));
+      field(items.length ? 'Or type the website’s folder' : 'Website folder', manual, 'The folder that contains the website files.'));
   };
 
   const databaseForm = () => {
@@ -1612,7 +1992,7 @@ async function pageProtect() {
     const o = dbOpt();
     const opts = dbs.map((d, i) => ({
       value: 'inv:' + i, title: d.label, icon: 'db',
-      desc: d.container ? 'We\'ll read the login from the container automatically.' : d.wpConfig ? 'The login is read from the WordPress settings automatically.' : d.needsLogin ? 'You\'ll need its username and password.' : '',
+      desc: d.container ? 'The login is read from the container automatically.' : d.wpConfig ? 'The login is read from the WordPress settings automatically.' : d.needsLogin ? 'You’ll need its username and password.' : '',
     }));
     const manual = ['postgres', 'mysql', 'mongodb', 'sqlite'].map((k) => ({ value: 'manual:' + k, title: DB_NAMES[k], desc: k === 'sqlite' ? 'A single database file.' : 'Enter the connection details yourself.', icon: 'db' }));
     const pick = (v) => {
@@ -1624,42 +2004,42 @@ async function pageProtect() {
     const d = W.db;
     let fields = null;
     if (o && o.kind === 'sqlite') {
-      fields = field('Database file', bind(input({ placeholder: '/var/lib/app/app.db' }), d, 'file', autoName), 'The full path of the .db or .sqlite file.');
+      fields = field('Database file', bind(input({ name: 'sqlite-file', code: true, placeholder: '/var/lib/app/app.db…' }), d, 'file', autoName), 'The full path of the .db or .sqlite file.');
     } else if (o && o.inv && o.inv.container) {
-      fields = [h('div', { class: 'banner ok' }, 'No password needed: we\'ll read the login from the container automatically.'),
-        o.kind !== 'mongodb' ? field('Database name (optional)', bind(input({ placeholder: 'detect automatically' }), d, 'database'), 'Leave empty unless the container has several databases.') : null];
+      fields = [h('div', { class: 'banner ok' }, 'No password needed: the login is read from the container automatically.'),
+        o.kind !== 'mongodb' ? field('Database name (optional)', bind(input({ name: 'db-name', code: true }), d, 'database'), 'Leave empty to detect it automatically, unless the container has several databases.') : null];
     } else if (o && o.inv && o.inv.wpConfig) {
       fields = h('div', { class: 'banner ok' }, 'No password needed: the login is read from the WordPress settings file.');
     } else if (o) {
       fields = [h('div', { class: 'row' },
-        field('Server address', bind(input(), d, 'host'), '127.0.0.1 means the same server.'),
-        field('Port', bind(input({ type: 'number', min: 1, max: 65535 }), d, 'port'), 'Usually ' + DB_DEFAULT_PORT[o.kind] + '.')),
+        field('Server address', bind(input({ name: 'db-host', code: true }), d, 'host'), '127.0.0.1 means the same server.'),
+        field('Port', bind(input({ name: 'db-port', type: 'number', inputmode: 'numeric', min: 1, max: 65535 }), d, 'port'), 'Usually ' + DB_DEFAULT_PORT[o.kind] + '.')),
       h('div', { class: 'row' },
-        field('Username', bind(input({ autocomplete: 'off' }), d, 'user')),
-        field('Password', bind(input({ type: 'password', autocomplete: 'new-password' }), d, 'password'), 'Kept encrypted on this server.'),
-        field(o.kind === 'mongodb' ? 'Database name (optional)' : 'Database name', bind(input(), d, 'database', autoName), o.kind === 'mongodb' ? 'Leave empty to back up all databases.' : 'The name of the database to back up.'))];
+        field('Username', bind(input({ name: 'db-user', code: true, autocomplete: 'off' }), d, 'user')),
+        field('Password', bind(input({ name: 'db-password', type: 'password', autocomplete: 'off' }), d, 'password'), 'Kept encrypted on this server.'),
+        field(o.kind === 'mongodb' ? 'Database name (optional)' : 'Database name', bind(input({ name: 'db-name', code: true }), d, 'database', autoName), o.kind === 'mongodb' ? 'Leave empty to back up all databases.' : 'The name of the database to back up.'))];
     }
     return h('div', null,
-      dbs.length ? [h('p', { class: 'label' }, 'Databases we found'), choices(opts, { value: W.dbVal, onPick: pick })] : h('p', { class: 'hint' }, 'We didn\'t find any databases automatically. Choose the type below.'),
+      dbs.length ? [h('p', { class: 'label' }, 'Databases found'), choices(opts, { value: W.dbVal, onPick: pick, label: 'Databases found' })] : h('p', { class: 'hint' }, 'No databases were found automatically. Choose the type below.'),
       h('p', { class: 'label' }, dbs.length ? 'Or enter one yourself' : 'Type of database'),
-      choices(manual, { value: W.dbVal, onPick: pick, small: true }),
+      choices(manual, { value: W.dbVal, onPick: pick, small: true, label: 'Type of database' }),
       fields);
   };
 
   const stepWhat = () => h('div', null,
-    h('h2', null, 'What do you want to protect?'),
+    h('h2', { tabindex: '-1' }, 'What do you want to protect?'),
     choices([
       { value: 'folders', title: 'Folders & files', desc: 'Documents, photos, project folders…', icon: 'folder' },
-      { value: 'website', title: 'Website', desc: 'A website\'s files. WordPress sites can include their database.', icon: 'globe' },
+      { value: 'website', title: 'Website', desc: 'A website’s files. WordPress sites can include their database.', icon: 'globe' },
       { value: 'database', title: 'Database', desc: 'PostgreSQL, MySQL/MariaDB, MongoDB or SQLite.', icon: 'db' },
       { value: 'other', title: 'Something else (advanced)', desc: 'All settings: commands, hooks, custom checks.', icon: 'sliders' },
-    ], { value: W.what, onPick: (v) => { if (v === 'other') { location.hash = '#/sources/new'; return; } W.what = v; W.nameTouched = false; autoName(); render(); } }),
+    ], { value: W.what, label: 'What to protect', onPick: (v) => { if (v === 'other') { location.hash = '#/sources/new'; return; } W.what = v; W.nameTouched = false; autoName(); render(); } }),
     W.what ? h('div', { class: 'subform' },
       W.what === 'folders' ? foldersForm() : W.what === 'website' ? websiteForm() : databaseForm(),
       field('Name', nameInput, 'How it appears in your list. You can change it.')) : null);
 
   const stepWhere = () => h('div', null,
-    h('h2', null, 'Where should backups be stored?'),
+    h('h2', { tabindex: '-1' }, 'Where should backups be stored?'),
     h('p', { class: 'muted' }, 'Backups are encrypted before they leave the server.'),
     storageStep({
       repos, value: W.repoId, adding: W.addingRepo, agent: agent(),
@@ -1668,22 +2048,22 @@ async function pageProtect() {
     }));
 
   const stepWhen = () => {
-    const custom = bind(input({ placeholder: '30 1 * * *' }), W, 'customCron');
+    const custom = bind(input({ name: 'custom-schedule', code: true, placeholder: '30 1 * * *…' }), W, 'customCron');
     const others = agents.filter((a) => a.id !== W.agentId);
     const ver = checkbox('Test restores on a different server', W.useVerifier, 'Stronger proof: the restore test runs on another server that only has access to the storage.');
     const verSel = select([['', '— choose a server —'], ...others.map((a) => [a.id, agentTitle(a)])], W.verifierId);
     verSel.addEventListener('change', () => { W.verifierId = verSel.value; });
     ver.cb.addEventListener('change', () => { W.useVerifier = ver.cb.checked; render(); });
     return h('div', null,
-      h('h2', null, 'How often?'),
+      h('h2', { tabindex: '-1' }, 'How often?'),
       h('h3', null, 'Back up'),
-      choices(BACKUP_CHOICES, { value: W.backup, small: true, onPick: (v) => { W.backup = v; render(); } }),
+      choices(BACKUP_CHOICES, { value: W.backup, small: true, label: 'Back up', onPick: (v) => { W.backup = v; render(); } }),
       W.backup === 'custom' ? field('Custom schedule', custom, 'A cron expression like “30 1 * * *” (1:30 every night) or “@every 12h”.') : null,
       h('h3', null, 'Test a restore'),
       h('p', { class: 'hint' }, 'BackupProof restores the latest backup into a safe, separate place and checks every file — so you know it really works.'),
-      choices(DRILL_CHOICES, { value: W.drill, small: true, onPick: (v) => { W.drill = v; } }),
+      choices(DRILL_CHOICES, { value: W.drill, small: true, label: 'Test a restore', onPick: (v) => { W.drill = v; } }),
       h('h3', null, 'Keep old copies'),
-      choices(KEEP_CHOICES, { value: W.keep, small: true, onPick: (v) => { W.keep = v; } }),
+      choices(KEEP_CHOICES, { value: W.keep, small: true, label: 'Keep old copies', onPick: (v) => { W.keep = v; } }),
       others.length ? h('div', { class: 'subform' }, ver.el, W.useVerifier ? field('Server for restore tests', verSel) : null) : null);
   };
 
@@ -1696,12 +2076,12 @@ async function pageProtect() {
 
   const stepReview = () => {
     let srcs;
-    try { srcs = buildSources(); } catch (e) { return h('div', { class: 'banner bad' }, e.message); }
+    try { srcs = buildSources(); } catch (e) { return h('div', { class: 'banner bad', role: 'alert' }, e.message, ' Go back a step to fix it.'); }
     const { a, repo, dr, kp, cron } = plan();
     const whatWords = W.what === 'folders' ? joinWords(W.folders.map(folderLabel)) : srcs.length > 1 ? `${srcs[0].name} and its database` : srcs[0].name;
     const sentence = `Back up ${whatWords} on ${agentTitle(a)} ${cronWords(cron)} to “${repo.name}” (${repoKind(repo.backend).label}), test a restore ${dr.words}, and keep ${retentionWords(kp.retention)}.`;
     return h('div', null,
-      h('h2', null, 'Review & protect'),
+      h('h2', { tabindex: '-1' }, 'Review & protect'),
       h('p', { class: 'summary' }, sentence),
       W.useVerifier && W.verifierId ? h('p', { class: 'muted' }, `Restore tests run on ${agentTitle(agents.find((x) => String(x.id) === String(W.verifierId)) || {})}.`) : null,
       srcs.length > 1 ? h('p', { class: 'muted' }, `This creates ${srcs.length} protected items: ${srcs.map((s) => s.name).join(' and ')}.`) : null,
@@ -1737,29 +2117,40 @@ async function pageProtect() {
     for (const c of created) {
       try { c.jobId = (await post(`/sources/${c.id}/run`, { kind: 'backup' })).jobId; } catch (e) { c.error = e.message; }
     }
-    fill(root, 
-      pageHead('Done!', 'Your first backup is running now. You can leave this page — it carries on in the background.'),
+    S.dirty = false;
+    nav.done();
+    fill(root,
+      pageHead('Done', 'Your first backup is running now. You can leave this page — it carries on in the background.'),
       h('section', { class: 'card' },
-        stepsBar(['Choose what', 'Choose where', 'How often', 'Done'], 4),
-        created.map((c) => c.jobId ? jobProgress(c.id, c.jobId, c.name, false) : h('div', { class: 'banner bad' }, `${c.name}: couldn't start the backup: ${c.error}`)),
+        created.map((c) => c.jobId ? jobProgress(c.id, c.jobId, c.name, false) : h('div', { class: 'banner bad' }, `${c.name}: couldn’t start the backup: ${c.error}. Open the item and click “Back up now” to try again.`)),
         h('div', { class: 'form-actions' },
-          h('a', { class: 'btn', href: '#/protect', onclick: () => setTimeout(() => route(), 0) }, 'Protect something else'),
-          h('a', { class: 'btn primary', href: `#/sources/${created[0].id}` }, 'Open ' + created[0].name))));
+          h('a', { class: 'btn', href: '#/protect' }, 'Protect something else'),
+          h('a', { class: 'btn primary wrap', href: `#/sources/${created[0].id}` }, 'Open ' + created[0].name))));
+    document.title = 'Done · BackupProof';
+    focusHeading(root, 'h1');
   };
 
+  let painted = false;
   function render() {
     err.textContent = '';
     const body = [stepComputer, stepWhat, stepWhere, stepWhen, stepReview][W.step]();
-    const back = W.step > first ? btn('Back', () => { W.step--; render(); }) : h('a', { class: 'btn', href: '#/dashboard' }, 'Cancel');
+    const back = W.step > first ? btn('Back', () => nav.back(W.step - 1)) : h('a', { class: 'btn', href: '#/dashboard' }, 'Cancel');
     const next = W.step < 4
-      ? btn('Next', () => { try { validate(); W.step++; render(); window.scrollTo(0, 0); } catch (e) { err.textContent = e.message; } }, 'primary')
-      : btn('Protect now', busy(async () => { try { validate(); } catch (e) { err.textContent = e.message; return; } await protect(); }), 'primary lg');
-    fill(root, 
+      ? btn(`Next: ${STEPS[W.step + 1]}`, () => { try { validate(); nav.forward(W.step + 1); } catch (e) { showErr(err, e.message); } }, 'primary')
+      : btn('Protect now', busy(async () => { try { validate(); } catch (e) { showErr(err, e.message); return; } await protect(); }, 'Starting…'), 'primary lg');
+    fill(root,
       pageHead('Protect something', 'A few simple questions. You can change everything later.'),
       stepsBar(STEPS.slice(first), W.step - first),
       h('section', { class: 'card wizard' }, body, err, h('div', { class: 'form-actions' }, back, next)));
   }
+  // Moving between steps scrolls to the top and puts focus on the step's question.
+  const nav = wizardHistory('/protect', () => W.step, (n) => {
+    W.step = Math.max(first, Math.min(4, n));
+    render();
+    if (painted) { window.scrollTo(0, 0); focusHeading(root, '.wizard h2'); }
+  });
   render();
+  painted = true;
   return root;
 }
 
@@ -1767,9 +2158,9 @@ async function pageProtect() {
 
 const IMPORT_FORMATS = [
   { value: 'files', title: 'Backup files in a bucket or folder', desc: 'Database dumps, .zip/.tar.gz archives, or encrypted files (.gpg, .enc, .age) made by any tool or script.', icon: 'file' },
-  { value: 'restic', title: 'restic', desc: 'A restic repository. The restic program must be installed on the server that converts.', icon: 'box' },
-  { value: 'kopia', title: 'Kopia', desc: 'A Kopia repository (on S3, B2, a disk or SFTP). The kopia program must be installed on the server that converts.', icon: 'box' },
-  { value: 'borg', title: 'BorgBackup', desc: 'A Borg repository, e.g. on another server over SSH, BorgBase or a Hetzner Storage Box. Needs the borg program.', icon: 'box' },
+  { value: 'restic', title: 'restic', notranslate: true, desc: 'A restic repository. The restic program must be installed on the server that converts.', icon: 'box' },
+  { value: 'kopia', title: 'Kopia', notranslate: true, desc: 'A Kopia repository (on S3, B2, a disk or SFTP). The kopia program must be installed on the server that converts.', icon: 'box' },
+  { value: 'borg', title: 'BorgBackup', notranslate: true, desc: 'A Borg repository, e.g. on another server over SSH, BorgBase or a Hetzner Storage Box. Needs the borg program.', icon: 'box' },
   { value: 'cloud', title: 'Google Drive, Dropbox, OneDrive…', desc: 'Backup files on a cloud drive (70+ services via rclone, including rclone-encrypted folders). Same options as backup files.', icon: 'cloud' },
 ];
 const GROUPING = [
@@ -1777,7 +2168,7 @@ const GROUPING = [
   ['day', 'One copy per day'], ['folder', 'One copy per folder'], ['file', 'One copy per file'], ['all', 'Everything is one copy'],
 ];
 const DECRYPT = [
-  { value: 'auto', title: 'Not encrypted / not sure', desc: 'We detect it automatically.' },
+  { value: 'auto', title: 'Not encrypted / not sure', desc: 'Detected automatically.' },
   { value: 'gpg', title: 'GPG', desc: '.gpg, .pgp, .asc — also used by duplicity.' },
   { value: 'openssl', title: 'OpenSSL', desc: '“openssl enc”, files starting with Salted__.' },
   { value: 'age', title: 'age', desc: '.age files.' },
@@ -1806,14 +2197,14 @@ async function pageImport() {
   const resticLocal = () => I.format === 'restic' && I.resticMode === 'local';
   const kopiaLocal = () => I.format === 'kopia' && I.kopiaMode === 'local';
   const repoTool = () => ['restic', 'kopia', 'borg'].includes(I.format);
-  // These are read on the converting server itself, so the dashboard can't list them in advance.
+  // These are read on the converting server itself, so the dashboard can’t list them in advance.
   const noScan = () => resticLocal() || kopiaLocal() || I.format === 'borg' || I.format === 'cloud';
   const TOOL = { restic: 'restic', kopia: 'kopia', borg: 'borg', cloud: 'rclone' };
   const sf = storageFields({ mode: 'import', agent: builtin, initial: pre ? { backend: pre.backend, credentials: pre.credentials } : null });
   sf.onChange(() => { I.scan = null; clear(scanOut); });
-  const root = h('div');
-  const err = h('div', { class: 'form-error' });
-  const scanOut = h('div');
+  const root = guardDirty(h('div'));
+  const err = errBox();
+  const scanOut = h('div', { 'aria-live': 'polite' });
   const STEPS = ['What made them', 'Where they are', 'Where to keep them', 'Convert'];
 
   const filesOptions = (spec) => {
@@ -1873,32 +2264,37 @@ async function pageImport() {
     if (!r) return;
     if (!r.found) {
       scanOut.append(h('div', { class: 'banner warn' }, sf.kind() === 'local'
-        ? 'We found no old backups in this folder. Check that the folder path is right and that the backups are inside it.'
-        : 'We connected, but found no old backups here. Check the bucket and the “folder inside the bucket”.'));
+        ? 'No old backups were found in this folder. Check that the folder path is right and that the backups are inside it, then look again.'
+        : 'Connected, but no old backups were found here. Check the bucket and the “folder inside the bucket”, then look again.'));
       return;
     }
-    scanOut.append(h('div', { class: 'banner ok' }, '✓ ', groupsSummary(r)),
+    scanOut.append(h('div', { class: 'banner ok' }, glyph(true), groupsSummary(r)),
       details(`Show the list (${r.groups.length})`, h('ul', { class: 'plain-list' }, r.groups.map((x) => h('li', null, groupLine(x))))));
-    if (I.format === 'files') scanOut.append(h('p', { class: 'hint' }, 'We only listed the files so far. If a password is wrong, you\'ll see it when the conversion runs.'));
+    if (I.format === 'files') scanOut.append(h('p', { class: 'hint' }, 'So far the files have only been listed. If a password is wrong, you’ll see it when the conversion runs.'));
   };
 
   const scan = async () => {
     err.textContent = '';
     let spec;
-    try { spec = importSpec(); } catch (e) { err.textContent = e.message; return; }
-    if (repoTool() && !I.password) { err.textContent = `Enter the ${I.format === 'restic' ? 'restic' : 'Kopia'} repository password.`; return; }
-    fill(scanOut, h('div', { class: 'running' }, h('span', { class: 'spinner' }), 'Looking for backups… this can take a minute for big buckets.'));
+    try { spec = importSpec(); } catch (e) { showErr(err, e.message); return; }
+    if (repoTool() && !I.password) { showErr(err, `Enter the ${I.format === 'restic' ? 'restic' : 'Kopia'} repository password.`); return; }
+    fill(scanOut, h('div', { class: 'running' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Looking for backups… this can take a minute for big buckets.'));
     try {
       I.scan = await post('/import/scan', spec);
       showScan();
       autoName();
     } catch (e) {
       I.scan = null;
-      fill(scanOut, h('div', { class: 'banner bad' }, '✗ ', e.message));
+      if (!isAdmin() && /admin/i.test(e.message)) {
+        I.scanSkipped = true;
+        fill(scanOut, h('div', { class: 'banner info' }, 'Only an administrator can preview old backups. You can still continue — they are listed when the conversion starts.'));
+        return;
+      }
+      fill(scanOut, h('div', { class: 'banner bad' }, glyph(false), e.message));
     }
   };
 
-  const nameInput = input();
+  const nameInput = input({ name: 'item-name', autocomplete: 'off' });
   nameInput.addEventListener('input', () => { I.name = nameInput.value; I.nameTouched = true; });
   function autoName() {
     if (I.nameTouched) return;
@@ -1916,26 +2312,26 @@ async function pageImport() {
   }
 
   const stepFormat = () => h('div', null,
-    h('h2', null, 'What made your old backups?'),
-    choices(IMPORT_FORMATS, { value: I.format, onPick: (v) => { I.format = v; I.scan = null; } }));
+    h('h2', { tabindex: '-1' }, 'What made your old backups?'),
+    choices(IMPORT_FORMATS, { value: I.format, label: 'What made your old backups', onPick: (v) => { I.format = v; I.scan = null; } }));
 
-  const pwField = (label, help) => field(label, bind(input({ type: 'password', autocomplete: 'off' }), I, 'password', () => { I.scan = null; }), help);
-  const pwFileField = (label, placeholder, help) => field(label, bind(input({ spellcheck: 'false', placeholder }), I, 'passwordFile'), help);
+  const pwField = (label, help) => field(label, bind(input({ name: 'import-password', type: 'password', autocomplete: 'off' }), I, 'password', () => { I.scan = null; }), help);
+  const pwFileField = (label, placeholder, help) => field(label, bind(input({ name: 'password-file', code: true, placeholder }), I, 'passwordFile'), help);
   const toolNote = () => h('p', { class: 'hint' }, `The server that converts needs the ${TOOL[I.format]} program installed (it already is if your backups are made there).`);
   const localOnly = () => h('div', { class: 'banner info' }, 'Nothing secret is sent to the dashboard — the server reads these files itself. In the next step, pick the server that has them.');
-  const listLater = () => h('p', { class: 'muted' }, 'We\'ll list the backups when the conversion starts.');
+  const listLater = () => h('p', { class: 'muted' }, 'The backups are listed when the conversion starts.');
 
   const filesSecretBlock = () => {
-    const key = bind(h('textarea', { rows: 4, spellcheck: 'false', placeholder: '-----BEGIN PGP PRIVATE KEY BLOCK-----  or  AGE-SECRET-KEY-…' }), I, 'privateKey');
+    const key = bind(h('textarea', { name: 'private-key', rows: 4, spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off', placeholder: 'AGE-SECRET-KEY-…' }), I, 'privateKey');
     const unpack = checkbox('Open archives (.zip, .tar.gz, .gz) so each file inside is checked', I.unpack);
     unpack.cb.addEventListener('change', () => { I.unpack = unpack.cb.checked; I.scan = null; });
-    const grp = select(GROUPING, I.grouping);
+    const grp = select(GROUPING, I.grouping, { name: 'grouping' });
     grp.addEventListener('change', () => { I.grouping = grp.value; I.scan = null; clear(scanOut); });
-    const iter = bind(input({ type: 'number', min: 1, placeholder: 'e.g. 10000' }), I, 'opensslIter');
+    const iter = bind(input({ name: 'openssl-iter', type: 'number', inputmode: 'numeric', min: 1, placeholder: '10000…' }), I, 'opensslIter');
     return h('div', null,
       h('h3', null, 'Are the files encrypted?'),
-      h('p', { class: 'hint' }, 'We recognise GPG (.gpg/.pgp/.asc, also used by duplicity), OpenSSL (openssl enc, files starting with Salted__) and age (.age). Encryption done by the storage itself needs nothing extra.'),
-      choices(DECRYPT, { value: I.decrypt, small: true, onPick: (v) => { I.decrypt = v; } }),
+      h('p', { class: 'hint' }, 'BackupProof recognises GPG (.gpg/.pgp/.asc, also used by duplicity), OpenSSL (openssl enc, files starting with Salted__) and age (.age). Encryption done by the storage itself needs nothing extra.'),
+      choices(DECRYPT, { value: I.decrypt, small: true, label: 'Are the files encrypted?', onPick: (v) => { I.decrypt = v; } }),
       pwField('Password used to encrypt them (if any)', 'Kept encrypted on this server and only used to read your old backups.'),
       details('I use a key file instead of a password', field('Private key', key, 'Paste your GPG private key (-----BEGIN PGP PRIVATE KEY BLOCK-----) or age key (AGE-SECRET-KEY-…).')),
       unpack.el,
@@ -1946,35 +2342,35 @@ async function pageImport() {
   const modeChoice = (key, localTitle, localDesc, manualDesc) => choices([
     { value: 'local', title: localTitle, badge: 'recommended', badgeCls: 'ok', desc: localDesc },
     { value: 'manual', title: 'Enter the repository details', desc: manualDesc },
-  ], { value: I[key], small: true, onPick: (v) => { I[key] = v; I.scan = null; render(); } });
+  ], { value: I[key], small: true, label: 'How to connect', onPick: (v) => { I[key] = v; I.scan = null; render(); } });
 
-  const scanButton = () => h('div', null, h('div', { class: 'form-actions start' }, btn('Look for backups', busy(scan), 'primary')), scanOut);
+  const scanButton = () => h('div', null, h('div', { class: 'form-actions start' }, btn('Look for backups', busy(scan, 'Looking…'), 'primary')), scanOut);
 
   const stepWhere = () => {
-    const head = [h('h2', null, 'Where are they?')];
+    const head = [h('h2', { tabindex: '-1' }, 'Where are they?')];
     switch (I.format) {
       case 'restic':
         head.push(modeChoice('resticMode', 'Use the restic settings already on that server', 'Best if a script already runs restic there (for example with /etc/restic/env).', 'Connect to the bucket or server where the restic repository is.'));
         if (resticLocal()) {
           return h('div', null, head,
-            field('restic settings file', bind(input({ spellcheck: 'false' }), I, 'resticEnvFile'), 'The file your backup script loads with “set -a; . /etc/restic/env”; it contains the repository address and storage keys.'),
-            field('restic password file', bind(input({ spellcheck: 'false' }), I, 'resticPasswordFile'), 'The file that holds the restic repository password.'),
+            field('restic settings file', bind(input({ name: 'restic-env-file', code: true }), I, 'resticEnvFile'), 'The file your backup script loads with “set -a; . /etc/restic/env”; it contains the repository address and storage keys.'),
+            field('restic password file', bind(input({ name: 'restic-password-file', code: true }), I, 'resticPasswordFile'), 'The file that holds the restic repository password.'),
             localOnly(), toolNote(), listLater());
         }
         return h('div', null, head,
           h('p', { class: 'muted' }, 'Connect to the place where the restic repository is. It is only read, never changed.'),
           sf.el,
           pwField('restic repository password', 'The password you use with restic for this repository.'),
-          field('Repository address (optional)', bind(input({ placeholder: 'b2:my-bucket:server1  or  sftp:user@host:/backups' }), I, 'resticRepository'),
-            'Only if restic uses a native address like b2:… or sftp:… instead of the storage above.'),
+          field('Repository address (optional)', bind(input({ name: 'restic-repository', code: true, placeholder: 'b2:my-bucket:server1…' }), I, 'resticRepository'),
+            'Only if restic uses a native address like b2:my-bucket:server1 or sftp:user@host:/backups instead of the storage above.'),
           toolNote(), scanButton());
       case 'kopia':
-        head.push(modeChoice('kopiaMode', 'Use the Kopia connection already on that server', 'Best if Kopia already runs there. It reuses Kopia\'s own settings file.', 'Connect to the bucket, folder or SFTP server where the Kopia repository is.'));
+        head.push(modeChoice('kopiaMode', 'Use the Kopia connection already on that server', 'Best if Kopia already runs there. It reuses Kopia’s own settings file.', 'Connect to the bucket, folder or SFTP server where the Kopia repository is.'));
         if (kopiaLocal()) {
           return h('div', null, head,
-            field('Kopia settings file', bind(input({ spellcheck: 'false' }), I, 'kopiaConfigFile'), 'Usually /root/.config/kopia/repository.config on Linux, or %APPDATA%\\kopia\\repository.config on Windows.'),
+            field('Kopia settings file', bind(input({ name: 'kopia-config-file', code: true }), I, 'kopiaConfigFile'), 'Usually /root/.config/kopia/repository.config on Linux, or %APPDATA%\\kopia\\repository.config on Windows.'),
             pwField('Kopia repository password', 'Leave empty if you give a password file below.'),
-            pwFileField('…or a file that holds the password', '/etc/kopia/password', 'Read on that server; the password is never sent to the dashboard.'),
+            pwFileField('…or a file that holds the password', '/etc/kopia/password…', 'Read on that server; the password is never sent to the dashboard.'),
             localOnly(), toolNote(), listLater());
         }
         return h('div', null, head,
@@ -1984,18 +2380,18 @@ async function pageImport() {
           toolNote(), scanButton());
       case 'borg':
         return h('div', null, head,
-          field('Borg repository address', bind(input({ spellcheck: 'false', placeholder: 'ssh://u123456@u123456.your-storagebox.de:23/./backups   or   /mnt/backup/borg' }), I, 'borgRepository'),
-            'The same address you use with borg (BORG_REPO). For BorgBase it looks like ssh://xxxx@xxxx.repo.borgbase.com/./repo.'),
+          field('Borg repository address', bind(input({ name: 'borg-repository', code: true, placeholder: 'ssh://u123456@u123456.your-storagebox.de:23/./backups…' }), I, 'borgRepository'),
+            'The same address you use with borg (BORG_REPO), or a folder like /mnt/backup/borg. For BorgBase it looks like ssh://xxxx@xxxx.repo.borgbase.com/./repo.'),
           pwField('Borg passphrase', 'Leave empty if the repository is not encrypted or you give a passphrase file below.'),
-          pwFileField('…or a file that holds the passphrase', '/root/.borg-passphrase', 'Read on that server; the passphrase is never sent to the dashboard.'),
-          field('SSH key file (optional)', bind(input({ spellcheck: 'false', placeholder: '/root/.ssh/id_ed25519' }), I, 'borgSshKeyFile'), 'Only needed if the repository is on another server and borg normally uses a specific key.'),
+          pwFileField('…or a file that holds the passphrase', '/root/.borg-passphrase…', 'Read on that server; the passphrase is never sent to the dashboard.'),
+          field('SSH key file (optional)', bind(input({ name: 'borg-ssh-key', code: true, placeholder: '/root/.ssh/id_ed25519…' }), I, 'borgSshKeyFile'), 'Only needed if the repository is on another server and borg normally uses a specific key.'),
           toolNote(), listLater());
       case 'cloud':
         return h('div', null, head,
           h('div', { class: 'banner info' }, 'Cloud drives are reached through rclone. Set up the drive once on the converting server with “rclone config” (choose Google Drive, Dropbox, OneDrive, …), then enter its name and folder here.'),
-          field('rclone remote and folder', bind(input({ spellcheck: 'false', placeholder: 'gdrive:Backups/server1' }), I, 'cloudRemote'),
+          field('rclone remote and folder', bind(input({ name: 'rclone-remote', code: true, placeholder: 'gdrive:Backups/server1…' }), I, 'cloudRemote'),
             'The name you gave the drive in rclone, a colon, then the folder with your backups. rclone-encrypted (crypt) remotes are decrypted automatically.'),
-          details('Advanced', field('rclone settings file (optional)', bind(input({ spellcheck: 'false', placeholder: '/root/.config/rclone/rclone.conf' }), I, 'rcloneConfig'), 'Only if rclone\'s settings are not in the usual place.')),
+          details('Advanced', field('rclone settings file (optional)', bind(input({ name: 'rclone-config', code: true, placeholder: '/root/.config/rclone/rclone.conf…' }), I, 'rcloneConfig'), 'Only if rclone’s settings are not in the usual place.')),
           filesSecretBlock(), toolNote(), listLater());
       default:
         return h('div', null, head,
@@ -2013,14 +2409,14 @@ async function pageImport() {
           : I.format === 'cloud' ? 'Pick the server where you set up the drive with rclone.'
             : repoTool() ? `The ${TOOL[I.format]} program must be installed on that server.` : null;
     return h('div', null,
-      h('h2', null, 'Which server does the converting?'),
+      h('h2', { tabindex: '-1' }, 'Which server does the converting?'),
       h('p', { class: 'muted' }, 'It downloads the old backups, checks them and stores them again, encrypted, in BackupProof format.'),
       choices(agents.map((a) => ({ value: a.id, title: agentTitle(a), badge: a.builtin ? 'built in' : null, icon: 'computer', desc: [a.online ? 'Online' : 'Offline', osName(a.os)].join(' · ') })),
-        { value: I.agentId, small: true, onPick: (v) => { I.agentId = v; I.agentTouched = true; } }),
+        { value: I.agentId, small: true, label: 'Server that converts', onPick: (v) => { I.agentId = v; I.agentTouched = true; } }),
       hint ? h('div', { class: 'banner info' }, hint) : null,
       h('h2', { class: 'mt' }, 'Where should the converted copies be stored?'),
       storageStep({
-        repos, value: I.repoId, adding: I.addingRepo, agent,
+        repos, value: I.repoId, adding: I.addingRepo, agent, label: 'Storage for converted copies',
         onPick: (v) => { if (v === 'new') I.addingRepo = true; else { I.addingRepo = false; I.repoId = v; } render(); },
         onAdded: async (id) => { repos = (await api('/repositories')) || []; I.repoId = id; I.addingRepo = false; render(); },
       }));
@@ -2030,25 +2426,25 @@ async function pageImport() {
     if (!I.name) autoName(); else nameInput.value = I.name;
     const what = I.format === 'borg' ? 'archives' : 'snapshots';
     return h('div', null,
-      h('h2', null, 'Convert'),
+      h('h2', { tabindex: '-1' }, 'Convert'),
       field('Name', nameInput, 'How it appears in your list of protected things.'),
       repoTool() ? [h('h3', null, 'Keep converting?'),
         choices([
-          { value: 'nightly', title: `Convert new ${what} every night`, desc: 'At 3:00, after your existing backup has run.', badge: 'recommended', badgeCls: 'ok' },
+          { value: 'nightly', title: `Convert new ${what} every night`, desc: `At ${clock(3)}, after your existing backup has run.`, badge: 'recommended', badgeCls: 'ok' },
           { value: 'once', title: 'Only once', desc: 'Convert what is there now. You can click “Convert again” later.' },
-        ], { value: I.schedule, small: true, onPick: (v) => { I.schedule = v; } }),
-        h('p', { class: 'hint' }, `Each night's new ${what.slice(0, -1)} is converted and restore-tested, so you get proof without changing your existing backup.`)] : null,
+        ], { value: I.schedule, small: true, label: 'Keep converting?', onPick: (v) => { I.schedule = v; } }),
+        h('p', { class: 'hint' }, `Each night’s new ${what.slice(0, -1)} is converted and restore-tested, so you get proof without changing your existing backup.`)] : null,
       h('h3', null, 'Test a restore'),
-      choices(DRILL_CHOICES, { value: I.drill, small: true, onPick: (v) => { I.drill = v; } }),
+      choices(DRILL_CHOICES, { value: I.drill, small: true, label: 'Test a restore', onPick: (v) => { I.drill = v; } }),
       h('div', { class: 'banner info' }, 'Converted copies keep their original dates. Your old backups are only read, never changed or deleted. Click “Convert again” later to pick up anything new.'));
   };
 
   const validate = () => {
     if (I.step === 1) {
       importSpec();
-      if (!noScan()) {
-        if (!I.scan) throw new Error('Click “Look for backups” first.');
-        if (!I.scan.found) throw new Error('No old backups were found at this place.');
+      if (!noScan() && !I.scanSkipped) {
+        if (!I.scan) throw new Error('Click “Look for backups” first, so you can see what will be converted.');
+        if (!I.scan.found) throw new Error('No old backups were found at this place. Check the details above and look again.');
       }
     }
     if (I.step === 2) {
@@ -2076,21 +2472,26 @@ async function pageImport() {
     });
     let job = null, jerr = '';
     try { job = (await post(`/sources/${r.id}/run`, { kind: 'backup' })).jobId; } catch (e) { jerr = e.message; }
+    S.dirty = false;
+    nav.done();
     fill(root,
       pageHead('Converting your old backups', 'This can take a while for large backups. You can leave this page — it carries on in the background.'),
       h('section', { class: 'card' },
-        job ? jobProgress(r.id, job, name, true) : h('div', { class: 'banner bad' }, 'Couldn\'t start the conversion: ', jerr),
-        h('div', { class: 'form-actions' }, h('a', { class: 'btn primary', href: `#/sources/${r.id}` }, 'Open ' + name))));
+        job ? jobProgress(r.id, job, name, true) : h('div', { class: 'banner bad' }, 'Couldn’t start the conversion: ', jerr, '. Open the item and click “Convert again” to retry.'),
+        h('div', { class: 'form-actions' }, h('a', { class: 'btn primary wrap', href: `#/sources/${r.id}` }, 'Open ' + name))));
+    document.title = 'Converting · BackupProof';
+    focusHeading(root, 'h1');
   };
 
+  let painted = false;
   function render() {
     err.textContent = '';
     const body = [stepFormat, stepWhere, stepDest, stepConvert][I.step]();
     if (I.step === 1) showScan();
-    const back = I.step > 0 ? btn('Back', () => { I.step--; render(); }) : h('a', { class: 'btn', href: '#/dashboard' }, 'Cancel');
+    const back = I.step > 0 ? btn('Back', () => nav.back(I.step - 1)) : h('a', { class: 'btn', href: '#/dashboard' }, 'Cancel');
     const next = I.step < 3
-      ? btn('Next', () => { try { validate(); I.step++; render(); window.scrollTo(0, 0); } catch (e) { err.textContent = e.message; } }, 'primary')
-      : btn('Convert', busy(async () => { try { validate(); } catch (e) { err.textContent = e.message; return; } await convert(); }), 'primary lg');
+      ? btn(`Next: ${STEPS[I.step + 1]}`, () => { try { validate(); nav.forward(I.step + 1); } catch (e) { showErr(err, e.message); } }, 'primary')
+      : btn('Convert', busy(async () => { try { validate(); } catch (e) { showErr(err, e.message); return; } await convert(); }, 'Starting…'), 'primary lg');
     fill(root,
       pageHead('Bring in your old backups', 'Convert backups made by other tools or scripts so they can be restore-tested and proven. Your old backups are only read, never changed or deleted.'),
       stepsBar(STEPS, I.step),
@@ -2099,7 +2500,13 @@ async function pageImport() {
   if (!agents.length) {
     return h('div', null, pageHead('Bring in your old backups'), card(null, empty('No server is connected yet.', h('a', { class: 'btn primary', href: '#/agents' }, 'Connect a server'))));
   }
+  const nav = wizardHistory('/import', () => I.step, (n) => {
+    I.step = Math.max(0, Math.min(3, n));
+    render();
+    if (painted) { window.scrollTo(0, 0); focusHeading(root, '.wizard h2'); }
+  });
   render();
+  painted = true;
   return root;
 }
 
@@ -2113,13 +2520,13 @@ function agentStatus(a) {
 
 async function pageAgents() {
   const agents = agentOrder((await api('/agents')) || []);
-  if (S.openConnect) { S.openConnect = false; if (canOperate()) setTimeout(() => connectModal(), 0); }
+  if (S.openConnect) { S.openConnect = false; if (isAdmin()) setTimeout(() => connectModal(), 0); }
   return h('div', null,
-    pageHead('Servers', 'The servers BackupProof backs up and runs restore tests on.', canOperate() ? btn('+ Connect a server', busy(connectModal), 'primary') : null),
+    pageHead('Servers', 'The servers BackupProof backs up and runs restore tests on.', isAdmin() ? btn('+ Connect a server', busy(connectModal, 'Preparing…'), 'primary') : null),
     agents.length ? h('div', { class: 'cards' }, agents.map((a) => h('section', { class: 'card mini' + (a.revoked ? ' dim' : '') },
       h('div', { class: 'mini-head' }, h('span', { class: 'item-ico' }, icon('computer')),
         h('div', null, h('h2', null, agentTitle(a), a.builtin ? h('span', { class: 'pill' }, 'built in') : null),
-          h('div', { class: 'small' }, h('span', { class: 'dot ' + (a.revoked ? '' : a.online ? 'on' : 'off') }), agentStatus(a)))),
+          h('div', { class: 'small' }, h('span', { class: 'dot ' + (a.revoked ? '' : a.online ? 'on' : 'off'), 'aria-hidden': 'true' }), agentStatus(a)))),
       h('dl', { class: 'kv' },
         h('dt', null, 'System'), h('dd', null, osName(a.os)),
         h('dt', null, 'Can test databases'), h('dd', null, a.docker ? 'Yes' : 'No (needs Docker)'),
@@ -2128,14 +2535,14 @@ async function pageAgents() {
         h('dt', null, 'Name'), h('dd', null, a.name),
         h('dt', null, 'Host name'), h('dd', null, a.hostname || '—'),
         h('dt', null, 'Platform'), h('dd', null, a.os || '—'),
-        h('dt', null, 'Version'), h('dd', null, a.version || '—'),
+        h('dt', null, 'Version'), h('dd', { translate: 'no' }, a.version || '—'),
         h('dt', null, 'Key ID'), h('dd', null, h('code', { class: 'break' }, a.keyId || short(a.publicKey, 16))),
         h('dt', null, 'Connected'), h('dd', null, absTime(a.created)))),
       isAdmin() && !a.revoked && !a.builtin ? h('div', { class: 'form-actions' }, btn('Disconnect', busy(async () => {
-        if (!(await confirmDlg(`Disconnect "${a.name}"? It immediately loses access and must be connected again with a new code. Its past proofs stay valid.`, 'Disconnect'))) return;
+        if (!(await confirmDlg(`Disconnect “${a.name}”? It immediately loses access and must be connected again with a new code. Its past proofs stay valid.`, 'Disconnect'))) return;
         await post(`/agents/${a.id}/revoke`); toast('Server disconnected', 'ok'); reload();
-      }), 'sm danger')) : null)))
-      : h('section', { class: 'card' }, empty('No servers connected yet.', canOperate() ? btn('Connect your first server', busy(connectModal), 'primary') : null)));
+      }), 'sm danger', { 'aria-label': 'Disconnect ' + a.name })) : null)))
+      : h('section', { class: 'card' }, empty('No servers connected yet.', isAdmin() ? btn('Connect your first server', busy(connectModal, 'Preparing…'), 'primary') : h('p', { class: 'hint' }, 'Ask an administrator to connect a server.'))));
 }
 
 async function connectModal() {
@@ -2143,53 +2550,78 @@ async function connectModal() {
   let st = await api('/status', { noAuthRedirect: true });
   let tok = await post('/agents/enroll-token');
   let tab = /Win/i.test(navigator.userAgent) ? 'windows' : /Mac/i.test(navigator.userAgent) ? 'macos' : 'linux';
-  const body = h('div');
-  const connected = h('div');
+  const urlArea = h('div');
+  const tabArea = h('div');
+  const connected = h('div', { 'aria-live': 'polite' });
+  const expires = h('p', { class: 'hint' });
+  const techArea = h('div');
   const TABS = [['linux', 'Linux'], ['windows', 'Windows'], ['macos', 'macOS']];
   const STEP1 = {
     linux: 'Open a terminal on the other server.',
     windows: 'On the other server, open PowerShell as Administrator (right-click the Start button → “Terminal (Admin)” or “Windows PowerShell (Admin)”).',
     macos: 'Open Terminal on the other server (Applications → Utilities → Terminal).',
   };
-  const render = () => {
+  const base = uid('tabs');
+  // Tabs follow the WAI-ARIA tabs pattern: one tab stop, arrow keys switch.
+  const renderTabs = (focusTab) => {
     const cmd = (tok.commands && tok.commands[tab]) || tok.command;
-    const urlBox = (() => {
-      if (!st.publicUrlIsLocal) return null;
-      if (!isAdmin()) return h('div', { class: 'banner warn' }, `Other servers can't reach this dashboard at ${st.publicUrl}. Ask an administrator to set the dashboard address in Settings.`);
-      const u = input({ value: /^(localhost|127\.)/.test(location.hostname) ? '' : location.origin, placeholder: 'http://192.168.1.20:8420' });
-      return h('div', { class: 'banner warn' },
-        h('p', null, `Other servers can't reach this dashboard at ${st.publicUrl}. Enter the address they should use:`),
-        h('div', { class: 'inline-field' }, field('Dashboard address', u, 'For example http://192.168.1.20:8420 or https://backup.example.com'),
-          btn('Save', busy(async () => {
-            await put('/settings/server', { publicUrl: u.value.trim() });
-            st = await api('/status', { noAuthRedirect: true });
-            S.status = { ...S.status, publicUrl: st.publicUrl, publicUrlIsLocal: st.publicUrlIsLocal };
-            tok = await post('/agents/enroll-token');
-            toast('Address saved — the command below is updated', 'ok');
-            render();
-          }), 'sm primary')));
-    })();
-    fill(body, 
-      urlBox,
-      h('div', { class: 'tabs', role: 'tablist' }, TABS.map(([k, l]) => h('button', { type: 'button', role: 'tab', class: 'tab' + (k === tab ? ' on' : ''), 'aria-selected': String(k === tab), onclick: () => { tab = k; render(); } }, l))),
-      h('ol', { class: 'plain-steps' },
-        h('li', null, STEP1[tab]),
-        h('li', null, 'Paste this command and press Enter:', h('div', { class: 'copybox' }, h('pre', null, cmd), copyBtn(() => cmd))),
-        h('li', null, 'It appears here within a minute.')),
-      connected,
-      h('p', { class: 'hint' }, `This connection code works once and expires ${tok.expires ? rel(tok.expires) : 'in 1 hour'}.`),
-      tech(h('p', { class: 'small' }, 'Connection code:'), h('div', { class: 'copybox' }, h('pre', null, tok.token), copyBtn(() => tok.token)),
-        h('p', { class: 'small' }, 'If the program is already installed:'), h('div', { class: 'copybox' }, h('pre', null, tok.command), copyBtn(() => tok.command))));
+    const tabs = TABS.map(([k, l]) => h('button', {
+      type: 'button', role: 'tab', id: `${base}-${k}`, class: 'tab' + (k === tab ? ' on' : ''), 'aria-selected': String(k === tab),
+      'aria-controls': `${base}-panel`, tabindex: k === tab ? '0' : '-1', onclick: () => { tab = k; renderTabs(true); },
+    }, l));
+    const list = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'System of the other server' }, tabs);
+    list.addEventListener('keydown', (e) => {
+      const i = TABS.findIndex(([k]) => k === tab);
+      let j = -1;
+      if (e.key === 'ArrowRight') j = (i + 1) % TABS.length;
+      else if (e.key === 'ArrowLeft') j = (i - 1 + TABS.length) % TABS.length;
+      else if (e.key === 'Home') j = 0;
+      else if (e.key === 'End') j = TABS.length - 1;
+      if (j < 0) return;
+      e.preventDefault();
+      tab = TABS[j][0];
+      renderTabs(true);
+    });
+    fill(tabArea, list,
+      h('div', { role: 'tabpanel', id: `${base}-panel`, 'aria-labelledby': `${base}-${tab}` },
+        h('ol', { class: 'plain-steps' },
+          h('li', null, STEP1[tab]),
+          h('li', null, 'Paste this command and press Enter:', h('div', { class: 'copybox' }, h('pre', null, cmd), copyBtn(() => cmd, 'Copy', 'Copy the command'))),
+          h('li', null, 'It appears here within a minute.'))));
+    if (focusTab) { const t = document.getElementById(`${base}-${tab}`); if (t) t.focus(); }
   };
-  render();
+  const renderRest = () => {
+    expires.textContent = `This connection code works once and expires ${tok.expires ? rel(tok.expires) : 'in 1 hour'}.`;
+    fill(techArea, tech(h('p', { class: 'small' }, 'Connection code:'), h('div', { class: 'copybox' }, h('pre', null, tok.token), copyBtn(() => tok.token, 'Copy', 'Copy the connection code')),
+      h('p', { class: 'small' }, 'If the program is already installed:'), h('div', { class: 'copybox' }, h('pre', null, tok.command), copyBtn(() => tok.command, 'Copy', 'Copy the install-free command'))));
+  };
+  const renderUrl = () => {
+    if (!st.publicUrlIsLocal) { clear(urlArea); return; }
+    if (!isAdmin()) { fill(urlArea, h('div', { class: 'banner warn' }, `Other servers can’t reach this dashboard at ${st.publicUrl}. Ask an administrator to set the dashboard address in Settings.`)); return; }
+    const u = input({ name: 'public-url', type: 'url', code: true, value: /^(localhost|127\.)/.test(location.hostname) ? '' : location.origin, placeholder: 'http://192.168.1.20:8420…' });
+    fill(urlArea, h('div', { class: 'banner warn' },
+      h('p', null, `Other servers can’t reach this dashboard at ${st.publicUrl}. Enter the address they should use:`),
+      h('div', { class: 'inline-field' }, field('Dashboard address', u, 'For example http://192.168.1.20:8420 or https://backup.example.com'),
+        btn('Save address', busy(async () => {
+          await put('/settings/server', { publicUrl: u.value.trim() });
+          st = await api('/status', { noAuthRedirect: true });
+          S.status = { ...S.status, publicUrl: st.publicUrl, publicUrlIsLocal: st.publicUrlIsLocal };
+          tok = await post('/agents/enroll-token');
+          toast('Address saved — the command below is updated', 'ok');
+          renderTabs(false); renderRest(); renderUrl();
+        }, 'Saving…'), 'sm primary'))));
+  };
+  renderUrl(); renderTabs(false); renderRest();
+  const body = h('div', null, urlArea, tabArea, connected, expires, techArea);
   let timer = null;
   modal('Connect a server', body, [], { wide: true, onClose: () => { clearInterval(timer); reload(); } });
-  fill(connected, h('div', { class: 'running' }, h('span', { class: 'spinner' }), 'Waiting for the server to connect…'));
+  fill(connected, h('div', { class: 'running' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Waiting for the server to connect…'));
   timer = setInterval(async () => {
     if (!body.isConnected) { clearInterval(timer); return; }
+    if (document.hidden) return;
     try {
       const fresh = ((await api('/agents')) || []).filter((a) => !before.has(a.id));
-      if (fresh.length) fill(connected, h('div', { class: 'banner ok' }, '✓ Connected: ', fresh.map((a) => a.name).join(', ')));
+      if (fresh.length && !connected.dataset.done) { connected.dataset.done = '1'; fill(connected, h('div', { class: 'banner ok' }, glyph(true), 'Connected: ', joinWords(fresh.map((a) => a.name)))); }
     } catch { /* ignore */ }
   }, 3000);
 }
@@ -2214,29 +2646,29 @@ async function pageSourceForm(id) {
   const kinds = sp.kind === 'import' ? [...KINDS, ['import', 'Imported backups']] : KINDS;
 
   const f = {
-    name: input({ value: src.name, required: true, disabled: !!id }),
-    kind: select(kinds, sp.kind),
-    paths: h('textarea', { rows: 3, placeholder: '/var/www\n/etc/nginx' }, (sp.paths || []).join('\n')),
-    excludes: h('textarea', { rows: 2, placeholder: '*.tmp\n/var/www/cache' }, (sp.excludes || []).join('\n')),
-    sqlitePath: input({ value: (sp.paths || [])[0] || '', placeholder: '/var/lib/app/app.db' }),
-    host: input({ value: sp.host || '', placeholder: '127.0.0.1' }),
-    port: input({ type: 'number', min: 0, max: 65535, value: sp.port || '' }),
-    user: input({ value: sp.user || '' }),
-    database: input({ value: sp.database || '' }),
-    password: input({ type: 'password', autocomplete: 'new-password', placeholder: id ? 'unchanged — leave empty to keep' : '' }),
-    uri: input({ type: 'password', autocomplete: 'off', placeholder: sp.uri === '(redacted)' ? 'saved — leave empty to keep' : 'mongodb://user:pass@host:27017/db' }),
-    container: input({ value: sp.container || '', placeholder: 'optional container name' }),
-    wpConfig: input({ value: sp.wpConfig || '', placeholder: '/var/www/site/wp-config.php' }),
+    name: input({ name: 'name', value: src.name, required: true, disabled: !!id, autocomplete: 'off' }),
+    kind: select(kinds, sp.kind, { name: 'kind' }),
+    paths: h('textarea', { name: 'paths', rows: 3, spellcheck: 'false', autocapitalize: 'off', placeholder: '/var/www…' }, (sp.paths || []).join('\n')),
+    excludes: h('textarea', { name: 'excludes', rows: 2, spellcheck: 'false', autocapitalize: 'off', placeholder: '*.tmp…' }, (sp.excludes || []).join('\n')),
+    sqlitePath: input({ name: 'sqlite-path', code: true, value: (sp.paths || [])[0] || '', placeholder: '/var/lib/app/app.db…' }),
+    host: input({ name: 'db-host', code: true, value: sp.host || '', placeholder: '127.0.0.1…' }),
+    port: input({ name: 'db-port', type: 'number', inputmode: 'numeric', min: 0, max: 65535, value: sp.port || '' }),
+    user: input({ name: 'db-user', code: true, autocomplete: 'off', value: sp.user || '' }),
+    database: input({ name: 'db-name', code: true, value: sp.database || '' }),
+    password: input({ name: 'db-password', type: 'password', autocomplete: 'off' }),
+    uri: input({ name: 'db-uri', type: 'password', autocomplete: 'off', placeholder: sp.uri === '(redacted)' ? '' : 'mongodb://user:pass@host:27017/db…' }),
+    container: input({ name: 'container', code: true, value: sp.container || '' }),
+    wpConfig: input({ name: 'wp-config', code: true, value: sp.wpConfig || '', placeholder: '/var/www/site/wp-config.php…' }),
     globals: checkbox('Also back up users and roles (pg_dumpall --globals-only)', sp.globals),
-    command: input({ value: sp.command || '', placeholder: 'e.g. redis-cli --rdb -' }),
-    preHook: input({ value: sp.preHook || '' }),
-    postHook: input({ value: sp.postHook || '' }),
+    command: input({ name: 'command', code: true, value: sp.command || '', placeholder: 'redis-cli --rdb -…' }),
+    preHook: input({ name: 'pre-hook', code: true, value: sp.preHook || '' }),
+    postHook: input({ name: 'post-hook', code: true, value: sp.postHook || '' }),
     agent: select([['', '— choose a server —'], ...liveAgents.map((a) => [a.id, `${agentTitle(a)} (${a.hostname || osName(a.os)})`])], src.agentId || ''),
     verifier: select([['', 'The same server'], ...liveAgents.map((a) => [a.id, `${agentTitle(a)} (${a.hostname || osName(a.os)})`])], src.verifierId || ''),
     repo: select([['', '— choose storage —'], ...(repos || []).map((r) => [r.id, `${r.name} (${repoKind(r.backend).label})`])], src.repoId || ''),
-    backupCron: input({ value: src.backupCron, required: true }),
-    drillCron: input({ value: src.drillCron, required: true }),
-    maxAge: input({ type: 'number', min: 1, value: src.proofMaxAgeHours || 192 }),
+    backupCron: input({ name: 'backup-schedule', code: true, value: src.backupCron, required: true }),
+    drillCron: input({ name: 'drill-schedule', code: true, value: src.drillCron, required: true }),
+    maxAge: input({ name: 'max-age', type: 'number', inputmode: 'numeric', min: 1, value: src.proofMaxAgeHours || 192 }),
     enabled: checkbox('Active (backups and restore tests run on schedule)', src.enabled !== false),
     keepLast: input({ type: 'number', min: 0, value: ret.keepLast || '' }),
     keepDaily: input({ type: 'number', min: 0, value: ret.keepDaily || '' }),
@@ -2244,11 +2676,11 @@ async function pageSourceForm(id) {
     keepMonthly: input({ type: 'number', min: 0, value: ret.keepMonthly || '' }),
     keepYearly: input({ type: 'number', min: 0, value: ret.keepYearly || '' }),
     keepLastVerified: input({ type: 'number', min: 0, value: ret.keepLastVerified || '' }),
-    expectPaths: h('textarea', { rows: 2 }, (dr.expectPaths || []).join('\n')),
-    minFiles: input({ type: 'number', min: 0, value: dr.minFiles || '' }),
-    image: input({ value: dr.image || '', placeholder: 'default: chosen automatically' }),
-    drillCommand: input({ value: dr.command || '', placeholder: 'runs with RESTORE_DIR set; exit 0 = pass' }),
-    tolerance: input({ type: 'number', min: 0, max: 1, step: '0.01', value: dr.rowCountTolerance || '', placeholder: '0.2' }),
+    expectPaths: h('textarea', { name: 'expect-paths', rows: 2, spellcheck: 'false', autocapitalize: 'off' }, (dr.expectPaths || []).join('\n')),
+    minFiles: input({ name: 'min-files', type: 'number', inputmode: 'numeric', min: 0, value: dr.minFiles || '' }),
+    image: input({ name: 'image', code: true, value: dr.image || '' }),
+    drillCommand: input({ name: 'drill-command', code: true, value: dr.command || '' }),
+    tolerance: input({ name: 'tolerance', type: 'number', inputmode: 'decimal', min: 0, max: 1, step: '0.01', value: dr.rowCountTolerance || '', placeholder: '0.2…' }),
     testDumps: checkbox('Test database dumps found in the backup (needs Docker)', !dr.skipDumps, 'PostgreSQL dumps inside the backed-up files are loaded into a test database and checked.'),
   };
 
@@ -2256,28 +2688,32 @@ async function pageSourceForm(id) {
   const cronHint = (el) => { const s = h('span', { class: 'hint' }); const u = () => { s.textContent = 'Means: ' + cronWords(el.value); }; el.addEventListener('input', u); u(); return s; };
 
   const assertBox = h('div');
+  let assertN = 0;
   const addAssert = (a = { name: '', sql: '' }) => {
-    const n = input({ value: a.name, placeholder: 'name', class: 'a-name' });
-    const q = input({ value: a.sql, placeholder: 'SELECT count(*) > 0 FROM users', class: 'a-sql' });
-    const row = h('div', { class: 'assert-row' }, n, q, btn('Remove', () => row.remove(), 'sm danger'));
+    const i = ++assertN;
+    const n = input({ name: 'check-name', value: a.name, placeholder: 'Users exist…', class: 'a-name', 'aria-label': `Check ${i}: name` });
+    const q = input({ name: 'check-sql', code: true, value: a.sql, placeholder: 'SELECT count(*) > 0 FROM users…', class: 'a-sql', 'aria-label': `Check ${i}: SQL query` });
+    const row = h('div', { class: 'assert-row' }, n, q, btn('Remove', () => { row.remove(); S.dirty = true; addBtn.focus(); }, 'sm danger', { 'aria-label': `Remove check ${i}` }));
     assertBox.append(row);
+    return n;
   };
   (dr.assertions || []).forEach(addAssert);
 
   const isDb = (k) => ['postgres', 'mysql', 'mongodb'].includes(k);
   const kindBox = h('div');
+  const addBtn = btn('+ Add check', () => addAssert().focus(), 'sm');
   const assertFs = h('div', null, h('h3', null, 'Your own database checks'),
     h('p', { class: 'hint' }, 'Each SQL query must return a single true/non-zero value on the restored database.'),
-    assertBox, btn('+ Add check', () => addAssert(), 'sm'));
+    assertBox, addBtn);
   const renderKind = () => {
     const k = f.kind.value;
     const dbRow = h('div', { class: 'row' }, field('Server address', f.host), field('Port', f.port), field('Username', f.user), field('Database name', f.database, k === 'mongodb' ? 'Optional; empty backs up all databases.' : null));
     add(clear(kindBox), [
       k === 'files' ? [field('Folders', f.paths, 'One full folder path per line.'), field('Skip these files', f.excludes, 'One pattern per line, e.g. *.tmp')] : null,
-      k === 'postgres' || k === 'mysql' ? [dbRow, h('div', { class: 'row' }, field('Password', f.password), field('Docker container', f.container, 'Run the backup tools inside this container (no password needed).'))] : null,
+      k === 'postgres' || k === 'mysql' ? [dbRow, h('div', { class: 'row' }, field('Password', f.password, id ? 'Leave empty to keep the saved password.' : null), field('Docker container (optional)', f.container, 'Run the backup tools inside this container (no password needed).'))] : null,
       k === 'mysql' ? field('WordPress settings file', f.wpConfig, 'Optional: read the login from this wp-config.php automatically.') : null,
       k === 'postgres' ? f.globals.el : null,
-      k === 'mongodb' ? [field('Connection address (URI)', f.uri, 'Either an address like this, or fill in the fields below.'), dbRow, h('div', { class: 'row' }, field('Password', f.password), field('Docker container', f.container))] : null,
+      k === 'mongodb' ? [field('Connection address (URI)', f.uri, sp.uri === '(redacted)' ? 'Saved. Leave empty to keep it, or fill in the fields below instead.' : 'Either an address like this, or fill in the fields below.'), dbRow, h('div', { class: 'row' }, field('Password', f.password, id ? 'Leave empty to keep the saved password.' : null), field('Docker container (optional)', f.container))] : null,
       k === 'sqlite' ? field('Database file', f.sqlitePath, 'Full path of the SQLite database file.') : null,
       k === 'command' ? field('Command', f.command, 'Whatever it prints is saved as the backup.') : null,
       k === 'import' ? h('div', { class: 'banner info' }, `Imported from ${sp.import ? sp.import.format : 'another tool'} at ${sp.import ? repoUrl(sp.import.storage) : '—'}. To import from a different place, use Import.`) : null,
@@ -2286,14 +2722,16 @@ async function pageSourceForm(id) {
   };
   f.kind.addEventListener('change', renderKind);
 
-  const err = h('div', { class: 'form-error' });
+  const err = errBox();
   const form = h('form', {
-    onsubmit: async (e) => {
+    onsubmit: busy(async (e) => {
       e.preventDefault();
       err.textContent = '';
+      clearErrors(form);
       const k = f.kind.value;
-      if (!f.agent.value) { err.textContent = 'Choose a server.'; return; }
-      if (!f.repo.value) { err.textContent = 'Choose the backup storage.'; return; }
+      if (!id && !f.name.value.trim()) return fieldError(f.name, 'Give it a name.');
+      if (!f.agent.value) return fieldError(f.agent, 'Choose a server.');
+      if (!f.repo.value) return fieldError(f.repo, 'Choose the backup storage.');
       const spec = { ...sp, name: f.name.value.trim(), kind: k, preHook: f.preHook.value.trim(), postHook: f.postHook.value.trim() };
       for (const key of ['paths', 'excludes', 'host', 'port', 'user', 'database', 'container', 'globals', 'command', 'password', 'uri', 'wpConfig']) delete spec[key];
       if (k !== 'import') delete spec.import;
@@ -2337,15 +2775,14 @@ async function pageSourceForm(id) {
         },
         secret,
       };
-      const b = form.querySelector('button[type=submit]'); b.disabled = true;
       try {
-        if (id) { await put(`/sources/${id}`, body); toast('Saved', 'ok'); location.hash = `#/sources/${id}`; }
-        else { const r = await post('/sources', body); toast('Created', 'ok'); location.hash = `#/sources/${r.id}`; }
-      } catch (ex) { if (ex.status !== 401) err.textContent = ex.message; b.disabled = false; }
-    },
+        if (id) { await put(`/sources/${id}`, body); S.dirty = false; toast('Changes saved', 'ok'); location.hash = `#/sources/${id}`; }
+        else { const r = await post('/sources', body); S.dirty = false; toast('Created', 'ok'); location.hash = `#/sources/${r.id}`; }
+      } catch (ex) { if (ex.status !== 401) showErr(err, ex.message); }
+    }),
   },
-  h('fieldset', null, h('legend', null, 'What\'s protected'),
-    h('div', { class: 'row' }, field('Name', f.name, id ? 'The name can\'t be changed (it is part of the stored proofs).' : 'Unique, e.g. “Billing database”.'), field('Type', f.kind)),
+  h('fieldset', null, h('legend', null, 'What’s protected'),
+    h('div', { class: 'row' }, field('Name', f.name, id ? 'The name can’t be changed (it is part of the stored proofs).' : 'Unique, e.g. “Billing database”.'), field('Type', f.kind)),
     kindBox,
     h('div', { class: 'row' }, field('Run before the backup', f.preHook, 'Optional command, e.g. to pause an app.'), field('Run after the backup', f.postHook, 'Runs even if the backup failed.'))),
   h('fieldset', null, h('legend', null, 'Where'),
@@ -2372,11 +2809,12 @@ async function pageSourceForm(id) {
   err,
   h('div', { class: 'form-actions' },
     h('a', { class: 'btn', href: id ? `#/sources/${id}` : '#/protect' }, 'Cancel'),
-    h('button', { type: 'submit', class: 'btn primary' }, id ? 'Save changes' : 'Create')));
+    h('button', { type: 'submit', class: 'btn primary' }, id ? 'Save changes' : 'Create item')));
   renderKind();
+  guardDirty(form);
   return h('div', null,
-    h('div', { class: 'small' }, h('a', { href: id ? `#/sources/${id}` : '#/protect' }, '← Back')),
-    pageHead(id ? `Edit ${src.name}` : 'Protect something (advanced)', 'All settings. For most things the simple “Protect something” wizard is easier.'),
+    backLink(id ? `#/sources/${id}` : '#/protect', id ? 'Back to the item' : 'Back to Protect something'),
+    pageHead(id ? `Edit “${src.name}”` : 'Protect something (advanced)', 'All settings. For most things the simple “Protect something” wizard is easier.'),
     h('section', { class: 'card' }, form));
 }
 
@@ -2384,31 +2822,32 @@ async function pageSourceForm(id) {
 
 function isoDay(d) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
 
-async function pageProofs() {
+async function pageProofs(m, params) {
   const LIMIT = 100;
-  const [proofs, ledger] = await Promise.all([api('/proofs?limit=100'), api(`/ledger?${qs({ from: S.ledgerFrom, limit: LIMIT })}`)]);
+  const from = Math.max(1, Number(params && params.get('from')) || 1);
+  const [proofs, ledger] = await Promise.all([api('/proofs?limit=100'), api(`/ledger?${qs({ from, limit: LIMIT })}`)]);
   const PH = ['When', 'Item', 'What', 'Result', 'Time to restore', ''];
 
-  const verifyOut = h('div');
+  const verifyOut = h('div', { 'aria-live': 'polite' });
   const verify = busy(async () => {
     const r = await api('/ledger/verify');
     fill(verifyOut, h('div', { class: 'banner ' + (r.ok ? 'ok' : 'bad') },
-      h('strong', null, r.ok ? '✓ Nothing has been changed or removed. ' : '✗ The proof history has been tampered with or damaged. '),
+      h('strong', null, glyph(r.ok), r.ok ? 'Nothing has been changed or removed. ' : 'The proof history has been tampered with or damaged. '),
       `${plural(r.entries, 'record')} checked.`, r.error ? h('div', null, r.error) : null,
       r.head ? tech(h('code', { class: 'break' }, r.head)) : null));
-  });
+  }, 'Checking…');
 
   const LH = ['#', 'Time', 'Kind', 'Subject', 'Envelope digest', 'Hash'];
   const rows = ledger || [];
-  const pager = h('div', { class: 'pager' },
-    h('span', { class: 'muted small' }, rows.length ? `#${rows[0].seq} – #${rows[rows.length - 1].seq}` : ''),
-    btn('← Earlier', () => { S.ledgerFrom = Math.max(1, S.ledgerFrom - LIMIT); reload(); }, 'sm'),
-    btn('Later →', () => { S.ledgerFrom = rows[rows.length - 1].seq + 1; reload(); }, 'sm'));
-  pager.children[1].disabled = S.ledgerFrom <= 1;
-  pager.children[2].disabled = rows.length < LIMIT;
+  // The ledger page is part of the address (#/proofs?from=101), so Back works.
+  const earlier = from > 1 ? h('a', { class: 'btn sm', href: '#/proofs?from=' + Math.max(1, from - LIMIT) }, h('span', { 'aria-hidden': 'true' }, '← '), 'Earlier') : btn([h('span', { 'aria-hidden': 'true' }, '← '), 'Earlier'], null, 'sm', { disabled: true });
+  const later = rows.length >= LIMIT ? h('a', { class: 'btn sm', href: '#/proofs?from=' + (rows[rows.length - 1].seq + 1) }, 'Later', h('span', { 'aria-hidden': 'true' }, ' →')) : btn(['Later', h('span', { 'aria-hidden': 'true' }, ' →')], null, 'sm', { disabled: true });
+  const pager = h('nav', { class: 'pager', 'aria-label': 'Ledger pages' },
+    h('span', { class: 'muted small tnum' }, rows.length ? `#${nf(rows[0].seq)} – #${nf(rows[rows.length - 1].seq)}` : ''),
+    earlier, later);
 
-  const to = new Date(), from = new Date(Date.now() - 90 * 86400000);
-  const fFrom = input({ type: 'date', value: isoDay(from) }), fTo = input({ type: 'date', value: isoDay(to) });
+  const to = new Date(), from90 = new Date(Date.now() - 90 * 86400000);
+  const fFrom = input({ name: 'from', type: 'date', value: isoDay(from90) }), fTo = input({ name: 'to', type: 'date', value: isoDay(to) });
   const packLink = h('a', { class: 'btn primary', download: 'backupproof-evidence.json' }, 'Download (for checking by software)');
   const reportLink = h('a', { class: 'btn', target: '_blank', rel: 'noopener' }, 'Open printable report');
   const upd = () => {
@@ -2420,23 +2859,23 @@ async function pageProofs() {
   fFrom.addEventListener('input', upd); fTo.addEventListener('input', upd); upd();
 
   return h('div', null,
-    pageHead('Proof history', 'Every backup and restore test leaves a proof: a tamper-proof record that every backup and restore test really happened.',
-      h('a', { class: 'btn', href: '#/keys' }, 'Public keys')),
+    pageHead('Proof history', null, h('a', { class: 'btn', href: '#/keys' }, 'Public keys')),
     h('section', { class: 'card' }, cardHead('Proof report for auditors'),
       h('p', { class: 'muted small' }, 'Everything that happened in a period — for auditors, insurers or compliance reviews.'),
       h('div', { class: 'row' }, field('From', fFrom), field('To', fTo)),
       h('div', { class: 'btns' }, reportLink, packLink)),
     h('section', { class: 'card' }, cardHead('Recent proofs'),
       (proofs || []).length ? table(PH, proofs.map((p) => proofRow(p, PH, true))) : empty('No proofs yet. They appear after the first backup.')),
-    h('section', { class: 'card' }, cardHead('Is the history intact?', btn('Check now', verify, 'primary sm')),
+    h('section', { class: 'card' }, cardHead('Is the history intact?', btn('Check the history', verify, 'primary sm')),
       h('p', { class: 'muted small' }, 'Each record is chained to the one before it, so any change or deletion is detected.'),
       verifyOut,
-      tech(rows.length ? table(LH, rows.map((e) => tr([
+      ledgerDetails(rows.length ? table(LH, rows.map((e) => tr([
         '#' + e.seq, timeEl(e.time), h('span', { class: 'badge' }, e.kind),
         h('div', { class: 'break' }, e.subject, e.detail ? h('div', { class: 'sub' }, e.detail) : null),
         h('code', { title: e.envelopeDigest || '' }, short(e.envelopeDigest, 12)),
         h('code', { title: `hash ${e.hash}\nprev ${e.prev}` }, short(e.hash, 12)),
       ], LH))) : empty('No records in this range.'), pager)));
+  function ledgerDetails(...kids) { const d = tech(...kids); if (params && params.has('from')) d.open = true; return d; }
 }
 
 async function pageKeys() {
@@ -2444,10 +2883,10 @@ async function pageKeys() {
   const all = [...(k.server ? [{ ...k.server, name: k.server.name || 'server', role: 'this dashboard' }] : []), ...(k.agents || []).map((a) => ({ ...a, role: 'server' }))];
   const H = ['Name', 'Signs as', 'Key ID', 'Public key (Ed25519)'];
   return h('div', null,
-    h('div', { class: 'small' }, h('a', { href: '#/proofs' }, '← Proof history')),
+    backLink('#/proofs', 'Proof history'),
     pageHead('Public keys', 'Auditors use these to check proofs on their own, without trusting this server. The list is also public at /api/public/keys.'),
     h('section', { class: 'card' }, table(H, all.map((x) => tr([x.name, x.role, h('code', { class: 'break' }, x.keyid || '—'), h('code', { class: 'break small' }, String(x.public || ''))], H)))),
-    k.bpkeys ? h('section', { class: 'card' }, cardHead('Keys file', copyBtn(() => k.bpkeys)), h('pre', null, k.bpkeys)) : null);
+    k.bpkeys ? h('section', { class: 'card' }, cardHead('Keys file', copyBtn(() => k.bpkeys, 'Copy', 'Copy the keys file')), h('pre', null, k.bpkeys)) : null);
 }
 
 // ---------------------------------------------------------------- alerts
@@ -2458,13 +2897,13 @@ async function pageAlerts() {
   const H = ['When', 'What', 'Message', 'About', 'Status'];
   const row = (a) => tr([
     timeEl(a.created), ALERT_WORDS[a.kind] || String(a.kind || '').replace(/-/g, ' '), h('span', { class: 'break' }, a.message),
-    a.sourceId ? h('a', { href: `#/sources/${a.sourceId}` }, 'Open item') : a.agentId ? h('a', { href: '#/agents' }, 'Servers') : '—',
+    a.sourceId ? h('a', { href: `#/sources/${a.sourceId}`, 'aria-label': 'Open the item for: ' + (a.message || 'this alert') }, 'Open item') : a.agentId ? h('a', { href: '#/agents' }, 'Servers') : '—',
     a.resolved ? h('span', null, 'Fixed ', timeEl(a.resolved)) : h('span', { class: 'pill bad' }, 'Open'),
   ], H);
   const history = (all || []).filter((a) => a.resolved);
   return h('div', null,
     pageHead('Alerts', 'Alerts go away by themselves once the problem is fixed.'),
-    h('section', { class: 'card' }, cardHead(`Open (${(open || []).length})`), (open || []).length ? table(H, open.map(row)) : empty('All good — nothing needs your attention.')),
+    h('section', { class: 'card' }, cardHead(`Open (${nf((open || []).length)})`), (open || []).length ? table(H, open.map(row)) : empty('All good — nothing needs your attention.')),
     h('section', { class: 'card' }, cardHead('Earlier'), history.length ? table(H, history.map(row)) : empty('No earlier alerts.')));
 }
 
@@ -2477,102 +2916,135 @@ async function pageSettings() {
     parts.push(serverCard(st || {}), notifyCard(notify || {}), usersCard(users || []), tsaCard(tsa || { urls: [] }));
   }
   parts.push(passwordCard());
-  return h('div', null, parts);
+  return settingsGuard(h('div', null, parts));
 }
 
 function serverCard(st) {
-  const u = input({ type: 'url', value: st.publicUrl || '', placeholder: 'https://backup.example.com' });
-  return card('Dashboard address',
-    st.publicUrlIsLocal ? h('div', { class: 'banner warn' }, 'Other servers can\'t reach “localhost”. Set the address they should use, or connecting servers won\'t work.') : null,
-    field('Address other servers use to reach this dashboard', u, 'For example https://backup.example.com or http://192.168.1.20:8420. Used in the “Connect a server” commands.'),
-    h('div', { class: 'form-actions' }, btn('Save', busy(async () => {
-      const r = await put('/settings/server', { publicUrl: u.value.trim() });
+  const u = input({ name: 'public-url', type: 'url', code: true, value: st.publicUrl || '', placeholder: 'https://backup.example.com…' });
+  const form = h('form', {
+    novalidate: true,
+    onsubmit: busy(async (e) => {
+      e.preventDefault();
+      clearErrors(form);
+      const v = u.value.trim();
+      if (v && !/^https?:\/\/[^\s/]+/i.test(v)) return fieldError(u, 'Enter a full address that starts with http:// or https://, for example https://backup.example.com.');
+      const r = await put('/settings/server', { publicUrl: v });
       if (r && r.publicUrl) u.value = r.publicUrl;
+      S.dirty = false;
       toast('Address saved', 'ok');
-    }), 'primary')));
+    }),
+  },
+  st.publicUrlIsLocal ? h('div', { class: 'banner warn' }, 'Other servers can’t reach “localhost”. Set the address they should use, or connecting servers won’t work.') : null,
+  field('Address other servers use to reach this dashboard', u, 'For example https://backup.example.com or http://192.168.1.20:8420. Used in the “Connect a server” commands.'),
+  h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Save address')));
+  return card('Dashboard address', form);
 }
 
 function notifyCard(n) {
   const f = {
-    webhookUrl: input({ type: 'url', value: n.webhookUrl || '', placeholder: 'https://hooks.slack.com/…' }),
-    smtpHost: input({ value: n.smtpHost || '' }), smtpPort: input({ type: 'number', value: n.smtpPort || 587 }),
-    smtpUser: input({ value: n.smtpUser || '', autocomplete: 'off' }),
-    smtpPass: input({ type: 'password', autocomplete: 'new-password', placeholder: 'unchanged — leave empty to keep' }),
-    from: input({ value: n.from || '', placeholder: 'backupproof@example.com' }), to: input({ value: n.to || '', placeholder: 'me@example.com' }),
-    heartbeatUrl: input({ type: 'url', value: n.heartbeatUrl || '', placeholder: 'https://hc-ping.com/…' }),
+    webhookUrl: input({ name: 'webhook', type: 'url', code: true, value: n.webhookUrl || '', placeholder: 'https://hooks.slack.com/…' }),
+    smtpHost: input({ name: 'smtp-host', code: true, value: n.smtpHost || '', placeholder: 'smtp.gmail.com…' }),
+    smtpPort: input({ name: 'smtp-port', type: 'number', inputmode: 'numeric', value: n.smtpPort || 587 }),
+    smtpUser: input({ name: 'smtp-user', code: true, value: n.smtpUser || '', autocomplete: 'off' }),
+    smtpPass: input({ name: 'smtp-password', type: 'password', autocomplete: 'off' }),
+    from: input({ name: 'from', type: 'email', code: true, value: n.from || '', placeholder: 'backupproof@example.com…' }),
+    to: input({ name: 'to', type: 'email', multiple: true, code: true, value: n.to || '', placeholder: 'me@example.com…' }),
+    heartbeatUrl: input({ name: 'heartbeat', type: 'url', code: true, value: n.heartbeatUrl || '', placeholder: 'https://hc-ping.com/…' }),
   };
   const form = h('form', {
+    novalidate: true,
     onsubmit: busy(async (e) => {
       e.preventDefault();
+      clearErrors(form);
+      for (const [el, what] of [[f.to, 'Enter valid email addresses, separated by commas, for example me@example.com.'], [f.from, 'Enter a valid email address, for example backupproof@example.com.'],
+        [f.webhookUrl, 'Enter the full webhook address, starting with https://.'], [f.heartbeatUrl, 'Enter the full heartbeat address, starting with https://.']]) {
+        if (!el.checkValidity()) { if (el === f.heartbeatUrl) el.closest('details').open = true; return fieldError(el, what); }
+      }
       await put('/settings/notify', {
         webhookUrl: f.webhookUrl.value.trim(), smtpHost: f.smtpHost.value.trim(), smtpPort: num(f.smtpPort.value), smtpUser: f.smtpUser.value.trim(),
         smtpPass: f.smtpPass.value, from: f.from.value.trim(), to: f.to.value.trim(), heartbeatUrl: f.heartbeatUrl.value.trim(),
       });
       f.smtpPass.value = '';
-      toast('Saved', 'ok');
+      S.dirty = false;
+      toast('Notification settings saved', 'ok');
     }),
   },
   h('p', { class: 'muted small' }, 'Get told when a backup or restore test fails.'),
   h('h3', null, 'By email'),
   h('div', { class: 'row' }, field('To', f.to, 'Your email address (several: separate with commas).'), field('From', f.from)),
-  h('div', { class: 'row' }, field('Mail server', f.smtpHost, 'From your email provider, e.g. smtp.gmail.com'), field('Port', f.smtpPort, 'Usually 587.'), field('Username', f.smtpUser), field('Password', f.smtpPass)),
+  h('div', { class: 'row' }, field('Mail server', f.smtpHost, 'From your email provider, e.g. smtp.gmail.com'), field('Port', f.smtpPort, 'Usually 587.'), field('Username', f.smtpUser), field('Password', f.smtpPass, 'Leave empty to keep the saved password.')),
   h('h3', null, 'By chat'),
   field('Webhook address', f.webhookUrl, 'Slack, Microsoft Teams, ntfy, Discord… paste the incoming-webhook URL.'),
   details('Advanced', field('Heartbeat address', f.heartbeatUrl, 'Pinged regularly while BackupProof is healthy, so a service like healthchecks.io can tell you if BackupProof itself stops.')),
   h('div', { class: 'form-actions' },
-    btn('Send a test', busy(async () => { const r = await post('/settings/notify/test'); toast(r && r.ok === false ? 'The test failed' : 'Test sent — check your inbox or chat', r && r.ok === false ? 'bad' : 'ok'); })),
-    h('button', { type: 'submit', class: 'btn primary' }, 'Save')),
+    btn('Send a test', busy(async () => {
+      const r = await post('/settings/notify/test');
+      if (r && r.ok === false) toast('The test message couldn’t be sent' + (r.error ? ': ' + r.error : '') + '. Check the mail server or webhook details, save, and send another test.', 'bad');
+      else toast('Test sent — check your inbox or chat', 'ok');
+    }, 'Sending…')),
+    h('button', { type: 'submit', class: 'btn primary' }, 'Save notifications')),
   h('p', { class: 'hint' }, 'Save before sending a test.'));
   return card('Alerts by email or chat', form);
 }
 
 function tsaCard(t) {
-  const ta = h('textarea', { rows: 3, placeholder: 'https://freetsa.org/tsr' }, (t.urls || []).join('\n'));
+  const ta = h('textarea', { name: 'tsa-urls', rows: 3, inputmode: 'url', spellcheck: 'false', autocapitalize: 'off', placeholder: 'https://freetsa.org/tsr…' }, (t.urls || []).join('\n'));
   return card('Independent timestamps',
     h('p', { class: 'muted small' }, 'An outside timestamp service confirms when each proof was made, so nobody can back-date it — not even this server. One address per line; leave empty to turn off.'),
     details('Show timestamp services', field('Timestamp service addresses (RFC 3161)', ta),
-      h('div', { class: 'form-actions' }, btn('Save', busy(async () => { await put('/settings/tsa', { urls: lines(ta.value) }); toast('Saved', 'ok'); }), 'primary'))));
+      h('div', { class: 'form-actions' }, btn('Save timestamp services', busy(async () => { await put('/settings/tsa', { urls: lines(ta.value) }); S.dirty = false; toast('Timestamp services saved', 'ok'); }, 'Saving…'), 'primary'))));
 }
 
 function usersCard(users) {
   const H = ['Username', 'Can', 'Added', ''];
   const ROLE_WORDS = { admin: 'everything (administrator)', operator: 'set up and run backups', auditor: 'only view and download proofs' };
-  const u = input({ autocomplete: 'off' });
-  const p = input({ type: 'password', autocomplete: 'new-password', minlength: 10 });
-  const r = select(Object.entries(ROLE_WORDS).reverse().map(([k, v]) => [k, v[0].toUpperCase() + v.slice(1)]), 'operator');
+  const u = input({ name: 'new-username', code: true, autocomplete: 'off' });
+  const p = input({ name: 'new-user-password', type: 'password', autocomplete: 'off', minlength: 10 });
+  const r = select(Object.entries(ROLE_WORDS).reverse().map(([k, v]) => [k, v[0].toUpperCase() + v.slice(1)]), 'operator', { name: 'role' });
   const form = h('form', {
+    novalidate: true,
     onsubmit: busy(async (e) => {
       e.preventDefault();
-      if (p.value.length < 10) { toast('The password must be at least 10 characters.', 'bad'); return; }
+      clearErrors(form);
+      if (!u.value.trim()) return fieldError(u, 'Enter a username.');
+      if (p.value.length < 10) return fieldError(p, 'The password must be at least 10 characters.');
       await post('/users', { username: u.value.trim(), password: p.value, role: r.value });
+      S.dirty = false;
       toast('Person added', 'ok'); reload();
-    }),
+    }, 'Adding…'),
   }, h('h3', null, 'Add a person'), h('div', { class: 'row' }, field('Username', u), field('Password', p, 'At least 10 characters.'), field('They can', r)),
-  h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Add')));
+  h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Add person')));
   return card('People who can sign in',
-    table(H, users.map((x) => tr([x.username, ROLE_WORDS[x.role] || x.role, timeEl(x.created),
+    table(H, users.map((x) => tr([h('span', { class: 'break' }, x.username), ROLE_WORDS[x.role] || x.role, timeEl(x.created),
       x.id === S.user.id ? h('span', { class: 'muted small' }, 'you') : btn('Remove', busy(async () => {
-        if (!(await confirmDlg(`Remove "${x.username}"? They will no longer be able to sign in.`, 'Remove'))) return;
+        if (!(await confirmDlg(`Remove “${x.username}”? They will no longer be able to sign in.`, 'Remove'))) return;
         await del(`/users/${x.id}`); toast('Removed', 'ok'); reload();
-      }), 'sm danger')], H))),
+      }), 'sm danger', { 'aria-label': 'Remove ' + x.username })], H))),
     form);
 }
 
 function passwordCard() {
-  const p1 = input({ type: 'password', autocomplete: 'new-password', minlength: 10 });
-  const p2 = input({ type: 'password', autocomplete: 'new-password' });
+  const p1 = input({ name: 'new-password', type: 'password', autocomplete: 'new-password', minlength: 10 });
+  const p2 = input({ name: 'new-password-2', type: 'password', autocomplete: 'new-password' });
   const form = h('form', {
+    novalidate: true,
     onsubmit: busy(async (e) => {
       e.preventDefault();
-      if (p1.value.length < 10) { toast('The password must be at least 10 characters.', 'bad'); return; }
-      if (p1.value !== p2.value) { toast('The two passwords are different.', 'bad'); return; }
+      clearErrors(form);
+      if (p1.value.length < 10) return fieldError(p1, 'The password must be at least 10 characters.');
+      if (p1.value !== p2.value) return fieldError(p2, 'The two passwords are different. Type the same password twice.');
       await post('/users/password', { password: p1.value });
       p1.value = p2.value = '';
+      S.dirty = false;
       toast('Password changed', 'ok');
     }),
-  }, h('div', { class: 'row' }, field('New password', p1, 'At least 10 characters.'), field('Type it again', p2)),
+  }, h('input', { type: 'text', name: 'username', autocomplete: 'username', value: S.user.username, hidden: true, readonly: true }), h('div', { class: 'row' }, field('New password', p1, 'At least 10 characters.'), field('Type it again', p2)),
   h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Change password')));
   return card(`Your sign-in password (${S.user.username})`, form);
+}
+
+function settingsGuard(node) {
+  return guardDirty(node);
 }
 
 // ------------------------------------------------------------------ boot
@@ -2581,7 +3053,11 @@ async function boot() {
   try {
     S.status = await api('/status', { noAuthRedirect: true });
   } catch (err) {
-    fill(document.getElementById('app'), h('div', { class: 'auth' }, h('div', { class: 'banner bad' }, 'Can\'t reach the BackupProof server: ', err.message)));
+    const app = document.getElementById('app');
+    app.className = '';
+    fill(app, h('main', { class: 'auth', id: 'main', tabindex: '-1' }, brand(), h('h1', { class: 'auth-title' }, 'Can’t reach BackupProof'),
+      h('div', { class: 'banner bad', role: 'alert' }, h('p', null, err.message), btn('Try again', () => boot(), 'sm primary'))));
+    document.title = 'Can’t connect · BackupProof';
     return;
   }
   S.csrf = S.status.csrf || '';
@@ -2590,5 +3066,15 @@ async function boot() {
   else renderShell();
 }
 
-window.addEventListener('hashchange', () => route());
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user) refreshAlertCount(); });
+
+const skip = document.querySelector('.skip-link');
+if (skip) {
+  skip.addEventListener('click', (e) => {
+    e.preventDefault();
+    const m = document.getElementById('main');
+    if (m) { m.focus({ preventScroll: true }); m.scrollIntoView(); }
+  });
+}
+
 boot();

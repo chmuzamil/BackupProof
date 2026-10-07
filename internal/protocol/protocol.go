@@ -46,7 +46,13 @@ type Lease struct {
 	// SampleSeed is the current ledger head: an unpredictable, pre-committed
 	// seed for read-data sampling so the sample cannot be cherry-picked.
 	SampleSeed string `json:"sampleSeed,omitempty"`
-	LeaseSecs  int    `json:"leaseSecs"`
+	// For drills: the snapshot to restore-test and its content root, taken from
+	// the backup attestation the server verified against the source's own
+	// agent key. Agents never pick "latest" themselves, so a snapshot planted
+	// in a shared repository by another agent is never tested or trusted.
+	SnapshotID   string `json:"snapshotId,omitempty"`
+	ExpectedRoot string `json:"expectedRoot,omitempty"`
+	LeaseSecs    int    `json:"leaseSecs"`
 }
 
 type LogRequest struct {

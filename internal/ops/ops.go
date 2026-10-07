@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/chmuzamil/backupproof/internal/drill"
@@ -42,6 +43,9 @@ type Env struct {
 	Log  engine.Logger
 	// Workers for parallel uploads.
 	Workers int
+	// DenyPaths are never backed up, imported or used as storage (the
+	// built-in agent denies the server's own data directory).
+	DenyPaths []string
 }
 
 // Record is one stored attestation (also written to proofs/ in the repository).
@@ -119,8 +123,11 @@ func Backup(ctx context.Context, e *Env, spec source.Spec, tags []string) (snaps
 	if err := spec.Validate(); err != nil {
 		return snapshot.WithID{}, nil, err
 	}
+	if err := e.checkDenied(spec); err != nil {
+		return snapshot.WithID{}, nil, err
+	}
 	parent := FindParent(ctx, e.Repo, spec.Name)
-	b, err := engine.NewBuilder(ctx, e.Repo, engine.Options{Parent: parent, Excludes: spec.Excludes, Log: e.Log, Workers: e.Workers})
+	b, err := engine.NewBuilder(ctx, e.Repo, engine.Options{Parent: parent, Excludes: spec.Excludes, Log: e.Log, Workers: e.Workers, DenyPaths: e.DenyPaths})
 	if err != nil {
 		return snapshot.WithID{}, nil, err
 	}
@@ -163,12 +170,22 @@ func publicMeta(m map[string]any) map[string]any {
 // Drill restores a snapshot, runs all checks and attests the outcome
 // (pass or fail).
 func Drill(ctx context.Context, e *Env, spec source.Spec, ref string, workDir string) (*drill.Result, *Record, error) {
+	return DrillAttested(ctx, e, spec, ref, "", workDir)
+}
+
+// DrillAttested restore-tests a specific snapshot and refuses to start unless
+// its content root equals expectedRoot (when given), the root from the
+// verified backup attestation.
+func DrillAttested(ctx context.Context, e *Env, spec source.Spec, ref, expectedRoot, workDir string) (*drill.Result, *Record, error) {
 	if ref == "" {
 		ref = "latest:" + spec.Name
 	}
 	snap, err := snapshot.Resolve(ctx, e.Repo, ref)
 	if err != nil {
 		return nil, nil, err
+	}
+	if expectedRoot != "" && snap.Root != expectedRoot {
+		return nil, nil, fmt.Errorf("snapshot %s does not match the verified backup proof (content root differs); refusing to restore it", snap.ID.Short())
 	}
 	if snap.Source.Name != spec.Name {
 		return nil, nil, fmt.Errorf("snapshot %s belongs to source %q, not %q", snap.ID.Short(), snap.Source.Name, spec.Name)
@@ -276,6 +293,9 @@ func Import(ctx context.Context, e *Env, spec source.Spec) (*ImportResult, error
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
+	if err := e.checkDenied(spec); err != nil {
+		return nil, err
+	}
 	src, err := importer.Open(ctx, *spec.Import)
 	if err != nil {
 		return nil, err
@@ -335,4 +355,41 @@ func Import(ctx context.Context, e *Env, spec source.Spec) (*ImportResult, error
 		return res, fmt.Errorf("none of the old backups could be converted: %s", res.Failed[0])
 	}
 	return res, nil
+}
+
+var errProtected = errors.New("this location belongs to the BackupProof server itself and can't be backed up, imported or used as storage from here")
+
+// checkDenied refuses specs that would read the denied paths directly. File
+// trees that merely contain a denied path are handled by the engine, which
+// skips it while walking.
+func (e *Env) checkDenied(spec source.Spec) error {
+	if len(e.DenyPaths) == 0 {
+		return nil
+	}
+	if spec.Kind == "sqlite" {
+		for _, p := range spec.Paths {
+			if engine.IsDenied(p, e.DenyPaths) {
+				return errProtected
+			}
+		}
+	}
+	if im := spec.Import; im != nil {
+		if im.Storage.Type == "local" && engine.IsDenied(im.Storage.Path, e.DenyPaths) {
+			return errProtected
+		}
+		if im.Storage.Type == "rclone" && strings.HasPrefix(im.Storage.Remote, ":local") {
+			if _, p, ok := strings.Cut(strings.TrimPrefix(im.Storage.Remote, ":local"), ":"); ok && engine.IsDenied(p, e.DenyPaths) {
+				return errProtected
+			}
+		}
+	}
+	return nil
+}
+
+// StorageDenied reports whether a local storage location is protected.
+func StorageDenied(path string, deny []string) error {
+	if engine.IsDenied(path, deny) {
+		return errProtected
+	}
+	return nil
 }

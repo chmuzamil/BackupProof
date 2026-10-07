@@ -104,7 +104,7 @@ func loopbackClient(timeout time.Duration) *http.Client {
 
 // StartBuiltin enrolls (once) and runs the agent embedded in the server, so
 // the machine running the dashboard can protect itself with no install step.
-func StartBuiltin(ctx context.Context, serverURL, dir string, newToken func() (string, error)) error {
+func StartBuiltin(ctx context.Context, serverURL, dir string, newToken func() (string, error), deny []string) error {
 	if _, err := LoadState(dir); err != nil {
 		tok, err := newToken()
 		if err != nil {
@@ -122,6 +122,7 @@ func StartBuiltin(ctx context.Context, serverURL, dir string, newToken func() (s
 	a.c.base = a.st.Server
 	a.c.http = loopbackClient(60 * time.Second)
 	a.quiet = true
+	a.deny = deny
 	return a.Run(ctx)
 }
 
@@ -158,6 +159,7 @@ func enroll(ctx context.Context, hc *http.Client, server, token, name, dir strin
 type Agent struct {
 	dir    string
 	quiet  bool
+	deny   []string
 	st     *State
 	key    *proof.Key
 	c      *client
@@ -318,6 +320,11 @@ func (a *Agent) execute(parent context.Context, lease *protocol.Lease) {
 }
 
 func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any, error) {
+	if lease.Repository.Type == "local" {
+		if err := ops.StorageDenied(lease.Repository.Path, a.deny); err != nil {
+			return nil, err
+		}
+	}
 	be, err := backend.Open(ctx, lease.Repository, lease.Creds)
 	if err != nil {
 		return nil, fmt.Errorf("storage: %w", err)
@@ -336,6 +343,7 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 		Repo: r, Signer: a.key, Ledger: &remoteLedger{a: a, jobID: lease.JobID}, TSAs: lease.TSAs, Log: jl.Logf,
 		Storage: proof.StorageInfo{Location: be.Location(), ObjectLockMode: lease.Repository.ObjectLockMode, ObjectLockDays: lease.Repository.ObjectLockDays},
 	}
+	env.DenyPaths = a.deny
 	switch lease.Kind {
 	case "backup":
 		if lease.Source.Kind == "import" {
@@ -356,7 +364,7 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 	case "drill":
 		work := filepath.Join(a.dir, "drills")
 		os.MkdirAll(work, 0o700)
-		res, rec, err := ops.Drill(ctx, env, lease.Source, "", work)
+		res, rec, err := ops.DrillAttested(ctx, env, lease.Source, lease.SnapshotID, lease.ExpectedRoot, work)
 		out := map[string]any{}
 		if res != nil {
 			out["passed"], out["checks"], out["rtoMs"] = res.Passed, res.Checks, res.FinishedAt.Sub(res.StartedAt).Milliseconds()

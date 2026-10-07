@@ -196,3 +196,67 @@ func TestSampleDeterministic(t *testing.T) {
 		t.Fatal("sampling must be deterministic per seed")
 	}
 }
+
+// craftedSnapshot builds a snapshot the way an attacker holding the
+// repository password could: arbitrary symlink and file entries.
+func craftedSnapshot(t *testing.T, r *repo.Repo, links map[string]string, files map[string]string) *snapshot.Snapshot {
+	t.Helper()
+	ctx := context.Background()
+	b, err := NewBuilder(ctx, r, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, target := range links {
+		b.add(&snapshot.Entry{Path: p, Type: snapshot.TypeSymlink, Link: target})
+	}
+	for p, content := range files {
+		if _, err := b.AddReader(ctx, p, 0o644, time.Now(), strings.NewReader(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := b.Commit(ctx, &snapshot.Snapshot{Source: snapshot.Source{Name: "evil", Kind: "files"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.Snapshot
+}
+
+func TestRestoreRefusesWritesThroughSymlinks(t *testing.T) {
+	ctx := context.Background()
+	r, dir := newRepo(t)
+	outside := filepath.Join(dir, "outside")
+	os.MkdirAll(outside, 0o755)
+	victim := filepath.Join(outside, "victim.txt")
+	os.WriteFile(victim, []byte("original"), 0o644)
+
+	// 1. A file placed "beneath" a symlink that points outside the target.
+	s := craftedSnapshot(t, r, map[string]string{"evil": filepath.ToSlash(outside)},
+		map[string]string{"evil/pwned.txt": "attacker content"})
+	if _, err := Restore(ctx, r, s, filepath.Join(dir, "t1"), RestoreOptions{}); err == nil {
+		t.Fatal("restore of a file beneath a symlink must be refused")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "pwned.txt")); err == nil {
+		t.Fatal("file was written outside the restore target")
+	}
+
+	// 2. A symlink named like the temp file of a later entry.
+	s = craftedSnapshot(t, r, map[string]string{"x.bp-partial": filepath.ToSlash(victim)},
+		map[string]string{"x": "attacker content"})
+	Restore(ctx, r, s, filepath.Join(dir, "t2"), RestoreOptions{})
+	if b, _ := os.ReadFile(victim); string(b) != "original" {
+		t.Fatalf("victim file outside the target was overwritten: %q", b)
+	}
+
+	// 3. A symlink already present in the target directory.
+	t3 := filepath.Join(dir, "t3")
+	os.MkdirAll(t3, 0o755)
+	if err := os.Symlink(outside, filepath.Join(t3, "pre")); err == nil {
+		s = craftedSnapshot(t, r, nil, map[string]string{"pre/pwned2.txt": "attacker content"})
+		Restore(ctx, r, s, t3, RestoreOptions{})
+		if _, err := os.Stat(filepath.Join(outside, "pwned2.txt")); err == nil {
+			t.Fatal("restore followed a pre-existing symlink out of the target")
+		}
+	} else {
+		t.Logf("case 3 skipped: cannot create symlinks here (%v)", err)
+	}
+}

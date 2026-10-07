@@ -44,6 +44,13 @@ func matchInclude(p string, include []string) bool {
 
 // Restore writes a snapshot below target. Every file's content hash is
 // verified while it is written; any mismatch aborts the restore.
+//
+// All filesystem operations go through an os.Root opened on target, so the
+// operating system refuses any path that would leave the target directory,
+// including through symlinks (whether they came from the snapshot or already
+// existed in target). Symlinks from the snapshot are created last, after
+// every file and directory, so no entry is ever written through one. A
+// crafted snapshot therefore cannot write outside target.
 func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target string, opts RestoreOptions) (RestoreResult, error) {
 	if opts.Log == nil {
 		opts.Log = nopLog
@@ -61,11 +68,19 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 	if err := os.MkdirAll(target, 0o700); err != nil {
 		return res, err
 	}
+	root, err := os.OpenRoot(target)
+	if err != nil {
+		return res, err
+	}
+	defer root.Close()
+
 	type dirTime struct {
 		path  string
 		mtime int64
 	}
 	var dirs []dirTime
+	var links []*snapshot.Entry
+	linkSet := map[string]bool{}
 	for _, e := range entries {
 		if err := ctx.Err(); err != nil {
 			return res, err
@@ -76,35 +91,48 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		if !snapshot.SafeRelPath(e.Path) {
 			return res, fmt.Errorf("refusing unsafe path %q in manifest", e.Path)
 		}
-		dst := filepath.Join(target, filepath.FromSlash(e.Path))
+		// Nothing may be placed beneath an entry that is a symlink.
+		for dir := pathDir(e.Path); dir != ""; dir = pathDir(dir) {
+			if linkSet[dir] {
+				return res, fmt.Errorf("refusing %q: its parent %q is a symlink in this snapshot", e.Path, dir)
+			}
+		}
+		name := filepath.FromSlash(e.Path)
 		switch e.Type {
 		case snapshot.TypeDir:
-			if err := os.MkdirAll(dst, 0o700); err != nil {
-				return res, err
+			if err := root.MkdirAll(name, 0o700); err != nil {
+				return res, fmt.Errorf("%s: %w", e.Path, err)
 			}
-			dirs = append(dirs, dirTime{dst, e.MTime})
+			dirs = append(dirs, dirTime{name, e.MTime})
 			res.Dirs++
 		case snapshot.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-				return res, err
-			}
-			os.Remove(dst)
-			if err := os.Symlink(filepath.FromSlash(e.Link), dst); err != nil {
-				opts.Log("warning: cannot create symlink %s: %v", e.Path, err)
-			}
+			links = append(links, e)
+			linkSet[e.Path] = true
 		case snapshot.TypeFile, snapshot.TypeStream:
-			if err := restoreFile(ctx, r, e, dst); err != nil {
+			if err := restoreFile(ctx, r, root, e, name); err != nil {
 				return res, fmt.Errorf("%s: %w", e.Path, err)
 			}
 			res.Files++
 			res.Bytes += e.Size
 		}
 	}
+	for _, e := range links {
+		name := filepath.FromSlash(e.Path)
+		if dir := filepath.Dir(name); dir != "." {
+			if err := root.MkdirAll(dir, 0o700); err != nil {
+				return res, fmt.Errorf("%s: %w", e.Path, err)
+			}
+		}
+		root.Remove(name)
+		if err := root.Symlink(filepath.FromSlash(e.Link), name); err != nil {
+			opts.Log("warning: cannot create symlink %s: %v", e.Path, err)
+		}
+	}
 	// Directory mtimes last, deepest first, so file writes don't bump them.
 	for i := len(dirs) - 1; i >= 0; i-- {
 		if dirs[i].mtime > 0 {
 			t := time.Unix(0, dirs[i].mtime)
-			os.Chtimes(dirs[i].path, t, t)
+			root.Chtimes(dirs[i].path, t, t)
 		}
 	}
 	res.DurationMs = time.Since(start).Milliseconds()
@@ -112,12 +140,16 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 	return res, nil
 }
 
-func restoreFile(ctx context.Context, r *repo.Repo, e *snapshot.Entry, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
+func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.Entry, name string) error {
+	if dir := filepath.Dir(name); dir != "." {
+		if err := root.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
 	}
-	tmp := dst + ".bp-partial"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	tmp := name + ".bp-partial"
+	root.Remove(tmp)
+	// O_EXCL: never open something that already exists (such as a symlink).
+	f, err := root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -127,19 +159,20 @@ func restoreFile(ctx context.Context, r *repo.Repo, e *snapshot.Entry, dst strin
 		id, err := bpcrypto.ParseID(cs)
 		if err != nil {
 			f.Close()
+			root.Remove(tmp)
 			return err
 		}
 		data, err := r.GetBlob(ctx, id)
 		if err != nil {
 			f.Close()
-			os.Remove(tmp)
+			root.Remove(tmp)
 			return err
 		}
 		h.Write(data)
 		size += int64(len(data))
 		if _, err := f.Write(data); err != nil {
 			f.Close()
-			os.Remove(tmp)
+			root.Remove(tmp)
 			return err
 		}
 	}
@@ -147,18 +180,18 @@ func restoreFile(ctx context.Context, r *repo.Repo, e *snapshot.Entry, dst strin
 		return err
 	}
 	if got := fmt.Sprintf("%x", h.Sum(nil)); got != e.Hash || size != e.Size {
-		os.Remove(tmp)
+		root.Remove(tmp)
 		return fmt.Errorf("content verification failed (hash or size mismatch)")
 	}
-	if err := os.Rename(tmp, dst); err != nil {
+	if err := root.Rename(tmp, name); err != nil {
 		return err
 	}
 	if runtime.GOOS != "windows" && e.Mode != 0 {
-		os.Chmod(dst, fs.FileMode(e.Mode))
+		root.Chmod(name, fs.FileMode(e.Mode))
 	}
 	if e.MTime > 0 {
 		t := time.Unix(0, e.MTime)
-		os.Chtimes(dst, t, t)
+		root.Chtimes(name, t, t)
 	}
 	return nil
 }

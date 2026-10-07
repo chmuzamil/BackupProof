@@ -133,6 +133,13 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 	if head, _ := s.store.LedgerHead(); head != nil {
 		lease.SampleSeed = head.Hash
 	}
+	if job.Kind == "drill" {
+		id, root, err := s.attestedSnapshot(src.ID)
+		if err != nil {
+			return nil, err
+		}
+		lease.SnapshotID, lease.ExpectedRoot = id, root
+	}
 	return lease, nil
 }
 
@@ -301,4 +308,27 @@ func (s *Server) handleFinish(w http.ResponseWriter, r *http.Request) {
 		s.store.AppendLedger("check", fmt.Sprintf("source#%d job#%d ok=%v", sid, id, req.OK), digest, "", nil)
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// attestedSnapshot returns the newest snapshot of a source for which the
+// server holds a backup attestation it verified against the source's agent
+// key, together with the content root that attestation commits to.
+func (s *Server) attestedSnapshot(sourceID int64) (string, string, error) {
+	last := s.store.LastProof(sourceID, "backup", false)
+	if last == nil {
+		return "", "", errors.New("there is no verified backup to restore-test yet")
+	}
+	p, err := s.store.Proof(last.ID)
+	if err != nil {
+		return "", "", err
+	}
+	st, err := proof.ParseStatement(p.Envelope)
+	if err != nil {
+		return "", "", err
+	}
+	root := st.Subject[0].Digest["blake3"]
+	if root == "" {
+		return "", "", errors.New("backup proof has no content root")
+	}
+	return p.SnapshotID, root, nil
 }

@@ -231,7 +231,7 @@ func (s *Server) runBuiltinAgent(ctx context.Context) {
 	}
 	err := agent.StartBuiltin(ctx, url, s.builtinDir(), func() (string, error) {
 		return s.store.CreateEnrollToken("system", 5*time.Minute)
-	})
+	}, []string{s.cfg.DataDir})
 	if err != nil && ctx.Err() == nil {
 		s.log.Printf("built-in agent stopped: %v", err)
 	}

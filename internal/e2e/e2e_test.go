@@ -291,3 +291,91 @@ func TestOnboardingEndpoints(t *testing.T) {
 		t.Fatal("browse returned no roots")
 	}
 }
+
+// TestOperatorCannotTakeOverServer covers the privilege-escalation paths an
+// operator account used to have: running commands through hooks or command
+// sources, connecting servers, moving items between servers, and scanning
+// arbitrary locations from inside the server process.
+func TestOperatorCannotTakeOverServer(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	srv, err := server.New(server.Config{DataDir: filepath.Join(dir, "server")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	jar, _ := cookiejar.New(nil)
+	admin := &api{t: t, base: ts.URL, c: &http.Client{Jar: jar}}
+	var setup struct{ CSRF string }
+	admin.do("POST", "/api/setup", map[string]string{"username": "admin", "password": "a-long-admin-password"}, &setup)
+	admin.csrf = setup.CSRF
+	admin.do("POST", "/api/users", map[string]string{"username": "op", "password": "operator-password-1", "role": "operator"}, &map[string]int64{})
+
+	// Two connected servers and a storage.
+	for _, name := range []string{"web", "db"} {
+		var tok struct{ Token string }
+		admin.do("POST", "/api/agents/enroll-token", nil, &tok)
+		if _, err := agent.Enroll(ctx, ts.URL, tok.Token, name, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var agents []server.Agent
+	admin.do("GET", "/api/agents", nil, &agents)
+	var repo struct{ ID int64 }
+	admin.do("POST", "/api/repositories", map[string]any{"name": "r", "backend": map[string]any{"type": "local", "path": filepath.Join(dir, "repo")}, "password": "repository-password-123"}, &repo)
+
+	ojar, _ := cookiejar.New(nil)
+	op := &api{t: t, base: ts.URL, c: &http.Client{Jar: ojar}}
+	var login struct{ CSRF string }
+	op.do("POST", "/api/login", map[string]string{"username": "op", "password": "operator-password-1"}, &login)
+	op.csrf = login.CSRF
+
+	seq := 0
+	src := func(spec map[string]any, agentID int64) map[string]any {
+		seq++
+		return map[string]any{"name": fmt.Sprintf("item-%d", seq), "agentId": agentID, "repoId": repo.ID, "spec": spec,
+			"backupCron": "@daily", "drillCron": "0 4 * * 0", "enabled": true}
+	}
+	files := map[string]any{"kind": "files", "paths": []string{dir}}
+	forbidden := []struct {
+		name string
+		do   func() int
+	}{
+		{"command source", func() int {
+			return op.do("POST", "/api/sources", src(map[string]any{"kind": "command", "command": "id"}, agents[0].ID), nil)
+		}},
+		{"pre-backup hook", func() int {
+			return op.do("POST", "/api/sources", src(map[string]any{"kind": "files", "paths": []string{dir}, "preHook": "id"}, agents[0].ID), nil)
+		}},
+		{"restore-test command", func() int {
+			return op.do("POST", "/api/sources", src(map[string]any{"kind": "files", "paths": []string{dir}, "drill": map[string]any{"command": "id"}}, agents[0].ID), nil)
+		}},
+		{"on-the-fly rclone remote", func() int {
+			return op.do("POST", "/api/sources", src(map[string]any{"kind": "import", "import": map[string]any{"format": "files", "storage": map[string]any{"type": "rclone", "remote": ":local:/"}}}, agents[0].ID), nil)
+		}},
+		{"connection code", func() int { return op.do("POST", "/api/agents/enroll-token", nil, nil) }},
+		{"import scan", func() int {
+			return op.do("POST", "/api/import/scan", map[string]any{"format": "files", "storage": map[string]any{"type": "local", "path": dir}}, nil)
+		}},
+	}
+	for _, f := range forbidden {
+		if code := f.do(); code != http.StatusForbidden {
+			t.Errorf("operator %s: got HTTP %d, want 403", f.name, code)
+		}
+	}
+
+	// Ordinary backups are still fine for operators…
+	var created struct{ ID int64 }
+	op.do("POST", "/api/sources", src(files, agents[0].ID), &created)
+	// …but moving an item to another server (which would receive its secrets) is not.
+	moved := src(files, agents[1].ID)
+	if code := op.do("PUT", fmt.Sprintf("/api/sources/%d", created.ID), moved, nil); code != http.StatusForbidden {
+		t.Errorf("operator moving an item to another server: got HTTP %d, want 403", code)
+	}
+	// Admins keep full control.
+	if code := admin.do("POST", "/api/sources", src(map[string]any{"kind": "command", "command": "echo ok"}, agents[0].ID), &map[string]int64{}); code != 200 {
+		t.Errorf("admin command source: HTTP %d", code)
+	}
+}

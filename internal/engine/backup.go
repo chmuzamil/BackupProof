@@ -39,6 +39,7 @@ type Builder struct {
 	stats    snapshot.Stats
 	started  time.Time
 	excludes []string
+	deny     []string
 
 	sem      chan struct{}
 	wg       sync.WaitGroup
@@ -49,10 +50,11 @@ type Builder struct {
 }
 
 type Options struct {
-	Parent   *snapshot.WithID // previous snapshot of the same source, for fast incrementals
-	Excludes []string         // glob patterns matched against base names and manifest paths
-	Workers  int
-	Log      Logger
+	Parent    *snapshot.WithID // previous snapshot of the same source, for fast incrementals
+	Excludes  []string         // glob patterns matched against base names and manifest paths
+	DenyPaths []string         // never read these (and anything below them)
+	Workers   int
+	Log       Logger
 }
 
 func NewBuilder(ctx context.Context, r *repo.Repo, opts Options) (*Builder, error) {
@@ -67,7 +69,7 @@ func NewBuilder(ctx context.Context, r *repo.Repo, opts Options) (*Builder, erro
 	}
 	b := &Builder{
 		r: r, log: opts.Log, seen: map[string]bool{}, parent: map[string]*snapshot.Entry{},
-		started: time.Now(), excludes: opts.Excludes, sem: make(chan struct{}, opts.Workers),
+		started: time.Now(), excludes: opts.Excludes, deny: opts.DenyPaths, sem: make(chan struct{}, opts.Workers),
 	}
 	if opts.Parent != nil {
 		entries, err := snapshot.ReadManifest(ctx, r, opts.Parent.Snapshot)
@@ -162,6 +164,15 @@ func (b *Builder) AddPath(ctx context.Context, root string) error {
 		}
 		if e := b.failed(); e != nil {
 			return e
+		}
+		// Checked per directory (and for the start path): files inside a denied
+		// directory are never reached because the walk skips it.
+		if (d.IsDir() || p == abs) && IsDenied(p, b.deny) {
+			b.log("skipping %s: protected by this server", p)
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if p != abs && b.excluded(p, d.Name()) {
 			if d.IsDir() {

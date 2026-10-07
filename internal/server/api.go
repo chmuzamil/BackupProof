@@ -13,6 +13,7 @@ import (
 	"github.com/chmuzamil/backupproof/internal/backend"
 	"github.com/chmuzamil/backupproof/internal/engine"
 	"github.com/chmuzamil/backupproof/internal/proof"
+	"github.com/chmuzamil/backupproof/internal/source"
 )
 
 const sessionCookie = "bp_session"
@@ -83,7 +84,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs/{id}", s.auth("auditor", s.handleGetJob))
 
 	mux.HandleFunc("GET /api/agents", s.auth("auditor", s.handleListAgents))
-	mux.HandleFunc("POST /api/agents/enroll-token", s.auth("operator", s.handleEnrollToken))
+	mux.HandleFunc("POST /api/agents/enroll-token", s.auth("admin", s.handleEnrollToken))
 	mux.HandleFunc("POST /api/agents/{id}/revoke", s.auth("admin", s.handleRevokeAgent))
 
 	mux.HandleFunc("GET /api/repositories", s.auth("auditor", s.handleListRepos))
@@ -331,18 +332,25 @@ func (s *Server) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	src := req.Source
+	var existing *Source
 	if r.Method == http.MethodPut {
 		id, err := pathID(r)
 		if err != nil {
 			writeErr(w, 400, err)
 			return
 		}
-		existing, err := s.store.Source(id)
+		existing, err = s.store.Source(id)
 		if err != nil {
 			writeErr(w, 404, err)
 			return
 		}
 		src.ID, src.Name = id, existing.Name
+	}
+	if u := currentUser(r); u == nil || u.Role != "admin" {
+		if err := operatorMayChange(existing, &src); err != nil {
+			writeErr(w, http.StatusForbidden, err)
+			return
+		}
 	}
 	if _, err := s.store.Agent(src.AgentID); err != nil {
 		writeErr(w, 400, errors.New("agent not found"))
@@ -795,4 +803,54 @@ func plural(n int, unit string) string {
 		return "1 " + unit
 	}
 	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// operatorMayChange enforces what non-admin users may configure. Anything
+// that runs commands on a server (hooks, command sources, custom restore
+// checks), moves an item to a different server (which would hand that
+// server the item's secrets), or reads arbitrary local paths through rclone
+// can turn "set up backups" into control of the server, so it is admin-only.
+// Values that are unchanged from what an admin already saved are allowed.
+func operatorMayChange(old *Source, src *Source) error {
+	var o source.Spec
+	if old != nil {
+		o = old.Spec
+	}
+	n := src.Spec
+	deny := func(what string) error {
+		return fmt.Errorf("only an administrator can change %s", what)
+	}
+	if n.Kind == "command" && o.Kind != "command" {
+		return deny("command-based backups")
+	}
+	if n.Kind == "command" && n.Command != o.Command {
+		return deny("backup commands")
+	}
+	if n.PreHook != o.PreHook || n.PostHook != o.PostHook {
+		return deny("commands that run before or after a backup")
+	}
+	if n.Drill.Command != o.Drill.Command {
+		return deny("custom restore-test commands")
+	}
+	if old != nil {
+		if src.AgentID != old.AgentID {
+			return deny("which server an item runs on")
+		}
+		ov, nv := int64(0), int64(0)
+		if old.VerifierID != nil {
+			ov = *old.VerifierID
+		}
+		if src.VerifierID != nil {
+			nv = *src.VerifierID
+		}
+		if ov != nv {
+			return deny("which server runs restore tests")
+		}
+	}
+	if n.Import != nil && n.Import.Storage.Type == "rclone" && strings.HasPrefix(strings.TrimSpace(n.Import.Storage.Remote), ":") {
+		if o.Import == nil || o.Import.Storage.Remote != n.Import.Storage.Remote {
+			return deny("on-the-fly rclone remotes (use a remote set up with rclone config)")
+		}
+	}
+	return nil
 }
