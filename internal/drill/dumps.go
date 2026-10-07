@@ -107,11 +107,16 @@ FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema NO
 		})
 		if loaded {
 			r.check("database-dump-integrity: "+name, func() (string, error) {
+				// Only real indexes (relkind i): a partitioned table's index is a stub
+				// that amcheck rejects; its partitions' indexes are checked instead.
 				out, err := psql(`CREATE EXTENSION IF NOT EXISTS amcheck;
 SELECT count(bt_index_check(index => c.oid, heapallindexed => true))
 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am am ON am.oid = c.relam
-WHERE am.amname = 'btree' AND c.relpersistence <> 't' AND i.indisready AND i.indisvalid`)
-				return fmt.Sprintf("%s indexes verified against their tables", strings.TrimSpace(lastLine(out))), err
+WHERE am.amname = 'btree' AND c.relkind = 'i' AND c.relpersistence <> 't' AND i.indisready AND i.indisvalid`)
+				if err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("%s indexes verified against their tables", strings.TrimSpace(lastLine(out))), nil
 			})
 		}
 	}

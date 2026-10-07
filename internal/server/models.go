@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/chmuzamil/backupproof/internal/backend"
@@ -47,6 +48,43 @@ func (s *Store) CreateRepository(name string, cfg backend.Config, sec RepoSecret
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// ErrRepositoryInUse is returned when storage that items still use is removed.
+type ErrRepositoryInUse []string
+
+func (e ErrRepositoryInUse) Error() string {
+	return "this storage is still used by " + strings.Join(e, ", ") + ". Remove those items, or move them to other storage, first"
+}
+
+// DeleteRepository forgets a storage location. The backups already in it are
+// not touched; with its password (the recovery kit) it can be added again.
+func (s *Store) DeleteRepository(id int64) error {
+	rows, err := s.db.Query("SELECT name FROM sources WHERE repo_id=? ORDER BY name", id)
+	if err != nil {
+		return err
+	}
+	var users ErrRepositoryInUse
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		users = append(users, "“"+n+"”")
+	}
+	rows.Close()
+	if len(users) > 0 {
+		return users
+	}
+	res, err := s.db.Exec("DELETE FROM repositories WHERE id=?", id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("repository %d not found", id)
+	}
+	return nil
 }
 
 func (s *Store) Repositories() ([]Repository, error) {

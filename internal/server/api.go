@@ -89,6 +89,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/repositories", s.auth("auditor", s.handleListRepos))
 	mux.HandleFunc("POST /api/repositories", s.auth("operator", s.handleCreateRepo))
+	mux.HandleFunc("DELETE /api/repositories/{id}", s.auth("admin", s.handleDeleteRepo))
 
 	mux.HandleFunc("GET /api/proofs", s.auth("auditor", s.handleListProofs))
 	mux.HandleFunc("GET /api/proofs/{id}", s.auth("auditor", s.handleGetProof))
@@ -561,6 +562,30 @@ func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, nonNil(rs))
+}
+
+func (s *Server) handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	repo, _, err := s.store.Repository(id)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	if err := s.store.DeleteRepository(id); err != nil {
+		var inUse ErrRepositoryInUse
+		if errors.As(err, &inUse) {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+		writeErr(w, 500, err)
+		return
+	}
+	s.audit(s.actor(r), "delete-repository", fmt.Sprintf("storage %q (#%d) removed from the dashboard; the backups in it were not deleted", repo.Name, id))
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleCreateRepo(w http.ResponseWriter, r *http.Request) {

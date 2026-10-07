@@ -638,7 +638,7 @@ function modal(title, body, actions = [], opts = {}) {
 function confirmDlg(msg, okLabel = 'Confirm', { danger = true, title = 'Please confirm' } = {}) {
   return new Promise((resolve) => {
     let ok = false;
-    const close = modal(title, h('p', null, msg), [btn(okLabel, () => { ok = true; close(); }, danger ? 'danger solid' : 'primary')],
+    const close = modal(title, msg instanceof Node ? msg : h('p', null, msg), [btn(okLabel, () => { ok = true; close(); }, danger ? 'danger solid' : 'primary')],
       { closeLabel: 'Cancel', alert: true, initialFocus: 'close', onClose: () => resolve(ok) });
   });
 }
@@ -825,11 +825,34 @@ function renderAuth(errMsg) {
   if (window.matchMedia('(pointer: fine)').matches) user.focus();
 }
 
-function verLabel() { const v = String(S.status.version); return /^\d/.test(v) ? 'v' + v : v; }
+function verLabel() { const v = String(S.status.version).replace(/^backupproof\//, ''); return /^\d/.test(v) ? 'v' + v : v; }
 
-function brand() {
-  return h('div', { class: 'brand', translate: 'no' }, h('span', { class: 'brand-mark', 'aria-hidden': 'true' }, icon('shieldCheck')), h('span', null, 'Backup', h('span', { class: 'brand-accent' }, 'Proof')));
+// markSvg is the BackupProof mark, the same shield and check as backupproof.dev.
+function markSvg() {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 72 88');
+  svg.setAttribute('class', 'mark');
+  svg.setAttribute('aria-hidden', 'true');
+  const shield = document.createElementNS(NS, 'path');
+  shield.setAttribute('d', 'M36 0 70 12v28c0 22-15 39-34 46C17 79 2 62 2 40V12Z');
+  shield.setAttribute('class', 'mark-shield');
+  const check = document.createElementNS(NS, 'path');
+  check.setAttribute('d', 'm21 43 11 11 20-22');
+  check.setAttribute('class', 'mark-check');
+  svg.append(shield, check);
+  return svg;
 }
+
+// brand is the logo; with href it links there (Home, inside the dashboard).
+function brand(href) {
+  const kids = [h('span', { class: 'brand-mark' }, markSvg()), h('span', null, 'Backup', h('span', { class: 'brand-accent' }, 'Proof'))];
+  return href
+    ? h('a', { class: 'brand', href, translate: 'no', 'aria-label': 'BackupProof, go to Home' }, kids)
+    : h('div', { class: 'brand', translate: 'no' }, kids);
+}
+
+const EXT = (href, label) => h('a', { href, target: '_blank', rel: 'noopener' }, label, h('span', { class: 'sr-only' }, ' (opens in a new tab)'));
 
 // ----------------------------------------------------------------- shell
 
@@ -867,17 +890,21 @@ function renderShell() {
     h('a', { href: '#/' + k, 'data-k': k, onclick: () => { if (navOpen()) setNav(false, false); } }, h('span', { class: 'nav-l' }, icon(ic), h('span', null, l)),
       k === 'alerts' ? h('span', { class: 'count hidden', id: 'alert-count' }) : null)));
   const sidebar = h('aside', { class: 'sidebar', id: 'sidebar' },
-    brand(),
+    brand('#/dashboard'),
     nav,
     h('div', { class: 'userbox' },
-      h('div', { class: 'who' }, S.user.username), h('div', { class: 'role' }, { admin: 'Administrator', operator: 'Can set up backups', auditor: 'View only' }[S.user.role] || S.user.role),
-      h('div', { class: 'btns' }, btn('Sign out', busy(logout, 'Signing out…'), 'sm')),
-      S.status && S.status.version ? h('div', { class: 'role', translate: 'no' }, verLabel()) : null));
+      h('span', { class: 'avatar', 'aria-hidden': 'true' }, (S.user.username || '?').slice(0, 1).toUpperCase()),
+      h('div', { class: 'who-wrap' },
+        h('div', { class: 'who' }, S.user.username), h('div', { class: 'role' }, { admin: 'Administrator', operator: 'Can set up backups', auditor: 'View only' }[S.user.role] || S.user.role)),
+      btn('Sign out', busy(logout, 'Signing out…'), 'sm ghost')));
+  const footer = h('footer', { class: 'app-foot' },
+    h('span', { translate: 'no' }, 'BackupProof', S.status && S.status.version ? ' ' + verLabel() : ''),
+    h('nav', { 'aria-label': 'BackupProof links' }, EXT('https://backupproof.dev', 'Website'), EXT('https://github.com/chmuzamil/BackupProof', 'GitHub')));
   add(layout, [
-    h('header', { class: 'topbar' }, menuBtn, brand()),
+    h('header', { class: 'topbar' }, menuBtn, brand('#/dashboard')),
     h('div', { class: 'scrim', onclick: () => setNav(false, true) }),
     sidebar,
-    h('main', { class: 'main', id: 'main', tabindex: '-1' }),
+    h('div', { class: 'content' }, h('main', { class: 'main', id: 'main', tabindex: '-1' }), footer),
   ]);
   layout.addEventListener('keydown', (e) => { if (e.key === 'Escape' && navOpen()) { e.stopPropagation(); setNav(false, true); } });
   const onMq = () => setNav(false, false);
@@ -1082,7 +1109,64 @@ function runningLine(j, isImport) {
   return h('div', { class: 'running', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), j.state === 'queued' ? `${what} — waiting for the server to start…` : `${what} now…`);
 }
 
-function itemCard(s) {
+// The proof tape: one mark per day for the last TAPE_DAYS days, showing
+// whether that day's newest restore test passed, only a backup was made,
+// or something failed.
+const TAPE_DAYS = 14;
+const TAPE_WORDS = { tested: 'restore test passed', backup: 'backed up (not restore-tested that day)', failed: 'something failed', '': 'nothing ran' };
+
+function dayStart(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+
+function proofTapes(proofs) {
+  const start = dayStart(new Date());
+  start.setDate(start.getDate() - (TAPE_DAYS - 1));
+  const seen = new Map(); // sourceId → [{ drill, backup }] per day, newest proof wins
+  for (const p of proofs || []) { // newest first
+    const d = toDate(p.created);
+    if (!p.sourceId || !d || d < start) continue;
+    const i = Math.round((dayStart(d) - start) / 864e5);
+    if (i < 0 || i >= TAPE_DAYS) continue;
+    let days = seen.get(p.sourceId);
+    if (!days) seen.set(p.sourceId, days = Array.from({ length: TAPE_DAYS }, () => ({})));
+    const k = p.kind === 'drill' ? 'drill' : 'backup';
+    if (!(k in days[i])) days[i][k] = !!p.passed;
+  }
+  const out = new Map();
+  for (const [id, days] of seen) {
+    out.set(id, days.map((x) => 'drill' in x ? (x.drill ? 'tested' : 'failed') : 'backup' in x ? (x.backup ? 'backup' : 'failed') : ''));
+  }
+  return out;
+}
+
+function proofTape(days) {
+  days = days || Array(TAPE_DAYS).fill('');
+  const n = (v) => days.filter((x) => x === v).length;
+  const summary = `Last ${TAPE_DAYS} days: restore test passed on ${plural(n('tested'), 'day')}` + (n('failed') ? `, something failed on ${plural(n('failed'), 'day')}` : '');
+  const today = dayStart(new Date());
+  return h('div', { class: 'tape', role: 'img', 'aria-label': summary },
+    days.map((v, i) => {
+      const d = new Date(today);
+      d.setDate(d.getDate() - (TAPE_DAYS - 1 - i));
+      return h('span', { class: 'tape-m t-' + (v || 'none'), title: `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}: ${TAPE_WORDS[v]}` });
+    }));
+}
+
+function tapeLegend() {
+  return h('div', { class: 'tape-legend', 'aria-hidden': 'true' },
+    h('span', null, h('span', { class: 'tape-m t-tested' }), 'Restore test passed'),
+    h('span', null, h('span', { class: 'tape-m t-backup' }), 'Backed up'),
+    h('span', null, h('span', { class: 'tape-m t-failed' }), 'Failed'),
+    h('span', null, h('span', { class: 'tape-m t-none' }), 'Nothing'));
+}
+
+async function removeItem(id, name, after) {
+  if (!(await confirmDlg(`Stop protecting “${name}”? No new backups or restore tests will run. Backup copies already in storage and the proof history are kept.`, 'Remove', { title: 'Remove this item?' }))) return;
+  await del(`/sources/${id}`);
+  toast(`Removed “${name}”`, 'ok');
+  after();
+}
+
+function itemCard(s, days, removable) {
   const src = s.source, k = kindInfo(src.spec), isImp = src.spec && src.spec.kind === 'import';
   const lb = s.lastBackup, ld = s.lastDrill;
   const st = STATUS[s.status] || { cls: '' };
@@ -1096,11 +1180,13 @@ function itemCard(s) {
         h('span', null, h('span', { class: 'fact-l' }, isImp ? 'Last conversion ' : 'Last backup '), lb ? [timeEl(lb.created), lb.passed === false ? h('span', { class: 'fact-bad' }, ' (failed)') : ''] : h('span', { class: 'muted' }, 'not yet')),
         h('span', null, h('span', { class: 'fact-l' }, 'Last restore test '), ld ? [h('span', { class: ld.passed ? 'fact-ok' : 'fact-bad' }, ld.passed ? 'passed ' : 'failed '), timeEl(ld.created)] : h('span', { class: 'muted' }, 'not yet'))),
       runningLine(s.running, isImp)),
-    h('div', { class: 'item-actions' }, runButtons(src.id, s.running, null, false, isImp, src.name)));
+    h('div', { class: 'item-tape' }, proofTape(days), h('span', { class: 'tape-cap' }, `Last ${TAPE_DAYS} days`)),
+    h('div', { class: 'item-actions' }, runButtons(src.id, s.running, null, false, isImp, src.name),
+      removable && isAdmin() ? btn('Remove', busy(() => removeItem(src.id, src.name, reload)), 'sm danger quiet', { 'aria-label': `Remove ${src.name}` }) : null));
 }
 
-function itemList(sources) {
-  return h('div', { class: 'items' }, sources.map(itemCard));
+function itemList(sources, tapes, removable) {
+  return h('div', { class: 'items' }, sources.map((s) => itemCard(s, tapes && tapes.get(s.source.id), removable)));
 }
 
 function welcomeCard() {
@@ -1115,14 +1201,8 @@ function welcomeCard() {
       : h('p', { class: 'hint' }, 'Ask an administrator to set up the first backup.'));
 }
 
-function tile(n, label, cls, of) {
-  return h('div', { class: 'tile ' + (cls || '') },
-    h('div', { class: 'num' }, nf(n), of != null ? h('span', { class: 'of' }, ' of ' + nf(of)) : null),
-    h('div', { class: 'lbl' }, label));
-}
-
 async function pageDashboard() {
-  const d = await api('/dashboard');
+  const [d, proofs] = await Promise.all([api('/dashboard'), api('/proofs?limit=1000').catch(() => [])]);
   const sources = d.sources || [], agents = d.agents || [], alerts = d.alerts || [];
   const c = d.counts || {};
   setAlertCount(alerts);
@@ -1132,23 +1212,36 @@ async function pageDashboard() {
   if (!sources.length) return h('div', null, head, welcomeCard());
 
   const total = c.sources ?? sources.length;
-  const proven = c.proven ?? 0;
-  const tiles = h('div', { class: 'tiles' },
-    tile(proven, 'restore tested', 'ok lead' + (proven === total ? ' all' : ''), total),
-    tile(c.atRisk ?? 0, 'need attention or not tested yet', c.atRisk ? 'warn' : ''),
-    tile(c.failing ?? 0, (c.failing === 1 ? 'problem' : 'problems'), c.failing ? 'bad' : ''),
-    tile(c.agentsOnline ?? 0, 'servers online', c.agentsTotal && c.agentsOnline < c.agentsTotal ? 'warn' : '', c.agentsTotal ?? agents.length));
+  const proven = c.proven ?? 0, failing = c.failing ?? 0;
+  const items = (n) => plural(n, 'item');
+  let tone, verdict;
+  if (failing) { tone = 'bad'; verdict = `${items(failing)} ${failing === 1 ? 'has' : 'have'} a problem`; }
+  else if (proven === total) { tone = 'ok'; verdict = total === 1 ? 'Your item is restore-tested' : `All ${nf(total)} items are restore-tested`; }
+  else { tone = 'warn'; verdict = `${nf(proven)} of ${items(total)} ${proven === 1 ? 'is' : 'are'} restore-tested`; }
+  const lastPass = sources.map((s) => s.lastDrill && s.lastDrill.passed && toDate(s.lastDrill.created)).filter(Boolean).sort((a, b) => b - a)[0];
+  const nextTest = sources.map((s) => s.source.enabled !== false && toDate(s.source.nextDrill)).filter((x) => x && x > Date.now()).sort((a, b) => a - b)[0];
+  const agentsTotal = c.agentsTotal ?? agents.length, online = c.agentsOnline ?? 0;
+  const facts = [
+    lastPass ? ['Last restore test passed ', timeEl(lastPass)] : 'No restore test has passed yet',
+    nextTest ? ['Next one ', timeEl(nextTest)] : null,
+    `${nf(online)} of ${plural(agentsTotal, 'server')} online`,
+  ].filter(Boolean);
+  const tiles = h('section', { class: 'verdict v-' + tone, 'aria-labelledby': 'verdict-h' },
+    h('span', { class: 'verdict-seal', 'aria-hidden': 'true' }, icon(tone === 'ok' ? 'shieldCheck' : tone === 'bad' ? 'bell' : 'shield')),
+    h('div', { class: 'verdict-text' },
+      h('h2', { id: 'verdict-h' }, verdict),
+      h('p', { class: 'verdict-facts' }, facts.map((f) => h('span', null, f)))));
 
   const banner = alerts.length ? h('div', { class: 'banner bad' },
     h('p', null, h('strong', null, `${nf(alerts.length)} thing${alerts.length > 1 ? 's need' : ' needs'} your attention`), ' · ', h('a', { href: '#/alerts' }, 'See all alerts')),
     h('ul', null, alerts.slice(0, 5).map((a) => h('li', null, a.message, ' ', h('span', { class: 'small' }, '(', rel(a.created), ')'))))) : null;
 
   return h('div', null, head, tiles, banner,
-    h('section', { class: 'card' }, cardHead('What’s protected', h('a', { href: '#/protected', class: 'small' }, 'See all')), itemList(sources)));
+    h('section', { class: 'card ledger' }, cardHead('What’s protected', tapeLegend()), itemList(sources, proofTapes(proofs))));
 }
 
 async function pageProtected() {
-  const d = await api('/dashboard');
+  const [d, proofs] = await Promise.all([api('/dashboard'), api('/proofs?limit=1000').catch(() => [])]);
   const sources = d.sources || [];
   every(15000, autoRefresh);
   const actions = canOperate() ? h('div', { class: 'btns' },
@@ -1156,7 +1249,7 @@ async function pageProtected() {
     h('a', { class: 'btn primary', href: '#/protect' }, '+ Protect something')) : null;
   return h('div', null,
     pageHead('Protected', 'Everything BackupProof backs up and restore-tests.', actions),
-    sources.length ? h('section', { class: 'card' }, itemList(sources),
+    sources.length ? h('section', { class: 'card ledger' }, cardHead(plural(sources.length, 'item'), tapeLegend()), itemList(sources, proofTapes(proofs), true),
       h('div', { class: 'legend' }, h('h2', { class: 'sr-only' }, 'What the labels mean'), Object.values(STATUS).map((x) => h('span', null, h('span', { class: 'pill ' + x.cls }, glyphLabel(x.label)), ' ', x.help))))
       : welcomeCard());
 }
@@ -1190,10 +1283,7 @@ async function pageSource(id) {
       h('p', { class: 'muted lede' }, k.label)),
     canOperate() ? h('div', { class: 'btns' },
       h('a', { class: 'btn', href: `#/sources/${id}/edit` }, 'Edit (advanced)'),
-      isAdmin() ? btn('Delete', busy(async () => {
-        if (!(await confirmDlg(`Stop protecting “${src.name}”? Backup copies already in storage and the proof history are kept.`, 'Stop protecting'))) return;
-        await del(`/sources/${id}`); toast('Removed', 'ok'); location.hash = '#/protected';
-      }), 'danger') : null) : null);
+      isAdmin() ? btn('Remove', busy(() => removeItem(id, src.name, () => { location.hash = '#/protected'; })), 'danger') : null) : null);
 
   const rto = drill ? (drill.rtoMs ?? dp.rtoMs) : null;
   const hero = h('section', { class: 'card hero ' + statusInfo.cls },
@@ -1807,7 +1897,19 @@ async function pageStorageNew() {
 }
 
 async function pageRepositories() {
-  const repos = (await api('/repositories')) || [];
+  const [repos0, sources] = await Promise.all([api('/repositories'), api('/sources').catch(() => [])]);
+  const repos = repos0 || [];
+  const usedBy = (id) => (sources || []).filter((x) => x.repoId === id);
+  const removeRepo = async (r) => {
+    const ok = await confirmDlg(h('div', null,
+      h('p', null, `BackupProof will stop using “${r.name}”. The backups already in it are not deleted.`),
+      h('p', null, h('strong', null, 'Keep its recovery kit.'), ' Its encryption password is removed from this dashboard, and without it nobody can open those backups or add this storage again.')),
+    'Remove storage', { title: 'Remove this storage?' });
+    if (!ok) return;
+    await del(`/repositories/${r.id}`);
+    toast(`Removed “${r.name}”`, 'ok');
+    reload();
+  };
   return h('div', null,
     pageHead('Storage', 'Where your encrypted backup copies are kept.', canOperate() ? h('a', { class: 'btn primary', href: '#/storage/new' }, '+ Add storage') : null),
     repos.length ? h('div', { class: 'cards' }, repos.map((r) => {
@@ -1817,6 +1919,15 @@ async function pageRepositories() {
         h('div', { class: 'mini-head' }, h('span', { class: 'item-ico' }, icon(k.icon)), h('div', null, h('h2', null, r.name), h('div', { class: 'muted small' }, k.label))),
         h('p', { class: 'break small' }, repoLocation(r.backend)),
         h('div', { class: 'btns' }, lw ? h('span', { class: 'pill ok' }, lw) : h('span', { class: 'pill' }, 'No ransomware protection'), h('span', { class: 'pill' }, 'Encrypted')),
+        (() => {
+          const users = usedBy(r.id);
+          return h('p', { class: 'small used-by' }, users.length
+            ? ['Used by ', joinWords(users.map((x) => x.name))]
+            : h('span', { class: 'muted' }, 'Not used by any item'));
+        })(),
+        isAdmin() ? h('div', { class: 'form-actions start' }, usedBy(r.id).length
+          ? h('p', { class: 'hint' }, 'To remove this storage, first remove the items that use it.')
+          : btn('Remove', busy(() => removeRepo(r)), 'sm danger quiet', { 'aria-label': `Remove storage ${r.name}` })) : null,
         tech(h('dl', { class: 'kv' },
           h('dt', null, 'Address'), h('dd', null, h('code', { class: 'break' }, repoUrl(r.backend))),
           h('dt', null, 'Storage ID'), h('dd', null, h('code', { class: 'break' }, r.repoId || 'created on first backup')),

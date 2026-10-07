@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-07
+
+### Changed
+
+- **Redesigned dashboard** in the same ink-and-paper look as backupproof.dev, with the website's logo and colours: a navy sidebar, a Home page that answers in one sentence whether everything is restore-tested, and a **proof tape** on every item showing the last 14 days of restore tests, backups and failures.
+- The logo links to Home, and a footer links to the website and GitHub.
+
+### Added
+
+- **Remove storage** (administrators): storage that no item uses can be removed from the dashboard. The backups in it are not deleted; keep its recovery kit to add it again. Each storage shows which items use it.
+- **Remove** on every row of the Protected page, not only on the item's own page.
+
+### Fixed
+
+- PostgreSQL restore tests failed on databases with partitioned tables (for example Supabase's `realtime.messages`): the index check passed the partitioned table's parent index to `amcheck`, which rejects it. Only real indexes are checked now, which still covers every partition. A failed check no longer shows leftover command output in its message.
+
 ## [0.1.4] - 2026-10-07
 
 ### Fixed
@@ -62,7 +78,8 @@ First release.
 - Anything that could give control of a server is admin-only: commands and hooks, custom restore-test commands, moving items between servers, connecting servers, on-the-fly rclone remotes and the old-backup preview.
 - The built-in agent never backs up, imports from or stores into the server's own data folder.
 
-[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/chmuzamil/BackupProof/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/chmuzamil/BackupProof/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/chmuzamil/BackupProof/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/chmuzamil/BackupProof/compare/v0.1.1...v0.1.2

@@ -117,11 +117,16 @@ func postgresChecks(ctx context.Context, r *runner, dir string, s snapshot.WithI
 		return
 	}
 	r.check("amcheck-btree-heapallindexed", func() (string, error) {
+		// Only real indexes (relkind i): a partitioned table's index is a stub
+		// that amcheck rejects; its partitions' indexes are checked instead.
 		out, err := psql(`CREATE EXTENSION IF NOT EXISTS amcheck;
 SELECT count(bt_index_check(index => c.oid, heapallindexed => true))
 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am am ON am.oid = c.relam
-WHERE am.amname = 'btree' AND c.relpersistence <> 't' AND i.indisready AND i.indisvalid`)
-		return fmt.Sprintf("%s B-tree indexes verified against their heaps", strings.TrimSpace(lastLine(out))), err
+WHERE am.amname = 'btree' AND c.relkind = 'i' AND c.relpersistence <> 't' AND i.indisready AND i.indisvalid`)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s B-tree indexes verified against their heaps", strings.TrimSpace(lastLine(out))), nil
 	})
 	restored := map[string]int64{}
 	r.check("exact-row-counts", func() (string, error) {
