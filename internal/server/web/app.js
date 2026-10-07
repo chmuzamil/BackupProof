@@ -1029,6 +1029,7 @@ const ROUTES = [
   [/^\/sources\/new$/, () => pageSourceForm(null)],
   [/^\/sources\/(\d+)\/edit$/, (m) => pageSourceForm(Number(m[1]))],
   [/^\/sources\/(\d+)$/, (m) => pageSource(Number(m[1]))],
+  [/^\/sources\/(\d+)\/restore$/, (m) => pageRestore(Number(m[1]))],
   [/^\/agents$/, pageAgents],
   [/^\/repositories$/, pageRepositories],
   [/^\/storage\/new$/, pageStorageNew],
@@ -1337,6 +1338,169 @@ async function pageProtected() {
       : welcomeCard());
 }
 
+// ---------------------------------------------------------- restore
+
+// restoreProgress follows a restore job until it finishes.
+function restoreProgress(jobId, what) {
+  const line = h('div', { class: 'progress', role: 'status' });
+  const pre = h('pre', { class: 'log', tabindex: '0', 'aria-label': 'Log' }, '');
+  const el = h('div', { class: 'prog' }, line, details('Show details', pre));
+  const gen = S.gen;
+  const set = (cls, text, spin) => {
+    line.className = 'progress ' + cls;
+    fill(line, spin ? h('span', { class: 'spinner', 'aria-hidden': 'true' }) : h('span', { class: 'prog-ico', 'aria-hidden': 'true' }, cls === 'ok' ? '✓' : '✗'), h('span', null, text));
+  };
+  set('', 'Waiting for the server to start…', true);
+  const tick = async () => {
+    if (gen !== S.gen || !el.isConnected) return;
+    try {
+      const j = await api(`/jobs/${jobId}`);
+      pre.textContent = (j.log || '(nothing written yet)') + (j.error ? '\nERROR: ' + j.error : '');
+      if (j.state === 'queued') set('', 'Waiting for the server to start…', true);
+      else if (j.state === 'running') set('', what + '…', true);
+      else if (j.state === 'succeeded') {
+        const res = j.result || {};
+        set('ok', res.into ? 'Restored into ' + res.into + '.' : `Restored ${plural(res.files || 0, 'file')} (${bytes(res.bytes || 0)}). Every file was checked against the backup.`);
+        return;
+      } else { set('bad', 'The restore didn’t finish: ' + (j.error || 'see the details below.')); return; }
+    } catch { /* try again */ }
+    setTimeout(tick, 2000);
+  };
+  setTimeout(tick, 500);
+  return el;
+}
+
+const yyyymmdd = (d = new Date()) => d.toISOString().slice(0, 10).replaceAll('-', '');
+
+async function pageRestore(id) {
+  if (!isAdmin()) return h('div', { class: 'banner warn' }, 'Only administrators can restore, because a restore can change files on a server.');
+  const [st, rp, agents] = await Promise.all([api(`/sources/${id}`), api(`/sources/${id}/restore-points`), api('/agents')]);
+  const src = st.source, points = rp.points || [];
+  document.title = 'Restore ' + src.name + ' · BackupProof';
+  const head = h('div', { class: 'page-head' }, h('div', { class: 'page-title' }, backLink(`#/sources/${id}`, src.name),
+    h('h1', { tabindex: '-1' }, 'Restore ' + src.name),
+    h('p', { class: 'muted lede' }, rp.database ? 'Put the database back, or load a copy next to it.' : 'Get files back: download them, put them back where they were, or restore to a new folder.')));
+  if (!points.length) return h('div', null, head, card(null, empty('There is no finished backup of this item yet.')));
+
+  const R = { snap: points[0].snapshotId, picks: new Set(), path: '' };
+  const pointList = h('div', { class: 'restore-points', role: 'radiogroup', 'aria-label': 'Backup to restore' }, points.slice(0, 30).map((pt, i) => {
+    const b = h('button', { type: 'button', role: 'radio', class: 'rp' + (i === 0 ? ' on' : ''), 'aria-checked': String(i === 0), onclick: () => {
+      pointList.querySelectorAll('.rp').forEach((x) => { x.classList.remove('on'); x.setAttribute('aria-checked', 'false'); });
+      b.classList.add('on'); b.setAttribute('aria-checked', 'true');
+      R.snap = pt.snapshotId; R.picks.clear(); R.path = ''; if (browse) loadDir('');
+    } },
+    h('span', { class: 'rp-when' }, absTime(pt.created)), h('span', { class: 'rp-rel muted small' }, rel(pt.created)),
+    pt.tested ? h('span', { class: 'pill ok' }, glyphLabel('Restore tested ✓')) : h('span', { class: 'pill' }, 'Backed up'));
+    return b;
+  }));
+
+  const out = h('div');
+  let browse = null, loadDir = null;
+
+  if (rp.database) {
+    // ---- databases
+    const k = src.spec.kind, sqlite = k === 'sqlite';
+    const orig = sqlite ? (src.spec.paths || [''])[0] : src.spec.database;
+    const defName = sqlite ? orig.replace(/(\.[^./\\]+)?$/, `.restored-${yyyymmdd()}$1`) : `${orig || 'db'}_restored_${yyyymmdd()}`;
+    const mode = { v: 'new' };
+    const target = input({ name: 'db-target', code: true, value: defName, autocomplete: 'off' });
+    const confirmName = input({ name: 'confirm-name', code: true, autocomplete: 'off', placeholder: orig + '…' });
+    const replaceBox = h('div', { hidden: true }, h('div', { class: 'banner warn' }, sqlite
+      ? 'The database file is replaced with the backup. Stop the app that uses it first, or it may keep writing to the old file.'
+      : 'Tables in the backup replace the tables in the original database. Anything changed since this backup is lost.'),
+    field(`Type “${orig}” to confirm`, confirmName));
+    const newBox = h('div', null, field(sqlite ? 'New database file' : 'New database name', target, sqlite ? 'A full path on the server. The original file isn’t touched.' : 'Created on the same database server. The original isn’t touched.'));
+    const modes = choices([
+      { value: 'new', title: sqlite ? 'Restore to a new file' : 'Restore into a new database', desc: 'Safe: check the data before using it.', badge: 'recommended', badgeCls: 'ok' },
+      { value: 'replace', title: 'Replace the original', desc: sqlite ? 'Overwrites ' + orig + '.' : 'Overwrites the tables in ' + orig + '.' },
+    ], { value: 'new', small: true, label: 'How to restore', onPick: (v) => { mode.v = v; newBox.hidden = v !== 'new'; replaceBox.hidden = v !== 'replace'; } });
+    const err = errBox();
+    const go = btn('Restore the database', busy(async () => {
+      err.textContent = '';
+      const body = { snapshotId: R.snap };
+      if (mode.v === 'replace') {
+        if (confirmName.value.trim() !== orig) return fieldError(confirmName, `Type “${orig}” exactly to confirm.`);
+        body.dbReplace = true;
+      } else {
+        if (!target.value.trim()) return fieldError(target, 'Enter a name.');
+        body.dbTarget = target.value.trim();
+      }
+      const res = await post(`/sources/${id}/restore-db`, body);
+      fill(out, restoreProgress(res.jobId, 'Restoring the database'));
+    }, 'Starting…'), 'primary');
+    const dumpLink = () => `/api/sources/${id}/download?` + qs({ snapshot: R.snap, path: rp.dumpPath });
+    const dl = h('a', { class: 'btn', href: dumpLink(), onclick: (e) => { e.currentTarget.href = dumpLink(); } }, 'Download the backup file');
+    return h('div', null, head,
+      card('1. Choose a backup', pointList),
+      card('2. Restore', modes, newBox, replaceBox, err, h('div', { class: 'form-actions start' }, go, dl), out));
+  }
+
+  // ---- files
+  const itemAgent = agents.find((a) => a.id === src.agentId) || {};
+  const win = (itemAgent.os || '').startsWith('windows');
+  // Shown the way the server writes it: /srv/www or C:\Users.
+  const shown = (p2) => win && /^[A-Za-z](\/|$)/.test(p2) ? p2[0] + ':\\' + p2.slice(2).replaceAll('/', '\\') : '/' + p2;
+  const crumbs = h('nav', { class: 'crumbs', 'aria-label': 'Folder' });
+  const list = h('div', { class: 'file-list' });
+  const picked = h('p', { class: 'small picked', 'aria-live': 'polite' });
+  const showPicked = () => fill(picked, R.picks.size ? [h('strong', null, plural(R.picks.size, 'selection')), ': ', [...R.picks].map(shown).join(', ')] : 'Nothing selected: everything in this backup.');
+  let expanded = false;
+  // auto: open single folders straight away, so browsing starts where the item's files are.
+  loadDir = async (dir, auto = !dir) => {
+    R.path = dir;
+    fill(list, h('p', { class: 'muted' }, 'Loading…'));
+    let res;
+    try { res = await api(`/sources/${id}/files?` + qs({ snapshot: R.snap, path: dir })); }
+    catch (e) { fill(list, h('div', { class: 'banner info' }, e.message)); fill(crumbs); return; }
+    if (auto && res.entries && res.entries.length === 1 && res.entries[0].dir) return loadDir(res.entries[0].path, true);
+    const parts = dir ? dir.split('/') : [];
+    const crumb = (p2, i) => [h('span', { 'aria-hidden': 'true' }, ' / '), i === parts.length - 1 ? h('span', { 'aria-current': 'location' }, p2) : h('button', { type: 'button', class: 'linkish', onclick: () => loadDir(parts.slice(0, i + 1).join('/'), false) }, p2)];
+    const long = parts.length > 4 && !expanded;
+    fill(crumbs, h('button', { type: 'button', class: 'linkish', onclick: () => loadDir('', false) }, 'Backup'),
+      long ? [crumb(parts[0], 0), h('span', { 'aria-hidden': 'true' }, ' / '), h('button', { type: 'button', class: 'linkish', 'aria-label': 'Show the whole path', onclick: () => { expanded = true; loadDir(dir, false); } }, '…'),
+        parts.slice(-2).map((p2, j) => crumb(p2, parts.length - 2 + j))] : parts.map(crumb));
+    fill(list, (res.entries || []).length ? res.entries.map((e) => {
+      const cb = h('input', { type: 'checkbox', checked: R.picks.has(e.path), 'aria-label': 'Select ' + e.name, onchange: () => { if (cb.checked) R.picks.add(e.path); else R.picks.delete(e.path); showPicked(); } });
+      return h('div', { class: 'file-row' }, cb,
+        e.dir ? h('button', { type: 'button', class: 'linkish file-name', onclick: () => loadDir(e.path, false) }, icon('folder'), e.name)
+          : h('span', { class: 'file-name' }, icon('file'), e.name),
+        h('span', { class: 'muted small tnum' }, e.dir ? (e.files ? plural(e.files, 'file') + ' · ' : '') + bytes(e.size) : bytes(e.size)));
+    }) : h('p', { class: 'muted' }, 'This folder is empty.'));
+  };
+  browse = h('div', null, crumbs, list, picked);
+  showPicked();
+  loadDir('');
+
+  const zipLink = () => `/api/sources/${id}/download?` + new URLSearchParams([['snapshot', R.snap], ...[...R.picks].map((x) => ['path', x])]).toString();
+  const dl = h('a', { class: 'btn', href: '#', onclick: (e) => { e.currentTarget.href = zipLink(); } }, 'Download as zip');
+
+  const where = { v: 'original' };
+  const live = agents.filter((a) => !a.revoked);
+  const agentSel = select(live.map((a) => [String(a.id), agentTitle(a)]), String(src.agentId), { name: 'restore-server' });
+  const folder = input({ name: 'restore-folder', code: true, autocomplete: 'off', value: (agents.find((a) => a.id === src.agentId) || {}).os?.startsWith('windows') ? `C:\\Restored\\${src.name}-${yyyymmdd()}` : `/root/restored/${src.name.replace(/[^\w.-]+/g, '-')}-${yyyymmdd()}` });
+  const folderBox = h('div', { hidden: true, class: 'row' }, field('On server', agentSel), field('Folder', folder, 'Files keep their full path inside it, so nothing gets mixed up.'));
+  const origNote = h('div', { class: 'banner warn' }, 'Files with the same names are replaced with the backed-up versions. Other files are left alone. Owners and permissions are kept.');
+  const whereChoice = choices([
+    { value: 'original', title: 'Where it came from', desc: 'Put files back in their original place on ' + (agents.find((a) => a.id === src.agentId) ? agentTitle(agents.find((a) => a.id === src.agentId)) : 'the server') + '.' },
+    { value: 'folder', title: 'A new folder', desc: 'Restore next to the original, or onto another server.', badge: 'safest', badgeCls: 'ok' },
+  ], { value: 'original', small: true, label: 'Where to restore', onPick: (v) => { where.v = v; folderBox.hidden = v !== 'folder'; origNote.hidden = v !== 'original'; } });
+  const go = btn('Restore', busy(async () => {
+    const body = { snapshotId: R.snap, paths: [...R.picks] };
+    if (where.v === 'folder') {
+      if (!folder.value.trim()) return fieldError(folder, 'Enter the folder to restore into.');
+      body.folder = folder.value.trim(); body.agentId = Number(agentSel.value);
+    } else if (!(await confirmDlg(`Put ${R.picks.size ? plural(R.picks.size, 'selection') : 'everything in this backup'} back where it came from? Files with the same names are replaced.`, 'Restore', { title: 'Restore in place?' }))) return;
+    const res = await post(`/sources/${id}/restore`, body);
+    fill(out, restoreProgress(res.jobId, 'Restoring'));
+  }, 'Starting…'), 'primary');
+
+  return h('div', null, head,
+    card('1. Choose a backup', pointList),
+    card('2. Choose files', h('p', { class: 'muted small' }, 'Tick files or folders, or leave everything unticked to restore it all.'), browse),
+    card('3. Get them back', h('div', { class: 'form-actions start' }, dl, h('span', { class: 'muted small' }, 'Downloads your selection through the dashboard.')),
+      h('h3', null, 'Or restore on a server'), whereChoice, origNote, folderBox, h('div', { class: 'form-actions start' }, go), out));
+}
+
 // ---------------------------------------------------------- item detail
 
 async function pageSource(id) {
@@ -1365,6 +1529,7 @@ async function pageSource(id) {
       h('h1', { class: 'with-ico', tabindex: '-1' }, icon(k.icon), h('span', null, src.name)),
       h('p', { class: 'muted lede' }, k.label)),
     canOperate() ? h('div', { class: 'btns' },
+      isAdmin() ? h('a', { class: 'btn primary', href: `#/sources/${id}/restore` }, 'Restore…') : null,
       h('a', { class: 'btn', href: `#/sources/${id}/edit` }, 'Edit (advanced)'),
       isAdmin() ? btn('Remove', busy(() => removeItem(id, src.name, () => { location.hash = '#/protected'; })), 'danger') : null) : null);
 

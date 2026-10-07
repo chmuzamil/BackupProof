@@ -380,6 +380,10 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 			out["snapshotId"] = rec.SnapshotID
 		}
 		return out, err
+	case "restore":
+		return a.runRestore(ctx, r, lease, jl)
+	case "restore-db":
+		return a.runRestoreDB(ctx, r, lease, jl)
 	case "check":
 		res, err := engine.Check(ctx, r, engine.CheckOptions{ReadDataPercent: 5, Seed: []byte(lease.SampleSeed), Log: jl.Logf})
 		if err != nil {

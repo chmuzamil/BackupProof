@@ -154,6 +154,11 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 		}
 		lease.SnapshotID, lease.ExpectedRoot = id, root
 	}
+	if restoreKind(job.Kind) {
+		if err := s.restoreLease(job, lease); err != nil {
+			return nil, err
+		}
+	}
 	return lease, nil
 }
 
@@ -305,6 +310,17 @@ func (s *Server) handleFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid := job.SourceID
+	if restoreKind(job.Kind) {
+		// A restore is watched by the person who started it; its outcome is
+		// recorded, but it isn't an ongoing problem with the item.
+		res := "finished"
+		if !req.OK {
+			res = "failed: " + req.Error
+		}
+		s.audit("server "+a.Name, job.Kind+"-done", fmt.Sprintf("job #%d %s", id, res))
+		writeJSON(w, 200, map[string]bool{"ok": true})
+		return
+	}
 	kind := "job-failed"
 	if req.OK {
 		s.resolve(kind, &sid, nil)

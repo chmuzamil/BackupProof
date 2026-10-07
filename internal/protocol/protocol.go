@@ -56,6 +56,19 @@ type Lease struct {
 	// Speed limits for this server's storage traffic, bytes per second (0 = none).
 	UploadBps   int64 `json:"uploadBps,omitempty"`
 	DownloadBps int64 `json:"downloadBps,omitempty"`
+	// Restore is set for "restore" and "restore-db" jobs.
+	Restore *Restore `json:"restore,omitempty"`
+}
+
+// Restore says what to restore and where. The backup is SnapshotID, which
+// the server checked against this item's signed backup proof.
+type Restore struct {
+	SnapshotID string   `json:"snapshotId"`
+	Paths      []string `json:"paths,omitempty"`  // empty = everything
+	Folder     string   `json:"folder,omitempty"` // empty = where it was backed up from
+	// Databases: a new database name (or SQLite file path), or replace the original.
+	DBTarget  string `json:"dbTarget,omitempty"`
+	DBReplace bool   `json:"dbReplace,omitempty"`
 }
 
 type LogRequest struct {

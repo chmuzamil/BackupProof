@@ -19,7 +19,14 @@ import (
 
 type RestoreOptions struct {
 	Include []string // manifest path prefixes; empty restores everything
-	Log     Logger
+	// StripPrefix restores only entries below this manifest folder and drops
+	// it from their paths (for example "C" to put "C/Users/…" back on drive C:).
+	StripPrefix string
+	// Original is for putting files back where they were backed up from: a
+	// file keeps the owner of the file it replaces (new files and folders take
+	// their folder's owner) and folders get their backed-up permissions.
+	Original bool
+	Log      Logger
 }
 
 type RestoreResult struct {
@@ -91,6 +98,15 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		if !snapshot.SafeRelPath(e.Path) {
 			return res, fmt.Errorf("refusing unsafe path %q in manifest", e.Path)
 		}
+		if opts.StripPrefix != "" {
+			rel, ok := strings.CutPrefix(e.Path, opts.StripPrefix+"/")
+			if !ok {
+				continue
+			}
+			c := *e
+			c.Path = rel
+			e = &c
+		}
 		// Nothing may be placed beneath an entry that is a symlink.
 		for dir := pathDir(e.Path); dir != ""; dir = pathDir(dir) {
 			if linkSet[dir] {
@@ -100,8 +116,15 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		name := filepath.FromSlash(e.Path)
 		switch e.Type {
 		case snapshot.TypeDir:
+			existed := pathExists(root, name)
 			if err := root.MkdirAll(name, 0o700); err != nil {
 				return res, fmt.Errorf("%s: %w", e.Path, err)
+			}
+			if opts.Original && !existed {
+				adoptParentOwner(root, name)
+			}
+			if opts.Original && e.Mode != 0 && runtime.GOOS != "windows" {
+				root.Chmod(name, fs.FileMode(e.Mode).Perm())
 			}
 			dirs = append(dirs, dirTime{name, e.MTime})
 			res.Dirs++
@@ -109,7 +132,7 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 			links = append(links, e)
 			linkSet[e.Path] = true
 		case snapshot.TypeFile, snapshot.TypeStream:
-			if err := restoreFile(ctx, r, root, e, name); err != nil {
+			if err := restoreFile(ctx, r, root, e, name, opts.Original); err != nil {
 				return res, fmt.Errorf("%s: %w", e.Path, err)
 			}
 			res.Files++
@@ -140,10 +163,17 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 	return res, nil
 }
 
-func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.Entry, name string) error {
+func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.Entry, name string, original bool) error {
 	if dir := filepath.Dir(name); dir != "." {
 		if err := root.MkdirAll(dir, 0o700); err != nil {
 			return err
+		}
+	}
+	// In place, the restored file keeps the owner of the one it replaces.
+	uid, gid, hadOwner := -1, -1, false
+	if original {
+		if fi, err := root.Lstat(name); err == nil && fi.Mode().IsRegular() {
+			uid, gid, hadOwner = ownerOf(fi)
 		}
 	}
 	tmp := name + ".bp-partial"
@@ -185,6 +215,13 @@ func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.E
 	}
 	if err := root.Rename(tmp, name); err != nil {
 		return err
+	}
+	if original {
+		if hadOwner {
+			_ = root.Lchown(name, uid, gid)
+		} else {
+			adoptParentOwner(root, name)
+		}
 	}
 	if runtime.GOOS != "windows" && e.Mode != 0 {
 		root.Chmod(name, fs.FileMode(e.Mode))

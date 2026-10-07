@@ -806,3 +806,22 @@ input[type=time] {
   font: inherit; font-size: 14px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--text); min-height: 36px; width: 100%;
 }
+
+/* restore */
+.restore-points { display: grid; gap: 6px; max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
+.rp {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; text-align: left; font: inherit; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; cursor: pointer;
+}
+.rp:hover { border-color: var(--border-strong); }
+.rp.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.rp-when { font-weight: 600; font-variant-numeric: tabular-nums; }
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-bottom: 8px; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.linkish { font: inherit; color: var(--accent-ink); background: none; border: 0; padding: 2px 0; cursor: pointer; text-align: left; }
+.linkish:hover { text-decoration: underline; }
+.file-list { border: 1px solid var(--border); border-radius: var(--radius-sm); max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
+.file-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.file-row:last-child { border-bottom: 0; }
+.file-name { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
+.file-name .ico-svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted); }
+.picked { margin: 8px 0 0; overflow-wrap: anywhere; }

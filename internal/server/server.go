@@ -53,7 +53,8 @@ type Server struct {
 	pollMu  sync.Mutex
 	waiters map[int64]chan struct{} // agent long-poll wake-ups
 
-	logins challenges // sign-ins waiting for a two-factor code
+	logins    challenges    // sign-ins waiting for a two-factor code
+	manifests manifestCache // recently browsed backups' file lists
 }
 
 func loadSecret(dataDir string) ([]byte, error) {
