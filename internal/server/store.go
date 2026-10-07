@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,7 +82,11 @@ func OpenStore(dataDir string, secret []byte) (*Store, error) {
 	}
 	// Additive migrations for databases created by older versions.
 	for _, m := range []string{"ALTER TABLE agents ADD COLUMN inventory TEXT"} {
-		db.Exec(m) // "duplicate column" on up-to-date databases is expected
+		// "duplicate column" on up-to-date databases is expected.
+		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
 	}
 	return &Store{db: db, secret: secret}, nil
 }
@@ -126,7 +131,10 @@ func (s *Store) open(ct []byte, aad string, v any) error {
 
 func (s *Store) Setting(key string) string {
 	var v string
-	s.db.QueryRow("SELECT value FROM settings WHERE key=?", key).Scan(&v)
+	if err := s.db.QueryRow("SELECT value FROM settings WHERE key=?", key).Scan(&v); err != nil {
+		// Unset (sql.ErrNoRows) or unreadable: callers treat both as "not configured".
+		return ""
+	}
 	return v
 }
 
@@ -190,9 +198,10 @@ func (s *Store) AppendLedger(kind, subject, digest, detail string, extra func(tx
 }
 
 // Audit records an operator action in the same tamper-evident chain.
-func (s *Store) Audit(actor, action, detail string) {
+func (s *Store) Audit(actor, action, detail string) error {
 	digest := bpcrypto.Hash([]byte(actor), []byte{0}, []byte(action), []byte{0}, []byte(detail)).String()
-	s.AppendLedger("event", actor+": "+action, digest, detail, nil)
+	_, err := s.AppendLedger("event", actor+": "+action, digest, detail, nil)
+	return err
 }
 
 type LedgerRow struct {
@@ -246,10 +255,10 @@ type User struct {
 	Created  string `json:"created"`
 }
 
-func (s *Store) UserCount() int {
+func (s *Store) UserCount() (int, error) {
 	var n int
-	s.db.QueryRow("SELECT count(*) FROM users").Scan(&n)
-	return n
+	err := s.db.QueryRow("SELECT count(*) FROM users").Scan(&n)
+	return n, err
 }
 
 func (s *Store) CreateUser(username, password, role string) (int64, error) {
@@ -290,15 +299,19 @@ func (s *Store) Users() ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		rows.Scan(&u.ID, &u.Username, &u.Role, &u.Created)
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.Created); err != nil {
+			return nil, err
+		}
 		out = append(out, u)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (s *Store) DeleteUser(id int64) error {
 	var admins int
-	s.db.QueryRow("SELECT count(*) FROM users WHERE role='admin' AND id<>?", id).Scan(&admins)
+	if err := s.db.QueryRow("SELECT count(*) FROM users WHERE role='admin' AND id<>?", id).Scan(&admins); err != nil {
+		return err
+	}
 	if admins == 0 {
 		return errors.New("cannot delete the last admin")
 	}
@@ -315,10 +328,13 @@ func (s *Store) SetPassword(id int64, password string) error {
 		return err
 	}
 	_, err = s.db.Exec("UPDATE users SET password_hash=? WHERE id=?", h, id)
-	if err == nil {
-		s.db.Exec("DELETE FROM sessions WHERE user_id=?", id)
+	if err != nil {
+		return err
 	}
-	return err
+	if _, err := s.db.Exec("DELETE FROM sessions WHERE user_id=?", id); err != nil {
+		return fmt.Errorf("password changed, but signing out existing sessions failed: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) CreateSession(userID int64, ttl time.Duration) (token, csrf string, err error) {
@@ -338,14 +354,17 @@ func (s *Store) Session(token string) (*User, string, error) {
 		return nil, "", errors.New("not signed in")
 	}
 	if t, _ := time.Parse(time.RFC3339Nano, exp); time.Now().After(t) {
-		s.db.Exec("DELETE FROM sessions WHERE token_hash=?", bpcrypto.TokenHash(token))
+		// Expired sessions are rejected on every lookup, so removing the row is
+		// only housekeeping; the caller just needs to know it expired.
+		_, _ = s.db.Exec("DELETE FROM sessions WHERE token_hash=?", bpcrypto.TokenHash(token))
 		return nil, "", errors.New("session expired")
 	}
 	return &u, csrf, nil
 }
 
-func (s *Store) DeleteSession(token string) {
-	s.db.Exec("DELETE FROM sessions WHERE token_hash=?", bpcrypto.TokenHash(token))
+func (s *Store) DeleteSession(token string) error {
+	_, err := s.db.Exec("DELETE FROM sessions WHERE token_hash=?", bpcrypto.TokenHash(token))
+	return err
 }
 
 // --- agents --------------------------------------------------------------
@@ -459,8 +478,9 @@ func (s *Store) Agents() ([]Agent, error) {
 	return out, nil
 }
 
-func (s *Store) TouchAgent(id int64, version string, docker bool) {
-	s.db.Exec("UPDATE agents SET last_seen=?, version=?, docker=? WHERE id=?", now(), version, docker, id)
+func (s *Store) TouchAgent(id int64, version string, docker bool) error {
+	_, err := s.db.Exec("UPDATE agents SET last_seen=?, version=?, docker=? WHERE id=?", now(), version, docker, id)
+	return err
 }
 
 func (s *Store) RevokeAgent(id int64) error {
@@ -468,6 +488,7 @@ func (s *Store) RevokeAgent(id int64) error {
 	return err
 }
 
-func (s *Store) SetInventory(id int64, inv []byte) {
-	s.db.Exec("UPDATE agents SET inventory=?, last_seen=? WHERE id=?", string(inv), now(), id)
+func (s *Store) SetInventory(id int64, inv []byte) error {
+	_, err := s.db.Exec("UPDATE agents SET inventory=?, last_seen=? WHERE id=?", string(inv), now(), id)
+	return err
 }

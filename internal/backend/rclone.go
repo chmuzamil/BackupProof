@@ -119,8 +119,10 @@ func (c *cmdReader) Close() error {
 	c.ReadCloser.Close()
 	if !c.waited {
 		c.waited = true
-		c.cmd.Process.Kill()
-		c.cmd.Wait()
+		// The reader was abandoned early: stop rclone and reap it. Kill fails only
+		// if it already exited, and Wait then just reports the kill.
+		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
 	}
 	return nil
 }

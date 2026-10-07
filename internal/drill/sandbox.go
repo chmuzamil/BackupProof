@@ -127,7 +127,8 @@ func (s *Sandbox) WaitReady(ctx context.Context, timeout time.Duration, probe ..
 func (s *Sandbox) Remove() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	docker(ctx, "rm", "-f", "-v", s.Name)
+	// Best-effort cleanup: there is no caller that could act on a failure here.
+	_, _ = docker(ctx, "rm", "-f", "-v", s.Name)
 }
 
 func (s *Sandbox) Describe() string {

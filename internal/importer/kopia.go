@@ -45,7 +45,7 @@ func newKopia(ctx context.Context, s Spec) (*kopiaSource, error) {
 	k.env = append(k.env, "KOPIA_CHECK_FOR_UPDATES=false")
 	if s.KopiaConfigFile != "" {
 		if _, err := os.Stat(s.KopiaConfigFile); err != nil {
-			return nil, fmt.Errorf("Kopia settings file: %w", err)
+			return nil, fmt.Errorf("kopia settings file: %w", err)
 		}
 		k.config = s.KopiaConfigFile
 		return k, nil
@@ -61,12 +61,12 @@ func newKopia(ctx context.Context, s Spec) (*kopiaSource, error) {
 	k.config = filepath.Join(dir, "repository.config")
 	args, err := KopiaConnectArgs(s)
 	if err != nil {
-		k.Close()
+		_ = k.Close() // removes the temp config dir; the original error is what matters
 		return nil, err
 	}
 	args = append(args, "--cache-directory="+filepath.Join(dir, "cache"))
 	if _, err := k.run(ctx, args...); err != nil {
-		k.Close()
+		_ = k.Close() // removes the temp config dir; the connect error is what matters
 		return nil, err
 	}
 	return k, nil
@@ -108,7 +108,7 @@ func KopiaConnectArgs(s Spec) ([]string, error) {
 		}
 		return args, nil
 	}
-	return nil, fmt.Errorf("Kopia import supports a folder, S3/B2 or SFTP (got %q)", c.Type)
+	return nil, fmt.Errorf("kopia import supports a folder, S3/B2 or SFTP (got %q)", c.Type)
 }
 
 func (k *kopiaSource) Format() string { return "kopia" }

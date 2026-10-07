@@ -139,7 +139,11 @@ func (d *Decryptor) gpg(f io.Reader) (io.Reader, error) {
 		}
 		for _, k := range keys {
 			if k.PrivateKey != nil && k.PrivateKey.Encrypted {
-				k.PrivateKey.Decrypt([]byte(d.Password))
+				if err := k.PrivateKey.Decrypt([]byte(d.Password)); err != nil {
+					// Leave this key locked: if none unlocks, openpgp asks
+					// again and the next prompt reports "wrong password".
+					continue
+				}
 			}
 		}
 		return nil, nil

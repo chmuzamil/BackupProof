@@ -79,8 +79,8 @@ func (c *client) post(ctx context.Context, path string, in, out any) (int, error
 	}
 	if resp.StatusCode >= 300 {
 		var e struct{ Error string }
-		json.Unmarshal(body, &e)
-		if e.Error == "" {
+		// Non-JSON error bodies (proxies, panics) fall back to the raw text.
+		if err := json.Unmarshal(body, &e); err != nil || e.Error == "" {
 			e.Error = strings.TrimSpace(string(body))
 		}
 		return resp.StatusCode, fmt.Errorf("%s: HTTP %d: %s", path, resp.StatusCode, e.Error)
@@ -313,7 +313,9 @@ func (a *Agent) execute(parent context.Context, lease *protocol.Lease) {
 	}
 	fctx, fcancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer fcancel()
-	jl.flush(fctx)
+	if err := jl.flush(fctx); err != nil {
+		fmt.Fprintln(os.Stderr, "could not upload job log:", err)
+	}
 	if _, err := a.c.post(fctx, fmt.Sprintf("/api/agent/jobs/%d/finish", lease.JobID), fin, nil); err != nil {
 		fmt.Fprintln(os.Stderr, "could not report job result:", err)
 	}
@@ -363,7 +365,9 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 		return res, nil
 	case "drill":
 		work := filepath.Join(a.dir, "drills")
-		os.MkdirAll(work, 0o700)
+		if err := os.MkdirAll(work, 0o700); err != nil {
+			return nil, fmt.Errorf("drill work dir: %w", err)
+		}
 		res, rec, err := ops.DrillAttested(ctx, env, lease.Source, lease.SnapshotID, lease.ExpectedRoot, work)
 		out := map[string]any{}
 		if res != nil {

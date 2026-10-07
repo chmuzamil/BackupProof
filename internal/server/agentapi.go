@@ -56,7 +56,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pk, _ := proof.ParsePublicKey(req.PublicKey)
-	s.store.Audit("agent:"+req.Name, "enroll", fmt.Sprintf("agent #%d host=%s os=%s key=%s", id, req.Hostname, req.OS, pk.KeyID))
+	s.audit("agent:"+req.Name, "enroll", fmt.Sprintf("agent #%d host=%s os=%s key=%s", id, req.Hostname, req.OS, pk.KeyID))
 	writeJSON(w, 200, protocol.EnrollResponse{AgentID: id, AgentToken: tok, ServerKey: s.key.Public().String()})
 }
 
@@ -83,8 +83,13 @@ func (s *Server) wake(agentID int64) {
 func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	a := agentFrom(r)
 	var req protocol.PollRequest
-	readJSON(r, &req)
-	s.store.TouchAgent(a.ID, req.Version, req.Docker)
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := s.store.TouchAgent(a.ID, req.Version, req.Docker); err != nil {
+		s.log.Printf("agent #%d: could not record heartbeat: %v", a.ID, err)
+	}
 	deadline := time.NewTimer(25 * time.Second)
 	defer deadline.Stop()
 	for {
@@ -96,7 +101,9 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		if job != nil {
 			lease, err := s.buildLease(job)
 			if err != nil {
-				s.store.FinishJob(job.ID, a.ID, false, err.Error(), nil)
+				if ferr := s.store.FinishJob(job.ID, a.ID, false, err.Error(), nil); ferr != nil {
+					s.log.Printf("job #%d: could not record failure: %v", job.ID, ferr)
+				}
 				sid := job.SourceID
 				s.alert("job-failed", &sid, nil, fmt.Sprintf("A %s couldn't start: %v", plainKind(job.Kind), err))
 				continue
@@ -125,10 +132,14 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 	if err != nil {
 		return nil, err
 	}
+	verified, err := s.store.VerifiedSnapshots(src.ID)
+	if err != nil {
+		return nil, fmt.Errorf("listing restore-tested snapshots: %w", err)
+	}
 	lease := &protocol.Lease{
 		JobID: job.ID, Kind: job.Kind, Source: src.Spec, Repository: repo.Backend, RepoID: repo.ID,
 		Password: sec.Password, Creds: sec.Credentials, Retention: src.Retention,
-		Verified: s.store.VerifiedSnapshots(src.ID), TSAs: s.tsaURLs(), LeaseSecs: int(leaseDuration.Seconds()),
+		Verified: verified, TSAs: s.tsaURLs(), LeaseSecs: int(leaseDuration.Seconds()),
 	}
 	if head, _ := s.store.LedgerHead(); head != nil {
 		lease.SampleSeed = head.Hash
@@ -155,7 +166,9 @@ func (s *Server) handleJobLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a := agentFrom(r)
-	s.store.TouchAgent(a.ID, a.Version, a.Docker)
+	if err := s.store.TouchAgent(a.ID, a.Version, a.Docker); err != nil {
+		s.log.Printf("agent #%d: could not record heartbeat: %v", a.ID, err)
+	}
 	if err := s.store.ExtendLease(id, a.ID, leaseDuration, req.Lines); err != nil {
 		writeErr(w, 409, err)
 		return
@@ -213,7 +226,10 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		Passed     *bool  `json:"passed"`
 		RTOMs      *int64 `json:"rtoMs"`
 	}
-	json.Unmarshal(st.Predicate, &pred)
+	if err := json.Unmarshal(st.Predicate, &pred); err != nil {
+		writeErr(w, 400, fmt.Errorf("attestation predicate: %w", err))
+		return
+	}
 	wantType := map[string]string{"backup": proof.PredicateBackup, "drill": proof.PredicateDrill}[req.Kind]
 	if st.PredicateType != wantType || req.Kind != job.Kind {
 		writeErr(w, 400, errors.New("attestation kind does not match job"))
@@ -233,7 +249,9 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 			req.Timestamp = nil // keep the proof, drop an invalid timestamp
 		}
 	}
-	s.store.SetRepoID(src.RepoID, pred.RepoID)
+	if err := s.store.SetRepoID(src.RepoID, pred.RepoID); err != nil {
+		s.log.Printf("repository #%d: could not record repository ID: %v", src.RepoID, err)
+	}
 	sid := src.ID
 	row := &ProofRow{Kind: req.Kind, SourceID: &sid, SourceName: src.Name, SnapshotID: req.SnapshotID, Passed: passed,
 		RTOMs: pred.RTOMs, Envelope: req.Envelope, Timestamp: req.Timestamp, Signer: a.Name + " (" + pk.KeyID + ")"}
@@ -305,7 +323,9 @@ func (s *Server) handleFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	if job.Kind == "check" {
 		digest := fmt.Sprintf("%x", jsonDigest(req.Result))
-		s.store.AppendLedger("check", fmt.Sprintf("source#%d job#%d ok=%v", sid, id, req.OK), digest, "", nil)
+		if _, err := s.store.AppendLedger("check", fmt.Sprintf("source#%d job#%d ok=%v", sid, id, req.OK), digest, "", nil); err != nil {
+			s.log.Printf("job #%d: could not append check to ledger: %v", id, err)
+		}
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

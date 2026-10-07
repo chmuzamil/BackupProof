@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -377,5 +378,49 @@ func TestOperatorCannotTakeOverServer(t *testing.T) {
 	// Admins keep full control.
 	if code := admin.do("POST", "/api/sources", src(map[string]any{"kind": "command", "command": "echo ok"}, agents[0].ID), &map[string]int64{}); code != 200 {
 		t.Errorf("admin command source: HTTP %d", code)
+	}
+}
+
+// TestSetupCodeProtectsFirstAdmin: from another machine (here: a request
+// relayed by a reverse proxy) the first admin can only be created with the
+// one-time setup code from the data folder.
+func TestSetupCodeProtectsFirstAdmin(t *testing.T) {
+	dir := t.TempDir()
+	data := filepath.Join(dir, "server")
+	srv, err := server.New(server.Config{DataDir: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	setup := func(code string) int {
+		body := fmt.Sprintf(`{"username":"admin","password":"a-long-admin-password","setupCode":%q}`, code)
+		req, _ := http.NewRequest("POST", ts.URL+"/api/setup", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", "203.0.113.7")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := setup(""); code != http.StatusForbidden {
+		t.Fatalf("setup without code: HTTP %d, want 403", code)
+	}
+	if code := setup("WRONG-CODE"); code != http.StatusForbidden {
+		t.Fatalf("setup with wrong code: HTTP %d, want 403", code)
+	}
+	raw, err := os.ReadFile(filepath.Join(data, "setup-code.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := setup(strings.ToLower(strings.TrimSpace(string(raw)))); code != 200 {
+		t.Fatalf("setup with the right code: HTTP %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(data, "setup-code.txt")); err == nil {
+		t.Fatal("setup code must be removed once the admin exists")
 	}
 }

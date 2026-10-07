@@ -1,0 +1,43 @@
+version: "2"
+
+linters:
+  default: standard
+  settings:
+    errcheck:
+      # Best-effort cleanup whose failure cannot be acted on: closing readers,
+      # files, connections and storage handles, removing temp files,
+      # restoring timestamps/permissions on restored files, rolling back
+      # transactions, and writes to HTTP responses.
+      exclude-functions:
+        # closing readers / files / connections / storage handles
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (*os.File).Close
+        - (*os.Root).Close
+        - (*github.com/pkg/sftp.File).Close
+        - (github.com/chmuzamil/backupproof/internal/backend.Backend).Close
+        - (github.com/chmuzamil/backupproof/internal/importer.Source).Close
+        - (*github.com/chmuzamil/backupproof/internal/repo.Repo).Close
+        - (*github.com/klauspost/compress/zstd.Encoder).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        # removing temp files
+        - os.Remove
+        - os.RemoveAll
+        - (*os.Root).Remove
+        # restoring metadata on restored files
+        - os.Chmod
+        - os.Chtimes
+        - (*os.Root).Chmod
+        - (*os.Root).Chtimes
+        # writing HTTP responses
+        - (net/http.ResponseWriter).Write
+        - (*encoding/json.Encoder).Encode
+        - (*text/template.Template).Execute
+        - (*html/template.Template).Execute
+  exclusions:
+    rules:
+      # Tests fail loudly on their own; unchecked cleanup there is fine.
+      - path: _test\.go
+        linters: [errcheck]

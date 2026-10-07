@@ -256,13 +256,19 @@ func cmdServer(ctx context.Context, args []string) error {
 	key := fs.String("tls-key", "", "TLS key file")
 	noLocal := fs.Bool("no-local-agent", false, "don't protect this machine with the built-in agent")
 	downloads := fs.String("downloads", os.Getenv("BP_DOWNLOADS"), "folder with agent binaries for the install scripts (default DATA/downloads)")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	s, err := server.New(server.Config{DataDir: *data, Listen: *listen, PublicURL: *public, TLSCert: *cert, TLSKey: *key, NoLocalAgent: *noLocal, Downloads: *downloads})
 	if err != nil {
 		return err
 	}
-	defer s.Close()
-	return s.Run(ctx)
+	runErr := s.Run(ctx)
+	// Closing flushes the database; report that failure unless Run already failed.
+	if cerr := s.Close(); cerr != nil && runErr == nil {
+		return fmt.Errorf("closing server: %w", cerr)
+	}
+	return runErr
 }
 
 func envOr(k, def string) string {
@@ -283,7 +289,9 @@ func cmdAgent(ctx context.Context, args []string) error {
 		srv := fs.String("server", "", "control plane URL")
 		tok := fs.String("token", "", "single-use enrollment token")
 		name := fs.String("name", "", "agent name (default: hostname)")
-		fs.Parse(args[1:])
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
 		if *srv == "" || *tok == "" {
 			return errors.New("--server and --token are required")
 		}
@@ -308,7 +316,9 @@ func cmdAgent(ctx context.Context, args []string) error {
 func cmdInit(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	be, _, err := openBackend(ctx, *repoURL)
 	if err != nil {
 		return err
@@ -335,7 +345,9 @@ func cmdBackup(ctx context.Context, args []string) error {
 	tsa := fs.Bool("timestamp", false, "obtain RFC 3161 timestamps from public TSAs")
 	var tags multi
 	fs.Var(&tags, "tag", "tag (repeatable)")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	spec, err := loadSpec(*specPath, *name, fs.Args())
 	if err != nil {
 		return err
@@ -364,7 +376,9 @@ func cmdDrill(ctx context.Context, args []string) error {
 	name := fs.String("name", "", "source name")
 	ref := fs.String("snapshot", "", "snapshot (default latest of source)")
 	tsa := fs.Bool("timestamp", false, "obtain RFC 3161 timestamps from public TSAs")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	spec, err := loadSpec(*specPath, *name, nil)
 	if err != nil {
 		return err
@@ -402,7 +416,9 @@ func cmdDrill(ctx context.Context, args []string) error {
 func cmdSnapshots(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("snapshots", flag.ExitOnError)
 	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	r, _, err := openRepo(ctx, *repoURL)
 	if err != nil {
 		return err
@@ -413,9 +429,13 @@ func cmdSnapshots(ctx context.Context, args []string) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tTIME\tSOURCE\tKIND\tHOST\tENTRIES\tSIZE\tROOT")
+	if _, err := fmt.Fprintln(tw, "ID\tTIME\tSOURCE\tKIND\tHOST\tENTRIES\tSIZE\tROOT"); err != nil {
+		return err
+	}
 	for _, s := range all {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s…\n", s.ID.Short(), s.Time.Local().Format("2006-01-02 15:04"), s.Source.Name, s.Source.Kind, s.Host, s.Entries, human(s.Stats.Bytes), s.Root[:12])
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s…\n", s.ID.Short(), s.Time.Local().Format("2006-01-02 15:04"), s.Source.Name, s.Source.Kind, s.Host, s.Entries, human(s.Stats.Bytes), s.Root[:12]); err != nil {
+			return err
+		}
 	}
 	return tw.Flush()
 }
@@ -437,7 +457,9 @@ func cmdRestore(ctx context.Context, args []string) error {
 	target := fs.String("target", "", "target directory")
 	var include multi
 	fs.Var(&include, "include", "restore only this path (repeatable)")
-	fs.Parse(reorder(args))
+	if err := fs.Parse(reorder(args)); err != nil {
+		return err
+	}
 	if *target == "" || fs.NArg() != 1 {
 		return errors.New("usage: backupproof restore --repo REPO --target DIR SNAPSHOT")
 	}
@@ -471,7 +493,9 @@ func cmdCheck(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
 	pct := fs.Float64("read-data", 0, "percent of data to download and verify (0-100)")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	r, _, err := openRepo(ctx, *repoURL)
 	if err != nil {
 		return err
@@ -506,7 +530,9 @@ func cmdForget(ctx context.Context, args []string) error {
 	fs.IntVar(&p.KeepYearly, "keep-yearly", 0, "")
 	prune := fs.Bool("prune", false, "also delete unreferenced data")
 	dry := fs.Bool("dry-run", false, "only show what would be forgotten")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	if *src == "" || p.Empty() {
 		return errors.New("--source and at least one --keep-* flag are required")
 	}
@@ -557,15 +583,21 @@ func cmdForget(ctx context.Context, args []string) error {
 func cmdKeyAdd(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("key-add", flag.ExitOnError)
 	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	r, _, err := openRepo(ctx, *repoURL)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
 	fmt.Fprintln(os.Stderr, "new password for the additional key slot:")
-	os.Unsetenv("BP_PASSWORD")
-	os.Unsetenv("BP_PASSWORD_FILE")
+	if err := os.Unsetenv("BP_PASSWORD"); err != nil {
+		return err
+	}
+	if err := os.Unsetenv("BP_PASSWORD_FILE"); err != nil {
+		return err
+	}
 	pw, err := password(true)
 	if err != nil {
 		return err
@@ -587,7 +619,9 @@ func cmdProof(ctx context.Context, args []string) error {
 	switch sub {
 	case "key":
 		host, _ := os.Hostname()
-		os.MkdirAll(stateDir(), 0o700)
+		if err := os.MkdirAll(stateDir(), 0o700); err != nil {
+			return err
+		}
 		k, err := proof.LoadOrCreateKey(filepath.Join(stateDir(), "signing.key"), "cli@"+host)
 		if err != nil {
 			return err
@@ -597,7 +631,9 @@ func cmdProof(ctx context.Context, args []string) error {
 	case "list":
 		fs := flag.NewFlagSet("proof list", flag.ExitOnError)
 		repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
-		fs.Parse(args)
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
 		r, _, err := openRepo(ctx, *repoURL)
 		if err != nil {
 			return err
@@ -608,7 +644,9 @@ func cmdProof(ctx context.Context, args []string) error {
 			return err
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "DIGEST\tCREATED\tKIND\tSOURCE\tSNAPSHOT\tRESULT\tLEDGER\tTIMESTAMP")
+		if _, err := fmt.Fprintln(tw, "DIGEST\tCREATED\tKIND\tSOURCE\tSNAPSHOT\tRESULT\tLEDGER\tTIMESTAMP"); err != nil {
+			return err
+		}
 		for _, rec := range recs {
 			res, seq, ts := "pass", "-", "-"
 			if !rec.Passed {
@@ -620,14 +658,18 @@ func cmdProof(ctx context.Context, args []string) error {
 			if rec.Timestamp != nil {
 				ts = rec.Timestamp.Time.Format(time.RFC3339)
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", rec.Envelope.Digest()[:12], rec.Created.Local().Format("2006-01-02 15:04"), rec.Kind, rec.Source, rec.SnapshotID[:8], res, seq, ts)
+			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", rec.Envelope.Digest()[:12], rec.Created.Local().Format("2006-01-02 15:04"), rec.Kind, rec.Source, rec.SnapshotID[:8], res, seq, ts); err != nil {
+				return err
+			}
 		}
 		return tw.Flush()
 	case "export":
 		fs := flag.NewFlagSet("proof export", flag.ExitOnError)
 		repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
 		out := fs.String("o", "", "output file (default stdout)")
-		fs.Parse(reorder(args))
+		if err := fs.Parse(reorder(args)); err != nil {
+			return err
+		}
 		if fs.NArg() != 1 {
 			return errors.New("usage: backupproof proof export --repo REPO DIGEST_PREFIX")
 		}
@@ -675,7 +717,9 @@ func cmdProof(ctx context.Context, args []string) error {
 		tsaRoot := fs.String("tsa-root", "", "PEM file with trusted TSA root certificates")
 		reqTS := fs.Bool("require-timestamp", false, "fail without an RFC 3161 timestamp")
 		jsonOut := fs.Bool("json", false, "print the report as JSON")
-		fs.Parse(reorder(args))
+		if err := fs.Parse(reorder(args)); err != nil {
+			return err
+		}
 		if fs.NArg() != 1 {
 			return errors.New("usage: backupproof proof verify BUNDLE.json [--key bpkey1:...]")
 		}
@@ -717,7 +761,9 @@ func cmdProof(ctx context.Context, args []string) error {
 		fs := flag.NewFlagSet("proof verify-pack", flag.ExitOnError)
 		var keys multi
 		fs.Var(&keys, "key", "trusted public key (repeatable)")
-		fs.Parse(reorder(args))
+		if err := fs.Parse(reorder(args)); err != nil {
+			return err
+		}
 		if fs.NArg() != 1 {
 			return errors.New("usage: backupproof proof verify-pack EVIDENCE.json [--key bpkey1:...]")
 		}
@@ -858,7 +904,9 @@ func cmdImport(ctx context.Context, args []string) error {
 	resticPw := fs.String("restic-password-file", "", "restic: password file (e.g. /etc/restic/password)")
 	resticRepo := fs.String("restic-repo", "", "restic: repository address (e.g. b2:bucket:path)")
 	tsa := fs.Bool("timestamp", false, "obtain RFC 3161 timestamps")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	if *name == "" || (*from == "" && *resticEnv == "" && *resticRepo == "") {
 		return errors.New("--name and --from (or --restic-env / --restic-repo) are required")
 	}

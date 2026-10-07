@@ -781,6 +781,8 @@ function renderAuth(errMsg) {
   const user = input({ name: 'username', autocomplete: 'username', required: true, code: true });
   const pass = input({ name: 'password', type: 'password', autocomplete: setup ? 'new-password' : 'current-password', required: true, minlength: setup ? 10 : null });
   const pass2 = input({ name: 'password2', type: 'password', autocomplete: 'new-password', required: true });
+  const needCode = setup && S.status.setupCodeRequired;
+  const code = input({ name: 'setup-code', autocomplete: 'one-time-code', code: true, required: true, placeholder: 'ABCD-EF23…' });
   const err = errBox();
   err.textContent = errMsg || '';
   const form = h('form', {
@@ -790,15 +792,22 @@ function renderAuth(errMsg) {
       clearErrors(form);
       if (setup && pass.value.length < 10) return fieldError(pass, 'The password must be at least 10 characters.');
       if (setup && pass.value !== pass2.value) return fieldError(pass2, 'The passwords do not match. Type the same password twice.');
+      if (needCode && !code.value.trim()) return fieldError(code, 'Enter the setup code shown when BackupProof was installed.');
       try {
-        const r = await api(setup ? '/setup' : '/login', { method: 'POST', body: { username: user.value.trim(), password: pass.value }, noAuthRedirect: true });
+        const body = { username: user.value.trim(), password: pass.value };
+        if (needCode) body.setupCode = code.value.trim();
+        const r = await api(setup ? '/setup' : '/login', { method: 'POST', body, noAuthRedirect: true });
         S.user = r.user; S.csrf = r.csrf || S.csrf;
         if (S.status) S.status.setupRequired = false;
         if (!location.hash || location.hash === '#/') history.replaceState(null, '', '#/dashboard');
         renderShell();
-      } catch (ex) { showErr(err, ex.status === 401 ? 'Wrong username or password. Check both and try again.' : ex.message); }
+      } catch (ex) {
+        if (needCode && ex.status === 403) return fieldError(code, ex.message);
+        showErr(err, ex.status === 401 ? 'Wrong username or password. Check both and try again.' : ex.message);
+      }
     }, setup ? 'Creating…' : 'Signing in…'),
   },
+  needCode ? field('Setup code', code, 'Shown by the installer (and saved in setup-code.txt in the data folder). It makes sure only you can create this account.') : null,
   field('Username', user),
   field('Password', pass, setup ? 'At least 10 characters. You will use it to sign in to this dashboard.' : null),
   setup ? field('Type the password again', pass2) : null,

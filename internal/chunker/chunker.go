@@ -33,7 +33,7 @@ var DefaultParams = Params{Min: MinSize, Avg: AvgSize, Max: MaxSize}
 func GearTable(seed []byte) *[256]uint64 {
 	var table [256]uint64
 	h := blake3.New(32, seed)
-	h.Write([]byte("backupproof/chunker/gear/v1"))
+	_, _ = h.Write([]byte("backupproof/chunker/gear/v1")) // hash writes never fail
 	xof := h.XOF()
 	var buf [8]byte
 	for i := range table {

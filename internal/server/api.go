@@ -116,8 +116,13 @@ func (s *Server) routes(mux *http.ServeMux) {
 // --- session ---------------------------------------------------------------
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	users, err := s.store.UserCount()
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
 	pub := s.publicURL()
-	resp := map[string]any{"version": engine.Version, "setupRequired": s.store.UserCount() == 0, "user": nil, "csrf": "",
+	resp := map[string]any{"version": engine.Version, "setupRequired": users == 0, "setupCodeRequired": users == 0 && !isLocalRequest(r), "user": nil, "csrf": "",
 		"publicUrl": pub, "publicUrlIsLocal": strings.Contains(pub, "localhost") || strings.Contains(pub, "127.0.0.1")}
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		if u, csrf, err := s.store.Session(c.Value); err == nil {
@@ -139,15 +144,27 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u *User) {
 }
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Username, Password string }
+	var req struct{ Username, Password, SetupCode string }
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
 	s.store.wmu.Lock()
-	if s.store.UserCount() > 0 {
+	users, err := s.store.UserCount()
+	if err != nil {
+		s.store.wmu.Unlock()
+		writeErr(w, 500, err)
+		return
+	}
+	if users > 0 {
 		s.store.wmu.Unlock()
 		writeErr(w, 409, errors.New("setup already completed"))
+		return
+	}
+	if err := s.checkSetupCode(r, req.SetupCode); err != nil {
+		s.store.wmu.Unlock()
+		time.Sleep(500 * time.Millisecond)
+		writeErr(w, http.StatusForbidden, err)
 		return
 	}
 	id, err := s.store.CreateUser(strings.TrimSpace(req.Username), req.Password, "admin")
@@ -156,7 +173,8 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	s.store.Audit(req.Username, "setup", "created initial admin account")
+	s.removeSetupCode()
+	s.audit(req.Username, "setup", "created initial admin account")
 	s.startSession(w, r, &User{ID: id, Username: req.Username, Role: "admin"})
 }
 
@@ -176,10 +194,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		s.store.DeleteSession(c.Value)
-	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		if err := s.store.DeleteSession(c.Value); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -401,7 +422,7 @@ func (s *Server) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	s.store.Audit(s.actor(r), "save-source", fmt.Sprintf("source %q (#%d) kind=%s agent=%d repo=%d backup=%q drill=%q", src.Name, id, src.Spec.Kind, src.AgentID, src.RepoID, src.BackupCron, src.DrillCron))
+	s.audit(s.actor(r), "save-source", fmt.Sprintf("source %q (#%d) kind=%s agent=%d repo=%d backup=%q drill=%q", src.Name, id, src.Spec.Kind, src.AgentID, src.RepoID, src.BackupCron, src.DrillCron))
 	writeJSON(w, 200, map[string]int64{"id": id})
 }
 
@@ -420,7 +441,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	s.store.Audit(s.actor(r), "delete-source", fmt.Sprintf("source %q (#%d); repository data and proofs are retained", src.Name, id))
+	s.audit(s.actor(r), "delete-source", fmt.Sprintf("source %q (#%d); repository data and proofs are retained", src.Name, id))
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -455,7 +476,7 @@ func (s *Server) handleRunSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.wake(agent)
-	s.store.Audit(s.actor(r), "run-"+req.Kind, fmt.Sprintf("source %q job #%d", src.Name, jobID))
+	s.audit(s.actor(r), "run-"+req.Kind, fmt.Sprintf("source %q job #%d", src.Name, jobID))
 	writeJSON(w, 200, map[string]int64{"jobId": jobID})
 }
 
@@ -507,7 +528,7 @@ func (s *Server) handleEnrollToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	s.store.Audit(s.actor(r), "create-enroll-token", "single-use, expires in 1h")
+	s.audit(s.actor(r), "create-enroll-token", "single-use, expires in 1h")
 	url := s.publicURL()
 	writeJSON(w, 200, map[string]any{
 		"token":    tok,
@@ -527,7 +548,7 @@ func (s *Server) handleRevokeAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	s.store.Audit(s.actor(r), "revoke-agent", fmt.Sprintf("agent #%d", id))
+	s.audit(s.actor(r), "revoke-agent", fmt.Sprintf("agent #%d", id))
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -568,7 +589,7 @@ func (s *Server) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	s.store.Audit(s.actor(r), "create-repository", fmt.Sprintf("repository %q type=%s lock=%s/%dd", req.Name, req.Backend.Type, req.Backend.ObjectLockMode, req.Backend.ObjectLockDays))
+	s.audit(s.actor(r), "create-repository", fmt.Sprintf("repository %q type=%s lock=%s/%dd", req.Name, req.Backend.Type, req.Backend.ObjectLockMode, req.Backend.ObjectLockDays))
 	writeJSON(w, 200, map[string]int64{"id": id})
 }
 
@@ -666,7 +687,7 @@ func (s *Server) handlePutNotify(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	s.store.Audit(s.actor(r), "update-notifications", "")
+	s.audit(s.actor(r), "update-notifications", "")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -679,8 +700,15 @@ func (s *Server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) tsaURLs() []string {
+	raw := s.store.Setting("tsa")
+	if raw == "" {
+		return nil
+	}
 	var urls []string
-	jsonUnmarshal([]byte(s.store.Setting("tsa")), &urls)
+	if err := jsonUnmarshal([]byte(raw), &urls); err != nil {
+		s.log.Printf("warning: ignoring unreadable TSA setting: %v", err)
+		return nil
+	}
 	return urls
 }
 
@@ -701,8 +729,11 @@ func (s *Server) handlePutTSA(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	b, _ := jsonMarshal(nonNil(req.URLs))
-	s.store.SetSetting("tsa", string(b))
-	s.store.Audit(s.actor(r), "update-tsa", strings.Join(req.URLs, ", "))
+	if err := s.store.SetSetting("tsa", string(b)); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	s.audit(s.actor(r), "update-tsa", strings.Join(req.URLs, ", "))
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -732,7 +763,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	s.store.Audit(s.actor(r), "create-user", fmt.Sprintf("%s (%s)", req.Username, req.Role))
+	s.audit(s.actor(r), "create-user", fmt.Sprintf("%s (%s)", req.Username, req.Role))
 	writeJSON(w, 200, map[string]int64{"id": id})
 }
 
@@ -746,7 +777,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	s.store.Audit(s.actor(r), "delete-user", fmt.Sprintf("user #%d", id))
+	s.audit(s.actor(r), "delete-user", fmt.Sprintf("user #%d", id))
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -761,7 +792,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	s.store.Audit(u.Username, "change-password", "")
+	s.audit(u.Username, "change-password", "")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -780,8 +811,11 @@ func (s *Server) handlePutServerSettings(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 400, errors.New("the address must start with https:// (or http:// for testing)"))
 		return
 	}
-	s.store.SetSetting("publicUrl", u)
-	s.store.Audit(s.actor(r), "update-public-url", u)
+	if err := s.store.SetSetting("publicUrl", u); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	s.audit(s.actor(r), "update-public-url", u)
 	writeJSON(w, 200, map[string]any{"ok": true, "publicUrl": s.publicURL()})
 }
 

@@ -27,20 +27,27 @@ type NotifySettings struct {
 
 func (s *Server) notifySettings() NotifySettings {
 	var n NotifySettings
-	json.Unmarshal([]byte(s.store.Setting("notify")), &n)
+	raw := s.store.Setting("notify")
+	if raw == "" {
+		return n
+	}
+	if err := json.Unmarshal([]byte(raw), &n); err != nil {
+		s.log.Printf("warning: ignoring unreadable notification settings: %v", err)
+		return NotifySettings{}
+	}
 	return n
 }
 
 func (s *Server) alert(kind string, sourceID, agentID *int64, msg string) {
 	if s.store.RaiseAlert(kind, sourceID, agentID, msg) {
 		s.log.Printf("ALERT %s: %s", kind, msg)
-		go s.send("BackupProof alert: "+kind, msg)
+		go func() { _ = s.send("BackupProof alert: "+kind, msg) }() // send logs its own failures
 	}
 }
 
 func (s *Server) resolve(kind string, sourceID, agentID *int64) {
 	if s.store.ResolveAlerts(kind, sourceID, agentID) > 0 {
-		go s.send("BackupProof resolved: "+kind, "Resolved: "+kind)
+		go func() { _ = s.send("BackupProof resolved: "+kind, "Resolved: "+kind) }() // send logs its own failures
 	}
 }
 

@@ -177,8 +177,11 @@ func (s *Server) buildEvidence(from, to time.Time) (*EvidencePack, error) {
 		if sum == nil {
 			kind := ""
 			var pred struct{ Kind string }
-			json.Unmarshal(p.Predicate, &pred)
-			kind = pred.Kind
+			// The predicate passed signature verification when stored; if it is
+			// unreadable the summary just shows no kind.
+			if err := json.Unmarshal(p.Predicate, &pred); err == nil {
+				kind = pred.Kind
+			}
 			sum = &SourceSummary{Source: p.SourceName, Kind: kind}
 			bySource[p.SourceName] = sum
 		}
@@ -235,7 +238,7 @@ func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	s.store.Audit(s.actor(r), "export-evidence", fmt.Sprintf("%s to %s, %d proofs", from.Format("2006-01-02"), to.Format("2006-01-02"), len(pack.Proofs)))
+	s.audit(s.actor(r), "export-evidence", fmt.Sprintf("%s to %s, %d proofs", from.Format("2006-01-02"), to.Format("2006-01-02"), len(pack.Proofs)))
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="backupproof-evidence-%s-%s.json"`, from.Format("20060102"), to.Format("20060102")))
 	writeJSON(w, 200, pack)
 }

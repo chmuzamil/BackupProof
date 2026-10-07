@@ -56,14 +56,15 @@ func unpack(ctx context.Context, b *engine.Builder, name string, mtime time.Time
 		_, err := b.AddReader(ctx, base, 0o644, mtime, dr)
 		return true, err
 	case "tar", "tgz", "tzst":
-		var tr io.Reader = r
-		if kind == "tgz" {
+		tr := r
+		switch kind {
+		case "tgz":
 			gz, err := gzip.NewReader(r)
 			if err != nil {
 				return false, err
 			}
 			tr = gz
-		} else if kind == "tzst" {
+		case "tzst":
 			zr, err := zstd.NewReader(r)
 			if err != nil {
 				return false, err

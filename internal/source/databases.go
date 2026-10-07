@@ -186,8 +186,13 @@ func backupMongo(ctx context.Context, s Spec, b *engine.Builder, log engine.Logg
 			return nil, err
 		}
 		defer os.Remove(cfg.Name())
-		fmt.Fprintf(cfg, "password: %q\n", s.Password)
-		cfg.Close()
+		if _, err := fmt.Fprintf(cfg, "password: %q\n", s.Password); err != nil {
+			cfg.Close()
+			return nil, err
+		}
+		if err := cfg.Close(); err != nil {
+			return nil, err
+		}
 		args = append(args, "--config="+cfg.Name())
 	}
 	if s.Database != "" {
@@ -273,10 +278,16 @@ func SQLiteInspect(ctx context.Context, path string) (map[string]int64, string, 
 	var tables []string
 	for rows.Next() {
 		var n string
-		rows.Scan(&n)
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return nil, "", err
+		}
 		tables = append(tables, n)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
 	counts := map[string]int64{}
 	for _, t := range tables {
 		var n int64

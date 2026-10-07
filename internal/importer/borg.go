@@ -136,7 +136,8 @@ func (g *borgSource) Fill(ctx context.Context, p Point, b *engine.Builder, log e
 	}
 	ferr := AddTarStream(ctx, b, stdout, "")
 	if ferr != nil {
-		io.Copy(io.Discard, stdout)
+		// Drain the pipe so borg can exit; its own failure is reported by Wait.
+		_, _ = io.Copy(io.Discard, stdout)
 	}
 	if err := c.Wait(); err != nil {
 		return borgError("export-tar", err, stderr.String())

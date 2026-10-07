@@ -16,21 +16,26 @@ There are three things to know:
 | **Storage** | Where the backup copies are kept: a disk, Backblaze B2, Amazon S3, and so on. |
 | **Servers** | The machines whose data you protect. The machine running the dashboard is already connected as **This server**. |
 
-## Step 1: Start the dashboard
+## Step 1: Install the dashboard
 
-**On Windows**, open PowerShell in the BackupProof folder:
+Copy one line and paste it into a terminal on the machine that will run the dashboard.
 
-```bash
-.\backupproof.exe server
-```
-
-**On Linux**, Docker is the easiest way:
+**Linux or Mac** (open Terminal):
 
 ```bash
-docker compose up -d
+curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh
 ```
 
-Open **http://localhost:8420** in your browser and create your admin account.
+**Windows** (right-click Start → **Terminal (Admin)**):
+
+```powershell
+irm https://github.com/chmuzamil/BackupProof/releases/latest/download/install.ps1 | iex
+```
+
+When it finishes, it shows two things:
+
+- **Open:** the address of your dashboard. Open it in your browser.
+- **Setup code:** type it in when you create your admin account. It makes sure nobody else can create the account before you. You only need it once, and not at all if you open the dashboard on the same computer.
 
 The computer running the dashboard is protected straight away. You don't need to install anything else on it.
 

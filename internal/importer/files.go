@@ -118,7 +118,7 @@ func (s *filesSource) List(ctx context.Context) ([]Point, error) {
 		var total int64
 		var newest time.Time
 		for _, o := range list {
-			fmt.Fprintf(h, "%s\x00%d\x00%d\n", o.Key, o.Size, o.Modified.Unix())
+			_, _ = fmt.Fprintf(h, "%s\x00%d\x00%d\n", o.Key, o.Size, o.Modified.Unix()) // hash writes never fail
 			total += o.Size
 			if o.Modified.After(newest) {
 				newest = o.Modified

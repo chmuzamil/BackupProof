@@ -129,7 +129,7 @@ func ParseID(s string) (ID, error) {
 func (k *MasterKeys) ContentID(plain []byte) ID {
 	var id ID
 	h := blake3.New(32, k.MAC)
-	h.Write(plain)
+	_, _ = h.Write(plain) // hash writes never fail
 	copy(id[:], h.Sum(nil))
 	return id
 }
@@ -166,7 +166,7 @@ func open(key, ct, aad []byte) ([]byte, error) {
 func Hash(parts ...[]byte) ID {
 	h := blake3.New(32, nil)
 	for _, p := range parts {
-		h.Write(p)
+		_, _ = h.Write(p) // hash writes never fail
 	}
 	var id ID
 	copy(id[:], h.Sum(nil))

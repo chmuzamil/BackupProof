@@ -168,7 +168,7 @@ func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.E
 			root.Remove(tmp)
 			return err
 		}
-		h.Write(data)
+		_, _ = h.Write(data) // hash writes never fail
 		size += int64(len(data))
 		if _, err := f.Write(data); err != nil {
 			f.Close()

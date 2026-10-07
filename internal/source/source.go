@@ -233,7 +233,8 @@ func streamCommand(ctx context.Context, b *engine.Builder, name string, cmd *exe
 	}
 	e, serr := b.AddStream(ctx, name, stdout)
 	if serr != nil {
-		io.Copy(io.Discard, stdout)
+		// Drain the pipe so the child can exit; its own failure is reported by Wait.
+		_, _ = io.Copy(io.Discard, stdout)
 	}
 	werr := cmd.Wait()
 	if werr != nil {

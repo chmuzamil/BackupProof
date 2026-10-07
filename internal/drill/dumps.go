@@ -22,7 +22,8 @@ func dumpChecks(ctx context.Context, r *runner, dir string, spec source.Spec) {
 		return
 	}
 	var dumps []string
-	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+	// The callback never returns an error (unreadable entries are skipped), so neither does WalkDir.
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() {
 			return nil
 		}
@@ -92,7 +93,9 @@ FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema NO
 				return "", err
 			}
 			var tables, rows int64
-			fmt.Sscan(strings.TrimSpace(lastLine(counts)), &tables, &rows)
+			if _, err := fmt.Sscan(strings.TrimSpace(lastLine(counts)), &tables, &rows); err != nil {
+				return "", fmt.Errorf("reading table counts from %q: %w", strings.TrimSpace(lastLine(counts)), err)
+			}
 			if tables == 0 {
 				return "", fmt.Errorf("the dump loaded but contains no tables: %s", strings.TrimSpace(lastLine(strings.TrimSuffix(out, "\n"))))
 			}

@@ -60,11 +60,13 @@ func (s *Server) schedulerLoop(ctx context.Context) {
 }
 
 func (s *Server) tick(now time.Time) {
-	if expired, err := s.store.ExpireLeases(); err == nil {
-		for _, j := range expired {
-			sid := j.SourceID
-			s.alert("job-failed", &sid, nil, fmt.Sprintf("A %s stopped because the server running it stopped responding.", plainKind(j.Kind)))
-		}
+	expired, err := s.store.ExpireLeases()
+	if err != nil {
+		s.log.Printf("scheduler: expiring leases: %v", err)
+	}
+	for _, j := range expired {
+		sid := j.SourceID
+		s.alert("job-failed", &sid, nil, fmt.Sprintf("A %s stopped because the server running it stopped responding.", plainKind(j.Kind)))
 	}
 	sources, err := s.store.Sources()
 	if err != nil {
@@ -78,7 +80,9 @@ func (s *Server) tick(now time.Time) {
 		nb, nd := src.NextBackup, src.NextDrill
 		if nb == nil || nd == nil {
 			b, d := nextRun(src.BackupCron, src.Name, now), nextRun(src.DrillCron, src.Name+"/drill", now)
-			s.store.SetNextRuns(src.ID, b, d)
+			if err := s.store.SetNextRuns(src.ID, b, d); err != nil {
+				s.log.Printf("%s: could not save next run times: %v", src.Name, err)
+			}
 			continue
 		}
 		changed := false
@@ -96,7 +100,9 @@ func (s *Server) tick(now time.Time) {
 			d, changed = nextRun(src.DrillCron, src.Name+"/drill", now), true
 		}
 		if changed {
-			s.store.SetNextRuns(src.ID, b, d)
+			if err := s.store.SetNextRuns(src.ID, b, d); err != nil {
+				s.log.Printf("%s: could not save next run times: %v", src.Name, err)
+			}
 		}
 	}
 	s.watchdog(now, sources)

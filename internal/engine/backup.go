@@ -21,7 +21,9 @@ import (
 	"lukechampine.com/blake3"
 )
 
-const Version = "backupproof/0.1.0"
+// Version is stamped at release time with
+// -ldflags "-X github.com/chmuzamil/backupproof/internal/engine.Version=backupproof/X.Y.Z".
+var Version = "backupproof/0.1.0"
 
 // Logger receives human readable progress lines.
 type Logger func(format string, args ...any)
@@ -112,14 +114,17 @@ func (b *Builder) add(e *snapshot.Entry) error {
 }
 
 // addParents records the directory chain of p so restores recreate it.
-func (b *Builder) addParents(p string) {
+func (b *Builder) addParents(p string) error {
 	for dir := pathDir(p); dir != ""; dir = pathDir(dir) {
 		if b.seen[dir] {
-			return
+			return nil
 		}
-		b.add(&snapshot.Entry{Path: dir, Type: snapshot.TypeDir})
+		if err := b.add(&snapshot.Entry{Path: dir, Type: snapshot.TypeDir}); err != nil {
+			return err
+		}
 		b.stats.Dirs++
 	}
+	return nil
 }
 
 func pathDir(p string) string {
@@ -189,7 +194,9 @@ func (b *Builder) AddPath(ctx context.Context, root string) error {
 		if mp == "" {
 			return nil
 		}
-		b.addParents(mp)
+		if err := b.addParents(mp); err != nil {
+			return err
+		}
 		switch {
 		case info.Mode()&fs.ModeSymlink != 0:
 			target, err := os.Readlink(p)
@@ -245,7 +252,9 @@ func (b *Builder) addFile(ctx context.Context, osPath, mp string, info fs.FileIn
 // AddStream stores a generated artifact (e.g. a database dump) read from r.
 func (b *Builder) AddStream(ctx context.Context, name string, r io.Reader) (*snapshot.Entry, error) {
 	mp := snapshot.CleanPath(name)
-	b.addParents(mp)
+	if err := b.addParents(mp); err != nil {
+		return nil, err
+	}
 	e := &snapshot.Entry{Path: mp, Type: snapshot.TypeStream, Mode: 0o600, MTime: time.Now().UnixNano()}
 	if err := b.chunkInto(ctx, r, e); err != nil {
 		return nil, err
@@ -342,7 +351,9 @@ func (b *Builder) AddReader(ctx context.Context, name string, mode uint32, mtime
 	if mp == "" {
 		return nil, fmt.Errorf("empty path")
 	}
-	b.addParents(mp)
+	if err := b.addParents(mp); err != nil {
+		return nil, err
+	}
 	if mode == 0 {
 		mode = 0o644
 	}
@@ -380,10 +391,11 @@ func (b *Builder) AddTree(ctx context.Context, osRoot, prefix string) error {
 		}
 		switch {
 		case info.IsDir():
-			b.addParents(mp + "/x")
-			return nil
+			return b.addParents(mp + "/x")
 		case info.Mode().IsRegular():
-			b.addParents(mp)
+			if err := b.addParents(mp); err != nil {
+				return err
+			}
 			return b.addFile(ctx, p, mp, info)
 		}
 		return nil

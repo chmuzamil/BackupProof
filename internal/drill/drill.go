@@ -157,7 +157,8 @@ func filesChecks(_ context.Context, r *runner, dir string, spec source.Spec) {
 	if spec.Drill.MinFiles > 0 {
 		r.check("minimum-file-count", func() (string, error) {
 			n := 0
-			filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+			// The callback never returns an error (unreadable entries are skipped), so neither does WalkDir.
+			_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
 				if err == nil && d.Type().IsRegular() {
 					n++
 				}
@@ -249,7 +250,8 @@ func parseFloat(s string) (float64, error) {
 
 func findStream(dir, prefix string) (string, error) {
 	var found string
-	filepath.WalkDir(filepath.Join(dir, prefix), func(p string, d os.DirEntry, err error) error {
+	// The callback never returns an error (unreadable entries are skipped), so neither does WalkDir.
+	_ = filepath.WalkDir(filepath.Join(dir, prefix), func(p string, d os.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() && found == "" && !strings.HasSuffix(p, "globals.sql") {
 			found = p
 		}

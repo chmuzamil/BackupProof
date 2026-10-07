@@ -57,7 +57,7 @@ func NewSFTP(c Config, creds Credentials) (*SFTP, error) {
 	}
 	client, err := sftp.NewClient(conn)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close() // cleanup on the error path; the NewClient error is what matters
 		return nil, err
 	}
 	return &SFTP{conn: conn, client: client, root: c.Path, loc: fmt.Sprintf("sftp://%s@%s:%d%s", c.User, c.Host, port, c.Path)}, nil
@@ -165,7 +165,8 @@ func (s *SFTP) Delete(_ context.Context, key string) error {
 func (s *SFTP) Location() string { return s.loc }
 
 func (s *SFTP) Close() error {
-	s.client.Close()
+	// Closing the ssh connection below tears the sftp session down regardless.
+	_ = s.client.Close()
 	return s.conn.Close()
 }
 

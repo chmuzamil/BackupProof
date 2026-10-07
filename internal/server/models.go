@@ -59,11 +59,15 @@ func (s *Store) Repositories() ([]Repository, error) {
 	for rows.Next() {
 		var r Repository
 		var b string
-		rows.Scan(&r.ID, &r.Name, &b, &r.RepoID, &r.Created)
-		json.Unmarshal([]byte(b), &r.Backend)
+		if err := rows.Scan(&r.ID, &r.Name, &b, &r.RepoID, &r.Created); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(b), &r.Backend); err != nil {
+			return nil, fmt.Errorf("repository %q: storage settings: %w", r.Name, err)
+		}
 		out = append(out, r)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (s *Store) Repository(id int64) (*Repository, *RepoSecret, error) {
@@ -73,7 +77,9 @@ func (s *Store) Repository(id int64) (*Repository, *RepoSecret, error) {
 	if err := s.db.QueryRow("SELECT id,name,backend,IFNULL(repo_id,''),created,secret FROM repositories WHERE id=?", id).Scan(&r.ID, &r.Name, &b, &r.RepoID, &r.Created, &ct); err != nil {
 		return nil, nil, fmt.Errorf("repository %d not found", id)
 	}
-	json.Unmarshal([]byte(b), &r.Backend)
+	if err := json.Unmarshal([]byte(b), &r.Backend); err != nil {
+		return nil, nil, fmt.Errorf("repository %q: storage settings: %w", r.Name, err)
+	}
 	var sec RepoSecret
 	if err := s.open(ct, "repo:"+r.Name, &sec); err != nil {
 		return nil, nil, err
@@ -81,8 +87,9 @@ func (s *Store) Repository(id int64) (*Repository, *RepoSecret, error) {
 	return &r, &sec, nil
 }
 
-func (s *Store) SetRepoID(id int64, repoID string) {
-	s.db.Exec("UPDATE repositories SET repo_id=? WHERE id=? AND (repo_id IS NULL OR repo_id='')", repoID, id)
+func (s *Store) SetRepoID(id int64, repoID string) error {
+	_, err := s.db.Exec("UPDATE repositories SET repo_id=? WHERE id=? AND (repo_id IS NULL OR repo_id='')", repoID, id)
+	return err
 }
 
 // --- sources -------------------------------------------------------------
@@ -165,7 +172,9 @@ func (s *Store) SaveSource(src *Source, sec *SourceSecret) (int64, error) {
 	if !sec.empty() {
 		if src.ID != 0 {
 			var oldCT []byte
-			s.db.QueryRow("SELECT secret FROM sources WHERE id=?", src.ID).Scan(&oldCT)
+			if err := s.db.QueryRow("SELECT secret FROM sources WHERE id=?", src.ID).Scan(&oldCT); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return 0, err
+			}
 			var old SourceSecret
 			if s.open(oldCT, "source:"+src.Name, &old) == nil {
 				sec.merge(old)
@@ -207,8 +216,12 @@ func scanSource(row interface{ Scan(...any) error }) (*Source, error) {
 	if verifier.Valid {
 		src.VerifierID = &verifier.Int64
 	}
-	json.Unmarshal([]byte(spec), &src.Spec)
-	json.Unmarshal([]byte(ret), &src.Retention)
+	if err := json.Unmarshal([]byte(spec), &src.Spec); err != nil {
+		return nil, fmt.Errorf("source %q: spec: %w", src.Name, err)
+	}
+	if err := json.Unmarshal([]byte(ret), &src.Retention); err != nil {
+		return nil, fmt.Errorf("source %q: retention: %w", src.Name, err)
+	}
 	src.NextBackup, src.NextDrill = parseTime(nb), parseTime(nd)
 	return &src, nil
 }
@@ -245,7 +258,9 @@ func (s *Store) SourceWithSecrets(id int64) (*Source, error) {
 		return nil, err
 	}
 	var ct []byte
-	s.db.QueryRow("SELECT secret FROM sources WHERE id=?", id).Scan(&ct)
+	if err := s.db.QueryRow("SELECT secret FROM sources WHERE id=?", id).Scan(&ct); err != nil {
+		return nil, err
+	}
 	var sec SourceSecret
 	if err := s.open(ct, "source:"+src.Name, &sec); err != nil {
 		return nil, err
@@ -265,9 +280,10 @@ func (s *Store) DeleteSource(id int64) error {
 	return err
 }
 
-func (s *Store) SetNextRuns(id int64, nextBackup, nextDrill time.Time) {
-	s.db.Exec("UPDATE sources SET next_backup=?, next_drill=? WHERE id=?",
+func (s *Store) SetNextRuns(id int64, nextBackup, nextDrill time.Time) error {
+	_, err := s.db.Exec("UPDATE sources SET next_backup=?, next_drill=? WHERE id=?",
 		nextBackup.UTC().Format(time.RFC3339Nano), nextDrill.UTC().Format(time.RFC3339Nano), id)
+	return err
 }
 
 // --- jobs ----------------------------------------------------------------
@@ -289,7 +305,9 @@ type Job struct {
 
 func (s *Store) EnqueueJob(kind string, sourceID, agentID int64, trigger string) (int64, error) {
 	var n int
-	s.db.QueryRow("SELECT count(*) FROM jobs WHERE source_id=? AND kind=? AND state IN ('queued','running')", sourceID, kind).Scan(&n)
+	if err := s.db.QueryRow("SELECT count(*) FROM jobs WHERE source_id=? AND kind=? AND state IN ('queued','running')", sourceID, kind).Scan(&n); err != nil {
+		return 0, err
+	}
 	if n > 0 {
 		return 0, errors.New("a " + kind + " job for this source is already queued or running")
 	}
@@ -360,18 +378,25 @@ func (s *Store) ExpireLeases() ([]Job, error) {
 	var ids []int64
 	for rows.Next() {
 		var id int64
-		rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
 		ids = append(ids, id)
 	}
 	rows.Close()
 	var out []Job
+	var errs []error
 	for _, id := range ids {
-		s.db.Exec("UPDATE jobs SET state='failed', finished=?, error='the server running this stopped responding' WHERE id=? AND state='running'", now(), id)
+		if _, err := s.db.Exec("UPDATE jobs SET state='failed', finished=?, error='the server running this stopped responding' WHERE id=? AND state='running'", now(), id); err != nil {
+			errs = append(errs, fmt.Errorf("job #%d: %w", id, err))
+			continue
+		}
 		if j, err := s.Job(id); err == nil {
 			out = append(out, *j)
 		}
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 const jobCols = "id,kind,source_id,agent_id,state,trigger,created,started,finished,IFNULL(error,''),log,IFNULL(result,'')"
@@ -483,13 +508,17 @@ func scanProof(row interface{ Scan(...any) error }, full bool) (*ProofRow, error
 		p.RTOMs = &rto.Int64
 	}
 	var e proof.Envelope
-	json.Unmarshal([]byte(env), &e)
+	if err := json.Unmarshal([]byte(env), &e); err != nil {
+		return nil, fmt.Errorf("proof #%d: envelope: %w", p.ID, err)
+	}
 	if st, err := proof.ParseStatement(&e); err == nil {
 		p.Predicate = st.Predicate
 	}
 	if ts.Valid {
 		p.Timestamp = &proof.Timestamp{}
-		json.Unmarshal([]byte(ts.String), p.Timestamp)
+		if err := json.Unmarshal([]byte(ts.String), p.Timestamp); err != nil {
+			return nil, fmt.Errorf("proof #%d: timestamp: %w", p.ID, err)
+		}
 	}
 	if full {
 		p.Envelope = &e
@@ -556,19 +585,21 @@ func (s *Store) LastProof(sourceID int64, kind string, passedOnly bool) *ProofRo
 }
 
 // VerifiedSnapshots lists snapshot IDs with a passing drill (for retention).
-func (s *Store) VerifiedSnapshots(sourceID int64) []string {
+func (s *Store) VerifiedSnapshots(sourceID int64) ([]string, error) {
 	rows, err := s.db.Query("SELECT DISTINCT snapshot_id FROM proofs WHERE source_id=? AND kind='drill' AND passed=1", sourceID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	var out []string
 	for rows.Next() {
 		var id string
-		rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
 		out = append(out, id)
 	}
-	return out
+	return out, rows.Err()
 }
 
 // --- alerts --------------------------------------------------------------
@@ -618,7 +649,9 @@ func (s *Store) Alerts(openOnly bool, limit int) ([]Alert, error) {
 		var a Alert
 		var sid, aid sql.NullInt64
 		var res sql.NullString
-		rows.Scan(&a.ID, &sid, &aid, &a.Kind, &a.Message, &a.Created, &res)
+		if err := rows.Scan(&a.ID, &sid, &aid, &a.Kind, &a.Message, &a.Created, &res); err != nil {
+			return nil, err
+		}
 		if sid.Valid {
 			a.SourceID = &sid.Int64
 		}

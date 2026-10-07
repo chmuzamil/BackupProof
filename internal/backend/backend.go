@@ -83,13 +83,17 @@ func ParseURL(raw string) (Config, error) {
 		c.Endpoint, c.Region = q.Get("endpoint"), q.Get("region")
 		c.ObjectLockMode = strings.ToUpper(q.Get("lock"))
 		if d := q.Get("lockDays"); d != "" {
-			fmt.Sscanf(d, "%d", &c.ObjectLockDays)
+			if _, err := fmt.Sscanf(d, "%d", &c.ObjectLockDays); err != nil {
+				return Config{}, fmt.Errorf("invalid lockDays %q: %w", d, err)
+			}
 		}
 		return c, nil
 	case "sftp":
 		c := Config{Type: "sftp", Host: u.Hostname(), Path: u.Path, User: u.User.Username(), Port: 22}
 		if p := u.Port(); p != "" {
-			fmt.Sscanf(p, "%d", &c.Port)
+			if _, err := fmt.Sscanf(p, "%d", &c.Port); err != nil {
+				return Config{}, fmt.Errorf("invalid port %q: %w", p, err)
+			}
 		}
 		return c, nil
 	}

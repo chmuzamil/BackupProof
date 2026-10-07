@@ -47,25 +47,44 @@ VALID  https://backupproof.dev/attestation/restore-drill/v1
 
 ### Dashboard server
 
-The machine running the dashboard is protected straight away by its built-in agent ("This server"). Nothing else needs installing on it.
+The dashboard machine is protected straight away by its built-in agent ("This server"), so nothing else needs installing on it.
+
+**Linux / macOS** (installs a service and prints the address and a one-time setup code):
 
 ```bash
-docker compose up -d
+curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh
 ```
 
-Or run the binary directly, behind a TLS reverse proxy such as Caddy or nginx:
+**Windows** (PowerShell as Administrator):
+
+```powershell
+irm https://github.com/chmuzamil/BackupProof/releases/latest/download/install.ps1 | iex
+```
+
+**Docker:**
 
 ```bash
-backupproof server --data /var/lib/backupproof-server --listen 127.0.0.1:8420 --public-url https://backup.example.com
+docker run -d --name backupproof -p 8420:8420 -v backupproof-data:/data ghcr.io/chmuzamil/backupproof:latest
+docker logs backupproof 2>&1 | grep "setup code"
 ```
 
-Then open the dashboard and create the admin account. There is no default password.
+Or with Docker Compose, using the [docker-compose.yml](docker-compose.yml) from this repository: download it, then run `docker compose up -d`.
+
+Open the address shown and create the admin account. There is no default password. Unless you open the dashboard on the machine itself, creating that first account needs the **setup code** the installer printed, so nobody else on the network can claim it first.
+
+Re-running the installer upgrades BackupProof and keeps your data. Installer options are `--version vX.Y.Z`, `--listen ADDR`, `--public-url URL` and `--uninstall` (`curl … | sudo sh -s -- --uninstall`). On Windows use `-Version`, `-Listen`, `-PublicUrl` and `-Uninstall`.
+
+For use over the internet, put the dashboard behind HTTPS, for example with [Caddy](https://caddyserver.com/) (`backup.example.com { reverse_proxy 127.0.0.1:8420 }`). Then set its address with `--public-url https://backup.example.com` or under **Settings**.
 
 ### Other servers
 
-In the dashboard, open **Servers → Connect a server** and copy the one-line command for Linux, macOS or Windows. It downloads the agent, connects it with a single-use code (valid for 1 hour) and keeps it running as a service.
+In the dashboard, open **Servers → Connect a server** and copy the one-line command for Linux, macOS or Windows. It downloads the agent from your dashboard, connects it with a single-use code (valid for 1 hour) and keeps it running as a service.
 
 Agents connect **outbound only** over HTTPS. Backup data goes straight from each server to storage and never passes through the dashboard.
+
+### Manual download
+
+Binaries for Linux, macOS and Windows (amd64 and arm64) and `SHA256SUMS` are attached to every [release](https://github.com/chmuzamil/BackupProof/releases). Run `backupproof server` to start the dashboard, or `backupproof help` for everything else.
 
 ### Build from source
 

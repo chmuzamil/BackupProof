@@ -2,6 +2,7 @@ package proof
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -123,7 +124,7 @@ func TestTimestamp(t *testing.T) {
 		}
 		ts := timestamp.Timestamp{HashAlgorithm: req.HashAlgorithm, HashedMessage: req.HashedMessage, Time: time.Now(),
 			Policy: asn1.ObjectIdentifier{1, 2, 3}, SerialNumber: big.NewInt(7), AddTSACertificate: true, Nonce: req.Nonce}
-		resp, err := ts.CreateResponse(cert, priv)
+		resp, err := ts.CreateResponseWithOpts(cert, priv, crypto.SHA256)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

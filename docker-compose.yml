@@ -1,15 +1,23 @@
-# Control plane. Put it behind a TLS reverse proxy (Caddy, Traefik, nginx)
-# and set BP_PUBLIC_URL to the https:// URL agents will use.
+# BackupProof dashboard. Usage:
+#   curl -fsSLO https://raw.githubusercontent.com/chmuzamil/BackupProof/main/docker-compose.yml
+#   docker compose up -d
+#   docker compose logs backupproof | grep "setup code"
+#
+# For use over the internet, put it behind HTTPS (Caddy, Traefik, nginx) and
+# set BP_PUBLIC_URL to the https:// address other servers will use.
 services:
   backupproof:
-    build: { context: ., target: server }
+    image: ghcr.io/chmuzamil/backupproof:latest
+    # To build from a clone of the repository instead:
+    # build: { context: ., target: server }
     restart: unless-stopped
-    ports: ["127.0.0.1:8420:8420"]
+    ports: ["8420:8420"]
     environment:
-      BP_PUBLIC_URL: https://backup.example.com
-      # Optional: provide the secrets key from your secret manager instead of
-      # letting the server generate /data/secret.key (64 hex chars).
-      # BP_SECRET_KEY: ...
-    volumes: ["backupproof-data:/data"]
+      BP_PUBLIC_URL: ""            # e.g. https://backup.example.com
+    volumes:
+      - backupproof-data:/data
+      # Folders the built-in agent should be able to protect, read-only:
+      # - /srv:/host/srv:ro
+      # - /var/www:/host/var/www:ro
 volumes:
   backupproof-data:

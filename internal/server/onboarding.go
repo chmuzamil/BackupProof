@@ -40,7 +40,10 @@ func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
-	s.store.SetInventory(a.ID, raw)
+	if err := s.store.SetInventory(a.ID, raw); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -189,11 +192,14 @@ func testStorage(ctx context.Context, cfg backend.Config, creds backend.Credenti
 		return storageTest{Message: "Connected, but can't save files here: " + friendlyStorageError(err)}
 	}
 	got, err := be.Get(ctx, key)
-	be.Delete(ctx, key)
+	derr := be.Delete(ctx, key)
 	if err != nil || string(got) != "test" {
 		return storageTest{Message: "Saved a test file but couldn't read it back."}
 	}
 	res := storageTest{OK: true, Message: "Connected. Backups can be saved here."}
+	if derr != nil {
+		res.Message += " (The small test file " + key + " could not be removed: " + friendlyStorageError(derr) + ")"
+	}
 	if old := detectOldBackups(ctx, be); old != "" {
 		res.OldBackups = old
 		res.Message += " We also found old " + old + " backups here — you can convert them under Import."
@@ -207,7 +213,9 @@ func detectOldBackups(ctx context.Context, be backend.Backend) string {
 	found, n := "", 0
 	hasConfig, hasKeys := false, false
 	errStop := errors.New("stop")
-	be.List(ctx, "", func(o backend.ObjectInfo) error {
+	// errStop ends the scan early; any other listing error just means nothing
+	// (more) was recognised, which is fine for what is only a UI hint.
+	_ = be.List(ctx, "", func(o backend.ObjectInfo) error {
 		n++
 		switch {
 		case strings.HasPrefix(o.Key, "kopia.repository"):

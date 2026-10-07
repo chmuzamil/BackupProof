@@ -97,7 +97,9 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{cfg: cfg, store: st, key: key, log: log.New(os.Stderr, "backupproof ", log.LstdFlags), waiters: map[int64]chan struct{}{}}
 	if st.Setting("tsa") == "" {
 		b, _ := json.Marshal(proof.DefaultTSAs)
-		st.SetSetting("tsa", string(b))
+		if err := st.SetSetting("tsa", string(b)); err != nil {
+			return nil, fmt.Errorf("saving default timestamp authorities: %w", err)
+		}
 	}
 	return s, nil
 }
@@ -134,10 +136,20 @@ func (s *Server) Run(ctx context.Context) error {
 		<-ctx.Done()
 		sc, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		srv.Shutdown(sc)
+		if err := srv.Shutdown(sc); err != nil {
+			s.log.Printf("shutdown: %v", err)
+		}
 	}()
-	if s.store.UserCount() == 0 {
-		s.log.Printf("first run: open %s to create the admin account", s.publicURL())
+	if n, err := s.store.UserCount(); err != nil {
+		s.log.Printf("warning: could not count users: %v", err)
+	} else if n == 0 {
+		code, err := s.ensureSetupCode()
+		if err != nil {
+			return err
+		}
+		s.log.Printf("first run: open %s to create the admin account (setup code %s, also in %s)", s.publicURL(), code, s.setupCodePath())
+	} else {
+		s.removeSetupCode()
 	}
 	s.log.Printf("%s listening on %s (data: %s)", engine.Version, s.cfg.Listen, s.cfg.DataDir)
 	var err error
@@ -243,4 +255,12 @@ func (s *Server) builtinAgentID() int64 {
 		return st.AgentID
 	}
 	return 0
+}
+
+// audit records an operator action, logging (rather than failing the
+// request) if the ledger append does not succeed.
+func (s *Server) audit(actor, action, detail string) {
+	if err := s.store.Audit(actor, action, detail); err != nil {
+		s.log.Printf("audit %q by %s: could not append to ledger: %v", action, actor, err)
+	}
 }

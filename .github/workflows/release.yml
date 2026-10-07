@@ -1,0 +1,131 @@
+name: release
+
+# Publishes a GitHub Release with binaries for every platform, checksums and
+# the install scripts, and pushes Docker images to GHCR. Runs only for
+# version tags, so pull requests and branch pushes can never publish.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: test
+        run: go test -count=1 ./...
+
+      - name: build
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os=${p%/*}; arch=${p#*/}; ext=""; [ "$os" = windows ] && ext=.exe
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X github.com/chmuzamil/backupproof/internal/engine.Version=backupproof/${VERSION#v}" \
+              -o "dist/backupproof-$os-$arch$ext" ./cmd/backupproof
+          done
+          cp scripts/install.sh scripts/install.ps1 dist/
+          (cd dist && sha256sum backupproof-* install.sh install.ps1 > SHA256SUMS)
+
+      - name: release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          v=${VERSION#v}
+          awk -v h="## [$v]" '
+            index($0, h) == 1 { on = 1; next }
+            on && index($0, "## [") == 1 { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          cat >> notes.md <<'EOF'
+
+          ## Install
+
+          Linux / macOS:
+          ```bash
+          curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh
+          ```
+
+          Windows (PowerShell as Administrator):
+          ```powershell
+          irm https://github.com/chmuzamil/BackupProof/releases/latest/download/install.ps1 | iex
+          ```
+
+          Docker:
+          ```bash
+          docker run -d --name backupproof -p 8420:8420 -v backupproof-data:/data ghcr.io/chmuzamil/backupproof:latest
+          ```
+          EOF
+
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: gh release create "$VERSION" dist/* --title "BackupProof $VERSION" --notes-file notes.md --verify-tag
+
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      # The agent image installs Debian packages for each platform.
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: server-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/chmuzamil/backupproof
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: server image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: server
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: ${{ steps.server-meta.outputs.tags }}
+          labels: ${{ steps.server-meta.outputs.labels }}
+
+      - id: agent-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/chmuzamil/backupproof-agent
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: agent image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: ${{ steps.agent-meta.outputs.tags }}
+          labels: ${{ steps.agent-meta.outputs.labels }}
