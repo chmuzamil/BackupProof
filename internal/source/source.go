@@ -51,6 +51,9 @@ type Spec struct {
 	// import: convert backups made by another tool (kind "import").
 	Import *importer.Spec `json:"import,omitempty"`
 
+	// docker: a Docker app (Compose project), containers and/or volumes.
+	Docker *DockerSpec `json:"docker,omitempty"`
+
 	// WPConfig reads MySQL credentials from a WordPress wp-config.php at
 	// backup time, so the password never has to be typed or stored.
 	WPConfig string `json:"wpConfig,omitempty"`
@@ -111,6 +114,10 @@ func (s Spec) Validate() error {
 	case "command":
 		if s.Command == "" {
 			return errors.New("command source needs a command")
+		}
+	case "docker":
+		if err := s.Docker.validate(); err != nil {
+			return err
 		}
 	case "import":
 		if s.Import == nil || !s.Import.HasLocation() {
@@ -189,6 +196,8 @@ func capture(ctx context.Context, s Spec, b *engine.Builder, log engine.Logger) 
 		return backupMongo(ctx, s, b, log)
 	case "sqlite":
 		return backupSQLite(ctx, s, b, log)
+	case "docker":
+		return backupDocker(ctx, s, b, log)
 	case "command":
 		log("running command source")
 		cmd := shellCmd(ctx, s.Command)

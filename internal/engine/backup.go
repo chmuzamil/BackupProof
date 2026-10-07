@@ -204,12 +204,16 @@ func (b *Builder) AddPath(ctx context.Context, root string) error {
 				b.log("warning: skipping symlink %s: %v", p, err)
 				return nil
 			}
-			return b.add(&snapshot.Entry{Path: mp, Type: snapshot.TypeSymlink, Link: filepath.ToSlash(target), MTime: info.ModTime().UnixNano()})
+			e := &snapshot.Entry{Path: mp, Type: snapshot.TypeSymlink, Link: filepath.ToSlash(target), MTime: info.ModTime().UnixNano()}
+			e.UID, e.GID = entryOwner(info)
+			return b.add(e)
 		case info.IsDir():
 			if !b.seen[mp] {
 				b.stats.Dirs++
 			}
-			return b.add(&snapshot.Entry{Path: mp, Type: snapshot.TypeDir, Mode: uint32(info.Mode().Perm()), MTime: info.ModTime().UnixNano()})
+			e := &snapshot.Entry{Path: mp, Type: snapshot.TypeDir, Mode: uint32(info.Mode().Perm()), MTime: info.ModTime().UnixNano()}
+			e.UID, e.GID = entryOwner(info)
+			return b.add(e)
 		case info.Mode().IsRegular():
 			return b.addFile(ctx, p, mp, info)
 		default:
@@ -226,6 +230,7 @@ func (b *Builder) addFile(ctx context.Context, osPath, mp string, info fs.FileIn
 		prev.Size == info.Size() && prev.MTime == info.ModTime().UnixNano() {
 		e := *prev
 		e.Mode = uint32(info.Mode().Perm())
+		e.UID, e.GID = entryOwner(info)
 		b.stats.Unchanged++
 		b.stats.Chunks += len(e.Chunks)
 		return b.add(&e)
@@ -239,6 +244,7 @@ func (b *Builder) addFile(ctx context.Context, osPath, mp string, info fs.FileIn
 	}
 	defer f.Close()
 	e := &snapshot.Entry{Path: mp, Type: snapshot.TypeFile, Mode: uint32(info.Mode().Perm()), MTime: info.ModTime().UnixNano()}
+	e.UID, e.GID = entryOwner(info)
 	if err := b.chunkInto(ctx, f, e); err != nil {
 		return fmt.Errorf("%s: %w", osPath, err)
 	}
@@ -391,12 +397,32 @@ func (b *Builder) AddTree(ctx context.Context, osRoot, prefix string) error {
 		}
 		switch {
 		case info.IsDir():
-			return b.addParents(mp + "/x")
+			if err := b.addParents(mp); err != nil {
+				return err
+			}
+			if !b.seen[mp] {
+				b.stats.Dirs++
+			}
+			e := &snapshot.Entry{Path: mp, Type: snapshot.TypeDir, Mode: uint32(info.Mode().Perm()), MTime: info.ModTime().UnixNano()}
+			e.UID, e.GID = entryOwner(info)
+			return b.add(e)
 		case info.Mode().IsRegular():
 			if err := b.addParents(mp); err != nil {
 				return err
 			}
 			return b.addFile(ctx, p, mp, info)
+		case info.Mode()&fs.ModeSymlink != 0:
+			if err := b.addParents(mp); err != nil {
+				return err
+			}
+			target, err := os.Readlink(p)
+			if err != nil {
+				b.log("warning: skipping symlink %s: %v", p, err)
+				return nil
+			}
+			e := &snapshot.Entry{Path: mp, Type: snapshot.TypeSymlink, Link: filepath.ToSlash(target), MTime: info.ModTime().UnixNano()}
+			e.UID, e.GID = entryOwner(info)
+			return b.add(e)
 		}
 		return nil
 	})

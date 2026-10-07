@@ -34,6 +34,11 @@ type Entry struct {
 	Hash   string   `json:"h,omitempty"`
 	Link   string   `json:"l,omitempty"`
 	Chunks []string `json:"c,omitempty"`
+	// UID and GID record the owner on Unix-like systems, so a restore in place
+	// can put it back exactly (needed for Docker volumes). Not part of the
+	// content root, like Mode and MTime.
+	UID *int `json:"u,omitempty"`
+	GID *int `json:"g,omitempty"`
 }
 
 type Stats struct {

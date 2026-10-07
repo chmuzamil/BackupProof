@@ -95,6 +95,28 @@ func (a *Agent) runRestore(ctx context.Context, r *repo.Repo, lease *protocol.Le
 			return nil, err
 		}
 		add(res)
+	} else if lease.Source.Kind == "docker" {
+		// Docker volumes go back into their volumes, replacing what is there.
+		vols, err := volumesToRestore(entries, p.Paths)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range vols {
+			tmp, err := os.MkdirTemp(a.dir, "volume-")
+			if err != nil {
+				return nil, err
+			}
+			err = source.RestoreVolume(ctx, v, tmp, func(target string) error {
+				o := engine.RestoreOptions{StripPrefix: "docker/volumes/" + v, Original: true, Log: jl.Logf}
+				res, err := engine.Restore(ctx, r, s, target, o)
+				add(res)
+				return err
+			}, jl.Logf)
+			os.RemoveAll(tmp)
+			if err != nil {
+				return nil, fmt.Errorf("volume %s: %w", v, err)
+			}
+		}
 	} else {
 		// Back where it came from: check every destination first, so nothing
 		// is written if any of it is off limits.
@@ -140,6 +162,34 @@ func (a *Agent) runRestore(ctx context.Context, r *repo.Repo, lease *protocol.Le
 	}
 	jl.Logf("restored %d files (%d bytes), every file checked against its content hash", total.Files, total.Bytes)
 	return map[string]any{"files": total.Files, "bytes": total.Bytes, "durationMs": time.Since(start).Milliseconds()}, nil
+}
+
+// volumesToRestore lists the volumes a selection covers. A volume is always
+// replaced as a whole (part of a volume can be restored to a folder).
+func volumesToRestore(entries []*snapshot.Entry, paths []string) ([]string, error) {
+	for _, p := range paths {
+		parts := strings.Split(p, "/")
+		if p != "docker" && p != "docker/volumes" && !(len(parts) == 3 && parts[0] == "docker" && parts[1] == "volumes") {
+			return nil, fmt.Errorf("%s: only whole volumes can be put back; to get part of one, restore it to a folder", p)
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range entries {
+		rest, ok := strings.CutPrefix(e.Path, "docker/volumes/")
+		if !ok {
+			continue
+		}
+		v, _, _ := strings.Cut(rest, "/")
+		if v != "" && !seen[v] && included("docker/volumes/"+v, paths) {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("this backup has no Docker volumes in that selection")
+	}
+	return out, nil
 }
 
 func (a *Agent) runRestoreDB(ctx context.Context, r *repo.Repo, lease *protocol.Lease, jl *jobLog) (any, error) {

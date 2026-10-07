@@ -103,7 +103,7 @@ func Run(ctx context.Context, rp *repo.Repo, s snapshot.WithID, spec source.Spec
 			return fmt.Sprintf("Merkle root of %d restored entries matches the snapshot (%s…)", n, root[:16]), nil
 		})
 		switch spec.Kind {
-		case "files", "command", "import":
+		case "files", "command", "import", "docker":
 			filesChecks(ctx, r, dir, spec)
 			dumpChecks(ctx, r, dir, spec)
 		case "sqlite":

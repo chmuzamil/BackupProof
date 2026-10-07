@@ -51,11 +51,28 @@ type Inventory struct {
 	Items     []Item     `json:"items"`
 	Databases []Database `json:"databases"`
 	Drives    []Drive    `json:"drives"`
+	// Docker apps (Compose projects) and named volumes found on this server.
+	DockerApps    []DockerApp    `json:"dockerApps"`
+	DockerVolumes []DockerVolume `json:"dockerVolumes"`
+}
+
+type DockerApp struct {
+	Name       string   `json:"name"`
+	Containers []string `json:"containers"`
+	Volumes    []string `json:"volumes"`
+	Running    bool     `json:"running"`
+	// Database is true when one of its containers runs a database image.
+	Database bool `json:"database"`
+}
+
+type DockerVolume struct {
+	Name   string   `json:"name"`
+	UsedBy []string `json:"usedBy"`
 }
 
 func Collect(ctx context.Context) *Inventory {
 	host, _ := os.Hostname()
-	inv := &Inventory{Collected: time.Now().UTC(), OS: runtime.GOOS, Hostname: host, Items: []Item{}, Databases: []Database{}, Drives: []Drive{}}
+	inv := &Inventory{Collected: time.Now().UTC(), OS: runtime.GOOS, Hostname: host, Items: []Item{}, Databases: []Database{}, Drives: []Drive{}, DockerApps: []DockerApp{}, DockerVolumes: []DockerVolume{}}
 	inv.collectFolders()
 	inv.collectWebsites()
 	inv.collectDocker(ctx)
@@ -165,6 +182,85 @@ func (inv *Inventory) collectDocker(ctx context.Context) {
 		if kind != "" {
 			inv.Databases = append(inv.Databases, Database{Kind: kind, Label: niceKind(kind) + " in Docker: " + c.Names, Container: c.Names})
 		}
+	}
+	inv.collectDockerApps(ctx)
+}
+
+// collectDockerApps groups containers into Compose projects and lists named
+// volumes with the containers that use them.
+func (inv *Inventory) collectDockerApps(ctx context.Context) {
+	ids, err := exec.CommandContext(ctx, "docker", "ps", "-aq").Output()
+	if err != nil {
+		return
+	}
+	apps := map[string]*DockerApp{}
+	used := map[string][]string{}
+	if f := strings.Fields(string(ids)); len(f) > 0 {
+		out, err := exec.CommandContext(ctx, "docker", append([]string{"inspect"}, f...)...).Output()
+		if err != nil {
+			return
+		}
+		var cs []struct {
+			Name   string
+			Mounts []struct{ Type, Name string }
+			Config struct {
+				Image  string
+				Labels map[string]string
+			}
+			State struct{ Running bool }
+		}
+		if json.Unmarshal(out, &cs) != nil {
+			return
+		}
+		for _, c := range cs {
+			name := strings.TrimPrefix(c.Name, "/")
+			var vols []string
+			for _, m := range c.Mounts {
+				if m.Type == "volume" && m.Name != "" {
+					vols = append(vols, m.Name)
+					used[m.Name] = append(used[m.Name], name)
+				}
+			}
+			proj := c.Config.Labels["com.docker.compose.project"]
+			if proj == "" {
+				continue
+			}
+			a := apps[proj]
+			if a == nil {
+				a = &DockerApp{Name: proj, Containers: []string{}, Volumes: []string{}}
+				apps[proj] = a
+			}
+			a.Containers = append(a.Containers, name)
+			a.Volumes = append(a.Volumes, vols...)
+			a.Running = a.Running || c.State.Running
+			img := strings.ToLower(c.Config.Image)
+			for _, db := range []string{"postgres", "postgis", "mysql", "mariadb", "mongo", "redis", "timescale"} {
+				if strings.Contains(img, db) {
+					a.Database = true
+				}
+			}
+		}
+	}
+	for _, a := range apps {
+		sort.Strings(a.Containers)
+		sort.Strings(a.Volumes)
+		inv.DockerApps = append(inv.DockerApps, *a)
+	}
+	sort.Slice(inv.DockerApps, func(i, j int) bool { return inv.DockerApps[i].Name < inv.DockerApps[j].Name })
+	out, err := exec.CommandContext(ctx, "docker", "volume", "ls", "-q").Output()
+	if err != nil {
+		return
+	}
+	for _, v := range strings.Fields(string(out)) {
+		// Anonymous volumes are long random hashes; they belong to their container.
+		if len(v) == 64 && strings.Trim(v, "0123456789abcdef") == "" {
+			continue
+		}
+		u := used[v]
+		if u == nil {
+			u = []string{}
+		}
+		inv.DockerVolumes = append(inv.DockerVolumes, DockerVolume{Name: v, UsedBy: u})
 	}
 }
 

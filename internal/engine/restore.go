@@ -120,7 +120,7 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 			if err := root.MkdirAll(name, 0o700); err != nil {
 				return res, fmt.Errorf("%s: %w", e.Path, err)
 			}
-			if opts.Original && !existed {
+			if opts.Original && !restoreOwner(root, name, e) && !existed {
 				adoptParentOwner(root, name)
 			}
 			if opts.Original && e.Mode != 0 && runtime.GOOS != "windows" {
@@ -149,6 +149,8 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		root.Remove(name)
 		if err := root.Symlink(filepath.FromSlash(e.Link), name); err != nil {
 			opts.Log("warning: cannot create symlink %s: %v", e.Path, err)
+		} else if opts.Original {
+			restoreOwner(root, name, e)
 		}
 	}
 	// Directory mtimes last, deepest first, so file writes don't bump them.
@@ -216,7 +218,7 @@ func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.E
 	if err := root.Rename(tmp, name); err != nil {
 		return err
 	}
-	if original {
+	if original && !restoreOwner(root, name, e) {
 		if hadOwner {
 			_ = root.Lchown(name, uid, gid)
 		} else {
