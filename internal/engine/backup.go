@@ -23,7 +23,7 @@ import (
 
 // Version is stamped at release time with
 // -ldflags "-X github.com/chmuzamil/backupproof/internal/engine.Version=backupproof/X.Y.Z".
-var Version = "backupproof/0.1.0"
+var Version = "backupproof/0.1.1"
 
 // Logger receives human readable progress lines.
 type Logger func(format string, args ...any)

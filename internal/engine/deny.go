@@ -13,10 +13,24 @@ func normPath(p string) string {
 	if err != nil {
 		abs = p
 	}
-	if real, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = real
-	}
 	abs = filepath.Clean(abs)
+	// Resolve symlinks (and, on Windows, 8.3 short names such as RUNNER~1)
+	// on the deepest part of the path that exists, then re-append the rest.
+	// Without this, a path that doesn't exist yet would keep an unresolved
+	// prefix and fail to match a resolved denied directory.
+	rest := ""
+	for dir := abs; ; {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			abs = filepath.Join(real, rest)
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		abs = strings.ToLower(abs)
 	}

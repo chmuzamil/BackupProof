@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-07
+
+### Security
+
+- Windows: the built-in agent's protection of the server's own data folder could be bypassed with an 8.3 short path (such as `C:\PROGRA~3\...`) to a folder that doesn't exist yet, for example when choosing a storage location. Paths are now resolved through their deepest existing folder before comparing.
+
 ## [0.1.0] - 2026-10-07
 
 First release.
@@ -28,5 +34,6 @@ First release.
 - Anything that could give control of a server is admin-only: commands and hooks, custom restore-test commands, moving items between servers, connecting servers, on-the-fly rclone remotes and the old-backup preview.
 - The built-in agent never backs up, imports from or stores into the server's own data folder.
 
-[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/chmuzamil/BackupProof/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/chmuzamil/BackupProof/releases/tag/v0.1.0
