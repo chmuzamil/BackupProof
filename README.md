@@ -19,7 +19,16 @@ BackupProof is a self-hosted backup system for servers, applications and databas
 
 One static binary is the dashboard server, the agent for each protected server, and a standalone CLI. **New here?** Read the plain-language [Getting started guide](docs/GETTING-STARTED.md).
 
+<p align="center">
+  <a href="https://backupproof.dev"><b>Website</b></a> &nbsp;·&nbsp;
+  <a href="https://demo.backupproof.dev"><b>Live demo</b></a> &nbsp;·&nbsp;
+  <a href="https://backupproof.dev/docs/"><b>Docs</b></a> &nbsp;·&nbsp;
+  <a href="https://github.com/chmuzamil/BackupProof/releases/latest"><b>Download</b></a>
+</p>
+
 ## Demo
+
+**Try the dashboard:** [demo.backupproof.dev](https://demo.backupproof.dev), username `demo`, password `backupproof-demo`. It protects a made-up bakery (website, documents and an order database) with real scheduled backups, restore tests and signed proofs. The account is read-only and the demo is rebuilt with fresh made-up data every day.
 
 A restore test from the CLI. The dashboard shows the same checks in plain words.
 
@@ -217,3 +226,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tes
 ## License
 
 [MIT](LICENSE) © 2026 chmuzamil
+
+---
+
+<p align="center">Made by <a href="https://chaudhery.com"><b>Chaudhery Studio</b></a></p>
