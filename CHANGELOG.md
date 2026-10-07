@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-07
+
+### Added
+
+- **Installer: `--domain NAME`** sets up HTTPS on Linux. It checks that the name points at the server, then configures nginx with a Let's Encrypt certificate from certbot, or Caddy (installing Caddy if no web server is present), keeps the dashboard listening only on 127.0.0.1 and sets its public address. `--email` adds an address for certificate expiry notices. If HTTPS can't be set up, the install still completes and explains what to do.
+- Install docs: step-by-step HTTPS setup, `--public-url` behind your own proxy, and uninstall commands.
+
+### Fixed
+
+- Re-running the Linux/macOS installer to upgrade kept the data but reset `--listen` to all interfaces and dropped `--public-url`, which could expose a dashboard that had been limited to 127.0.0.1. Re-runs now keep the existing settings unless new ones are given.
+
 ## [0.1.1] - 2026-10-07
 
 ### Security
@@ -34,6 +45,7 @@ First release.
 - Anything that could give control of a server is admin-only: commands and hooks, custom restore-test commands, moving items between servers, connecting servers, on-the-fly rclone remotes and the old-backup preview.
 - The built-in agent never backs up, imports from or stores into the server's own data folder.
 
-[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/chmuzamil/BackupProof/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/chmuzamil/BackupProof/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/chmuzamil/BackupProof/releases/tag/v0.1.0

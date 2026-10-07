@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.1.1-0a7bbb" alt="version v0.1.1"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.1.2-0a7bbb" alt="version v0.1.2"></a>
   <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>
@@ -81,9 +81,55 @@ Or with Docker Compose, using the [docker-compose.yml](docker-compose.yml) from 
 
 Open the address shown and create the admin account. There is no default password. Unless you open the dashboard on the machine itself, creating that first account needs the **setup code** the installer printed, so nobody else on the network can claim it first.
 
-Re-running the installer upgrades BackupProof and keeps your data. Installer options are `--version vX.Y.Z`, `--listen ADDR`, `--public-url URL` and `--uninstall` (`curl … | sudo sh -s -- --uninstall`). On Windows use `-Version`, `-Listen`, `-PublicUrl` and `-Uninstall`.
+### Use it over the internet (HTTPS)
 
-For use over the internet, put the dashboard behind HTTPS, for example with [Caddy](https://caddyserver.com/) (`backup.example.com { reverse_proxy 127.0.0.1:8420 }`). Then set its address with `--public-url https://backup.example.com` or under **Settings**.
+Put the dashboard behind HTTPS before servers connect to it over the internet: their jobs carry storage passwords.
+
+1. Point a domain name at the server, for example a DNS **A record** for `backup.example.com` with the server's IP address.
+2. Run the installer with `--domain`. On Linux it sets up HTTPS for you: it uses nginx (with a free Let's Encrypt certificate from certbot) or Caddy if one is installed, and installs Caddy if neither is. The dashboard then only listens on `127.0.0.1`, and its public address is set to `https://backup.example.com`.
+
+   ```bash
+   curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh -s -- --domain backup.example.com --email you@example.com
+   ```
+
+3. Open `https://backup.example.com` and create the admin account with the setup code.
+
+Already have HTTPS in front of it (your own proxy, a load balancer or a tunnel)? Set the address yourself instead, and keep the dashboard local:
+
+```bash
+curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh -s -- --public-url https://backup.example.com --listen 127.0.0.1:8420
+```
+
+You can also change the address later under **Settings**. Options always go after `sh -s --`: `curl … | sudo sh --public-url …` fails with `Illegal option`.
+
+### Installer options
+
+| Linux / macOS | Windows | What it does |
+|---|---|---|
+| `--domain NAME` | | Serve the dashboard at `https://NAME` and set up HTTPS (Linux) |
+| `--email ADDR` | | Email for certificate expiry notices (with `--domain`) |
+| `--public-url URL` | `-PublicUrl URL` | The address other servers use to reach the dashboard |
+| `--listen ADDR` | `-Listen ADDR` | Address and port to listen on (default `0.0.0.0:8420`; `127.0.0.1:8420` with `--domain`) |
+| `--version vX.Y.Z` | `-Version vX.Y.Z` | Install a specific release |
+| `--uninstall` | `-Uninstall` | Remove the service and program; your data is kept |
+
+Re-running the installer upgrades BackupProof in place and keeps your data. On Linux and macOS it also keeps the address and listen settings, so you don't need to repeat the options.
+
+### Uninstall
+
+Linux / macOS:
+
+```bash
+curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh -s -- --uninstall
+```
+
+Windows (PowerShell as Administrator):
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/chmuzamil/BackupProof/releases/latest/download/install.ps1))) -Uninstall
+```
+
+This removes the service and the program. Your data is kept (`/var/lib/backupproof` on Linux, `/Library/Application Support/BackupProof` on macOS, `C:\ProgramData\BackupProof\server` on Windows); delete that folder to remove everything. Your backups in storage are not touched. If you installed with `--domain`, the web server site (`backupproof-NAME.conf` for nginx, or the block in `/etc/caddy/Caddyfile`) and the certificate are left in place; remove them yourself if you no longer need them.
 
 ### Other servers
 
