@@ -30,7 +30,7 @@ func TestImportResticWithEnvFiles(t *testing.T) {
 	os.WriteFile(pwFile, []byte("restic-secret\n"), 0o600)
 	os.WriteFile(envFile, []byte("# restic settings\nexport RESTIC_REPOSITORY=\""+filepath.ToSlash(repoDir)+"\"\nRESTIC_CACHE_DIR="+filepath.ToSlash(filepath.Join(dir, "cache"))+"\n"), 0o600)
 
-	data := filepath.Join(dir, "var", "backups", "founder-os", "db")
+	data := filepath.Join(dir, "var", "backups", "myapp", "db")
 	os.MkdirAll(data, 0o755)
 	os.WriteFile(filepath.Join(data, "local-globals.sql"), []byte("CREATE ROLE app;"), 0o644)
 	os.WriteFile(filepath.Join(data, "local-infra_panel.dump"), []byte("PGDMP\x01\x0e\x00fake custom-format dump"), 0o644)
@@ -50,7 +50,7 @@ func TestImportResticWithEnvFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(site, "index.php"), []byte("<?php echo 'panel v2';"), 0o644)
 	restic("backup", "--tag", "nightly", filepath.Join(dir, "var"))
 
-	spec := source.Spec{Name: "luxvps-restic", Kind: "import", Import: &importer.Spec{
+	spec := source.Spec{Name: "server-restic", Kind: "import", Import: &importer.Spec{
 		Format: "restic", ResticEnvFile: envFile, ResticPasswordFile: pwFile,
 	}}
 	res, err := Import(ctx, env, spec)

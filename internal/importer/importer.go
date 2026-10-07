@@ -63,7 +63,7 @@ type Spec struct {
 
 	// For "restic": reuse the existing job's files on the protected computer
 	// (e.g. /etc/restic/env and /etc/restic/password) or give the repository
-	// address directly (e.g. "b2:luxvps:founder-os-vps").
+	// address directly (e.g. "b2:my-bucket:server1").
 	ResticEnvFile      string `json:"resticEnvFile,omitempty"`
 	ResticPasswordFile string `json:"resticPasswordFile,omitempty"`
 	ResticRepository   string `json:"resticRepository,omitempty"`
