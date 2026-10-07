@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.2-0a7bbb" alt="version v0.2.2"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.3-0a7bbb" alt="version v0.2.3"></a>
   <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>
@@ -173,8 +173,8 @@ S3 with Object Lock: `--repo 's3://bucket/vault?endpoint=https://s3.eu-central-0
 
 | | |
 |---|---|
-| **Backs up** | File trees, PostgreSQL, MySQL/MariaDB, MongoDB, SQLite, **Docker apps and volumes** (a Compose project's volumes, container settings and Compose files, optionally stopping the containers while copying), or any command's output. Database logins are read from Docker containers and WordPress `wp-config.php` on the server itself. |
-| **Restores** | From the dashboard: pick a signed backup, browse its files, **download a selection as a zip**, or restore on a server: back where it came from (owners and permissions kept), into a new folder, or onto another server. Databases restore into a new database or replace the original. Docker volumes are put back exactly. |
+| **Backs up** | File trees, PostgreSQL, MySQL/MariaDB, MongoDB, SQLite, **Docker apps and volumes** (a Compose project or a single container: its volumes, the folders mounted into it, container settings and Compose files, optionally stopping the containers while copying), or any command's output. Database logins are read from Docker containers and WordPress `wp-config.php` on the server itself. |
+| **Restores** | From the dashboard: pick a signed backup, browse its files, **download a selection as a zip**, or restore on a server: back where it came from (owners and permissions kept), into a new folder, or onto another server. Databases restore into a new database or replace the original. Docker volumes are put back exactly, and mounted folders where they came from. |
 | **Stores** | An encrypted, deduplicating, content-addressed repository on a local disk, any S3-compatible service (with optional **S3 Object Lock**), or SFTP with a pinned host key. A **second copy** of every backup can go to another storage (3-2-1), with its own signed proof. Weekly **health checks** re-read a sample of the stored data and chart each storage's size. |
 | **Proves** | Scheduled **restore tests** restore a backup into an empty folder or a `--network none` database container. Checks per data type:<br>• All data: the restored bytes must reproduce the snapshot's Merkle root.<br>• PostgreSQL: `amcheck` with `heapallindexed`.<br>• MySQL/MariaDB: `CHECK TABLE`.<br>• MongoDB: `validate(full)`.<br>• SQLite: `integrity_check`.<br>• Databases: row counts reconciled against counts captured at backup time.<br>• PostgreSQL dumps found inside file backups are loaded into a test database.<br>• Your own SQL assertions and commands. |
 | **Attests** | Each backup and restore test, pass *or fail*, becomes an [in-toto](https://in-toto.io) statement in a DSSE envelope, signed with the agent's Ed25519 key. It is optionally timestamped by an RFC 3161 TSA and appended to a hash-chained ledger with signed checkpoints. |
@@ -195,7 +195,7 @@ The dashboard uses plain language ("Restore tested ✓", "Needs attention"), sho
    - **Where it came from**: same-named files are replaced, other files are left alone, owners and permissions are kept.
    - **A new folder**, on the same or another server. Files keep their full path inside it.
 
-Databases restore **into a new database** (or a new file for SQLite) next to the original, or **replace the original** after you type its name. Docker items put their **volumes back** exactly: the containers using them are stopped, the volume's contents replaced, and the containers started again.
+Databases restore **into a new database** (or a new file for SQLite) next to the original, or **replace the original** after you type its name. Docker items **put the app's data back**: the containers using it are stopped, each volume's contents are replaced exactly, mounted folders are put back where they came from, and the containers start again.
 
 Only backups with a signed proof for that item can be restored, and every file is checked against its content hash as it's written or downloaded.
 
@@ -209,9 +209,10 @@ backupproof restore --repo 's3://bucket/folder?endpoint=…' --target /root/rest
 
 ## Docker apps and volumes
 
-Choose **Protect something → Docker app or volumes**. BackupProof lists your Compose apps and named volumes. A backup holds:
+Choose **Protect something → Docker app or volumes**. BackupProof lists your Compose apps, containers started on their own (`docker run`) and named volumes. A backup holds:
 
 - `docker/volumes/<name>/…`: each volume's files, with owners
+- `docker/mounts/<path>…`: folders and files on the server mounted into the containers (bind mounts such as `./data`), unless you untick **Include folders mounted into the containers**. System paths such as `/proc`, `/tmp` and the Docker socket are never included.
 - `docker/containers/<name>.json`: each container's settings
 - `docker/compose/<project>/…`: the Compose files and `.env`
 

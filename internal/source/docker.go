@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -21,6 +22,7 @@ import (
 // Docker apps and volumes. A backup holds, under docker/:
 //
 //	volumes/<name>/…            the files of each named volume (with owners)
+//	mounts/<host path>…         folders and files mounted into the containers
 //	containers/<name>.json      each container's settings (docker inspect)
 //	compose/<project>/<file>    the Compose files and .env of a project
 //
@@ -35,6 +37,49 @@ type DockerSpec struct {
 	Containers []string `json:"containers,omitempty"`
 	Volumes    []string `json:"volumes,omitempty"`
 	Stop       bool     `json:"stop,omitempty"`
+	// Mounts also backs up the folders and files on this server that are
+	// mounted into the containers (bind mounts), such as ./data in Compose.
+	Mounts bool `json:"mounts,omitempty"`
+}
+
+// systemMounts are parts of the machine itself that containers often mount
+// (the Docker socket, /proc, the time zone…): never app data to back up.
+var systemMounts = []string{"/proc", "/sys", "/dev", "/run", "/var/run", "/var/lib/docker", "/tmp", "/boot",
+	"/usr", "/bin", "/sbin", "/lib", "/lib64", "/lib/modules",
+	"/etc/localtime", "/etc/timezone", "/etc/hosts", "/etc/hostname", "/etc/resolv.conf", "/etc/machine-id"}
+
+// AppMount reports whether a bind mount's source on this server looks like
+// app data worth backing up. Only absolute paths qualify, so Docker Desktop's
+// Windows paths are left out.
+func AppMount(src string) bool {
+	if !strings.HasPrefix(src, "/") {
+		return false
+	}
+	p := path.Clean(src)
+	if p == "/" || strings.HasSuffix(p, ".sock") {
+		return false
+	}
+	for _, s := range systemMounts {
+		if p == s || strings.HasPrefix(p, s+"/") {
+			return false
+		}
+	}
+	return true
+}
+
+// topLevel drops paths that are inside another path in the list.
+func topLevel(paths []string) []string {
+	var out []string
+	for _, p := range uniq(paths) {
+		if len(out) > 0 {
+			last := out[len(out)-1]
+			if p == last || strings.HasPrefix(p, last+"/") {
+				continue
+			}
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // HelperImage reads and writes volumes when Docker's folder isn't reachable.
@@ -253,7 +298,93 @@ func backupDocker(ctx context.Context, s Spec, b *engine.Builder, log engine.Log
 			return nil, fmt.Errorf("volume %s: %w", v, err)
 		}
 	}
-	return map[string]any{"volumes": vols, "containers": names, "project": project}, nil
+	var mounts []string
+	if d.Mounts {
+		var srcs []string
+		for _, c := range cs {
+			for _, m := range c.Mounts {
+				if m.Type == "bind" && AppMount(m.Source) {
+					srcs = append(srcs, path.Clean(m.Source))
+				}
+			}
+		}
+		for _, m := range topLevel(srcs) {
+			if b.Denied(m) {
+				log("skipping %s: it holds this server's own BackupProof data", m)
+				continue
+			}
+			fi, err := os.Stat(m)
+			if err != nil {
+				log("warning: skipping mounted %s: %v", m, err)
+				continue
+			}
+			log("backing up mounted %s", m)
+			prefix := "docker/mounts" + m
+			switch {
+			case fi.IsDir():
+				if err := b.AddTree(ctx, m, prefix); err != nil {
+					return nil, fmt.Errorf("mounted folder %s: %w", m, err)
+				}
+			case fi.Mode().IsRegular():
+				f, err := os.Open(m)
+				if err != nil {
+					return nil, err
+				}
+				_, err = b.AddReader(ctx, prefix, uint32(fi.Mode().Perm()), fi.ModTime(), f)
+				f.Close()
+				if err != nil {
+					return nil, fmt.Errorf("mounted file %s: %w", m, err)
+				}
+			default:
+				continue
+			}
+			mounts = append(mounts, m)
+		}
+	}
+	return map[string]any{"volumes": vols, "mounts": mounts, "containers": names, "project": project}, nil
+}
+
+// ContainersUsing lists running containers with a bind mount at, inside or
+// above one of the given paths on this server.
+func ContainersUsing(ctx context.Context, paths []string) []string {
+	out, err := docker(ctx, "ps", "-q")
+	if err != nil || len(strings.Fields(string(out))) == 0 {
+		return nil
+	}
+	out, err = docker(ctx, append([]string{"inspect"}, strings.Fields(string(out))...)...)
+	if err != nil {
+		return nil
+	}
+	var cs []struct {
+		Name   string
+		Mounts []dockerMount
+	}
+	if json.Unmarshal(out, &cs) != nil {
+		return nil
+	}
+	overlaps := func(a, b string) bool {
+		return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+	}
+	var names []string
+	for _, c := range cs {
+		for _, m := range c.Mounts {
+			if m.Type != "bind" {
+				continue
+			}
+			for _, p := range paths {
+				if overlaps(path.Clean(m.Source), p) {
+					names = append(names, strings.TrimPrefix(c.Name, "/"))
+				}
+			}
+		}
+	}
+	return uniq(names)
+}
+
+// StopContainers stops the given running containers and returns a function
+// that starts them again.
+func StopContainers(ctx context.Context, names []string, log func(string, ...any)) func() {
+	return stopContainers(ctx, names, log)
 }
 
 // addVolumeViaHelper copies a volume out with tar in a throwaway container

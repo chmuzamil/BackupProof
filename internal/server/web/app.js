@@ -277,7 +277,7 @@ function kindInfo(spec) {
   if (k === 'sqlite') return { label: 'SQLite database file', icon: 'db' };
   if (k === 'import') return { label: 'Imported backups', icon: 'import' };
   if (k === 'command') return { label: 'Output of a command', icon: 'sliders' };
-  if (k === 'docker') return { label: spec.docker && spec.docker.project ? 'Docker app' : 'Docker volumes', icon: 'box' };
+  if (k === 'docker') return { label: spec.docker && spec.docker.project ? 'Docker app' : spec.docker && (spec.docker.containers || []).length ? 'Docker container' : 'Docker volumes', icon: 'box' };
   return { label: k || 'Unknown', icon: 'box' };
 }
 
@@ -1482,10 +1482,10 @@ async function pageRestore(id) {
   const folderBox = h('div', { hidden: true, class: 'row' }, field('On server', agentSel), field('Folder', folder, 'Files keep their full path inside it, so nothing gets mixed up.'));
   const isDocker = src.spec.kind === 'docker';
   const origNote = h('div', { class: 'banner warn' }, isDocker
-    ? 'Each volume’s contents are replaced with the backup, exactly as it was. The containers using it are stopped first and started again after. To get back part of a volume, restore to a new folder.'
+    ? 'Each volume’s contents are replaced with the backup, exactly as it was, and mounted folders are put back where they came from (files with the same names are replaced). The containers using them are stopped first and started again after. To get back part of a volume, restore to a new folder.'
     : 'Files with the same names are replaced with the backed-up versions. Other files are left alone. Owners and permissions are kept.');
   const whereChoice = choices([
-    isDocker ? { value: 'original', title: 'Put the volumes back', desc: 'Replace the volumes on ' + (agents.find((a) => a.id === src.agentId) ? agentTitle(agents.find((a) => a.id === src.agentId)) : 'the server') + ' with this backup.' }
+    isDocker ? { value: 'original', title: 'Put the app’s data back', desc: 'Replace the volumes and mounted folders on ' + (agents.find((a) => a.id === src.agentId) ? agentTitle(agents.find((a) => a.id === src.agentId)) : 'the server') + ' with this backup.' }
       : { value: 'original', title: 'Where it came from', desc: 'Put files back in their original place on ' + (agents.find((a) => a.id === src.agentId) ? agentTitle(agents.find((a) => a.id === src.agentId)) : 'the server') + '.' },
     { value: 'folder', title: 'A new folder', desc: 'Restore next to the original, or onto another server.', badge: 'safest', badgeCls: 'ok' },
   ], { value: 'original', small: true, label: 'Where to restore', onPick: (v) => { where.v = v; folderBox.hidden = v !== 'folder'; origNote.hidden = v !== 'original'; } });
@@ -1495,8 +1495,8 @@ async function pageRestore(id) {
       if (!folder.value.trim()) return fieldError(folder, 'Enter the folder to restore into.');
       body.folder = folder.value.trim(); body.agentId = Number(agentSel.value);
     } else if (!(await confirmDlg(isDocker
-      ? `Replace ${R.picks.size ? 'the chosen volumes' : 'every volume in this backup'} with this backup? Their current contents are deleted, and the containers using them restart.`
-      : `Put ${R.picks.size ? plural(R.picks.size, 'selection') : 'everything in this backup'} back where it came from? Files with the same names are replaced.`, isDocker ? 'Replace volumes' : 'Restore', { title: 'Restore in place?' }))) return;
+      ? `Put ${R.picks.size ? 'the chosen volumes and folders' : 'every volume and mounted folder in this backup'} back? Volumes’ current contents are deleted, files with the same names in mounted folders are replaced, and the containers using them restart.`
+      : `Put ${R.picks.size ? plural(R.picks.size, 'selection') : 'everything in this backup'} back where it came from? Files with the same names are replaced.`, isDocker ? 'Put it back' : 'Restore', { title: 'Restore in place?' }))) return;
     const res = await post(`/sources/${id}/restore`, body);
     fill(out, restoreProgress(res.jobId, 'Restoring'));
   }, 'Starting…'), 'primary');
@@ -2344,7 +2344,7 @@ async function pageProtect() {
       return W.sitePath ? 'Website: ' + baseName(W.sitePath) : '';
     }
     if (W.what === 'docker') {
-      if (W.dockerApp) return 'Docker: ' + W.dockerApp;
+      if (W.dockerApp) return 'Docker: ' + W.dockerApp.replace(/^c:/, '');
       const v = [...(W.dockerVols || [])];
       return v.length ? 'Docker volumes: ' + (v.length > 2 ? `${v[0]}, ${v[1]} and ${v.length - 2} more` : joinWords(v)) : '';
     }
@@ -2381,8 +2381,10 @@ async function pageProtect() {
     if (W.what === 'docker') {
       const vols = [...(W.dockerVols || [])];
       if (!W.dockerApp && !vols.length) throw new Error('Choose a Docker app or at least one volume.');
-      const docker = { stop: W.dockerStop !== false };
-      if (W.dockerApp) docker.project = W.dockerApp; else docker.volumes = vols;
+      const docker = { stop: W.dockerStop !== false, mounts: W.dockerMounts !== false };
+      if (W.dockerApp && W.dockerApp.startsWith('c:')) docker.containers = [W.dockerApp.slice(2)];
+      else if (W.dockerApp) docker.project = W.dockerApp;
+      else docker.volumes = vols;
       return [{ name, spec: { kind: 'docker', docker } }];
     }
     if (W.what === 'database') {
@@ -2457,34 +2459,45 @@ async function pageProtect() {
       field(items.length ? 'Or type the website’s folder' : 'Website folder', manual, 'The folder that contains the website files.'));
   };
 
-  // dockerForm: pick a Compose app (its volumes come along) or single volumes.
+  // dockerForm: pick a Compose app or a container (its volumes and mounted
+  // folders come along) or single volumes.
   const dockerForm = () => {
     const i = inv();
     if (!i.docker) return h('div', { class: 'banner info' }, 'Docker isn’t running on this server, or BackupProof can’t use it. Start Docker, wait a minute for the list to refresh, and try again.');
     const apps = i.dockerApps || [], vols = i.dockerVolumes || [];
     if (!W.dockerVols) W.dockerVols = new Set();
     if (W.dockerStop === undefined) W.dockerStop = true;
+    if (W.dockerMounts === undefined) W.dockerMounts = true;
+    const appKey = (a) => (a.standalone ? 'c:' : '') + a.name;
+    const picked = apps.find((a) => appKey(a) === W.dockerApp);
+    const mountsCb = checkbox('Include folders mounted into the containers', W.dockerMounts,
+      picked && (picked.mounts || []).length ? 'On this server: ' + joinWords(picked.mounts.slice(0, 3)) + (picked.mounts.length > 3 ? ` and ${picked.mounts.length - 3} more` : '') + '.' : 'Folders on this server that the containers use, such as ./data in a Compose file.');
+    mountsCb.cb.addEventListener('change', () => { W.dockerMounts = mountsCb.cb.checked; });
     const stop = checkbox('Stop the containers during each backup', W.dockerStop,
       'Recommended for apps with a database: files are copied while nothing writes to them. The containers are started again straight after, usually within a minute.');
     stop.cb.addEventListener('change', () => { W.dockerStop = stop.cb.checked; });
     const appChoices = apps.length ? choices(apps.map((a) => ({
-      value: a.name, title: a.name, icon: 'box',
-      desc: `${plural(a.containers.length, 'container')} · ${a.volumes.length ? plural(new Set(a.volumes).size, 'volume') : 'no volumes'}${a.running ? '' : ' · stopped'}`,
+      value: appKey(a), title: a.name, icon: 'box',
+      desc: [a.standalone ? 'Container' : plural(a.containers.length, 'container'),
+        a.volumes.length ? plural(a.volumes.length, 'volume') : 'no volumes',
+        (a.mounts || []).length ? plural(a.mounts.length, 'mounted folder') : null,
+        a.running ? null : 'stopped'].filter(Boolean).join(' · '),
       badge: a.database ? 'has a database' : null, badgeCls: 'warn',
-    })), { value: W.dockerApp || '', small: true, label: 'Docker apps', onPick: (v) => {
+    })), { value: W.dockerApp || '', small: true, label: 'Docker apps and containers', onPick: (v) => {
       W.dockerApp = v; W.dockerVols.clear();
-      const a = apps.find((x) => x.name === v);
+      const a = apps.find((x) => appKey(x) === v);
       if (a && a.database) W.dockerStop = true;
       W.nameTouched = false; autoName(); render();
-    } }) : h('p', { class: 'muted' }, 'No Docker Compose apps found.');
+    } }) : h('p', { class: 'muted' }, 'No Docker apps or containers on this server.');
     const volList = vols.length ? h('div', { class: 'check-list' }, vols.map((v) => {
       const c = checkbox(v.name, W.dockerVols.has(v.name), v.usedBy.length ? 'Used by ' + joinWords(v.usedBy) : 'Not used by a container');
       c.cb.addEventListener('change', () => { if (c.cb.checked) { W.dockerVols.add(v.name); W.dockerApp = ''; } else W.dockerVols.delete(v.name); W.nameTouched = false; autoName(); render(); });
       return c.el;
-    })) : h('p', { class: 'muted' }, 'No named volumes found.');
+    })) : h('p', { class: 'muted' }, 'No named volumes on this server. Folders mounted into containers come with their app above, or can be protected with Folders & files.');
     return h('div', null,
-      h('h3', null, 'A Docker app'), h('p', { class: 'muted small' }, 'Backs up all of the app’s volumes, its containers’ settings and its Compose files.'), appChoices,
+      h('h3', null, 'A Docker app or container'), h('p', { class: 'muted small' }, 'Backs up its volumes, the folders mounted into it, its containers’ settings and its Compose files.'), appChoices,
       details('Or choose single volumes', volList),
+      W.dockerApp ? mountsCb.el : null,
       stop.el);
   };
 
@@ -2533,7 +2546,7 @@ async function pageProtect() {
       { value: 'folders', title: 'Folders & files', desc: 'Documents, photos, project folders…', icon: 'folder' },
       { value: 'website', title: 'Website', desc: 'A website’s files. WordPress sites can include their database.', icon: 'globe' },
       { value: 'database', title: 'Database', desc: 'PostgreSQL, MySQL/MariaDB, MongoDB or SQLite.', icon: 'db' },
-      { value: 'docker', title: 'Docker app or volumes', desc: 'A Compose app’s volumes, settings and Compose files, or single volumes.', icon: 'box' },
+      { value: 'docker', title: 'Docker app or volumes', desc: 'A Compose app or container with its volumes, mounted folders and settings, or single volumes.', icon: 'box' },
       { value: 'other', title: 'Something else (advanced)', desc: 'All settings: commands, hooks, custom checks.', icon: 'sliders' },
     ], { value: W.what, label: 'What to protect', onPick: (v) => { if (v === 'other') { location.hash = '#/sources/new'; return; } W.what = v; W.nameTouched = false; autoName(); render(); } }),
     W.what ? h('div', { class: 'subform' },

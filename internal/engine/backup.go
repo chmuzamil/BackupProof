@@ -372,6 +372,10 @@ func (b *Builder) AddReader(ctx context.Context, name string, mode uint32, mtime
 	return e, b.add(e)
 }
 
+// Denied reports whether p is part of this server's own data, which is
+// never backed up.
+func (b *Builder) Denied(p string) bool { return IsDenied(p, b.deny) }
+
 // SetOwners records owners for entries already added under prefix, keyed by
 // their path below it. For files staged by someone who couldn't set their
 // owners (such as a Docker volume unpacked without root), so the backup still
@@ -406,6 +410,10 @@ func (b *Builder) AddTree(ctx context.Context, osRoot, prefix string) error {
 			return err
 		}
 		mp := snapshot.CleanPath(prefix + "/" + filepath.ToSlash(rel))
+		if d.IsDir() && IsDenied(p, b.deny) {
+			b.log("skipping %s: protected by this server", p)
+			return fs.SkipDir
+		}
 		info, err := d.Info()
 		if err != nil {
 			return err

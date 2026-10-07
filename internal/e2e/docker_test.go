@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/chmuzamil/backupproof/internal/agent"
+	"github.com/chmuzamil/backupproof/internal/discover"
 	"github.com/chmuzamil/backupproof/internal/server"
 	"github.com/chmuzamil/backupproof/internal/source"
 )
@@ -26,8 +28,9 @@ func dockerOut(t *testing.T, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// TestDockerBackupAndRestore backs up a Docker app's volume while its
-// container runs, then puts the volume back exactly (contents and owners).
+// TestDockerBackupAndRestore backs up a Docker app's volume and mounted
+// folder while its container runs, then puts both back (volume exactly, with
+// owners; the folder in place). A container started on its own is listed too.
 // It needs Docker and is skipped without it.
 func TestDockerBackupAndRestore(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
@@ -42,15 +45,39 @@ func TestDockerBackupAndRestore(t *testing.T) {
 	}
 	ctx := context.Background()
 	id := fmt.Sprintf("bptest%06d", rand.IntN(1e6))
-	vol, ctr := id+"-data", id+"-app"
+	vol, ctr, solo := id+"-data", id+"-app", id+"-solo"
+	// A mounted folder outside /tmp, which is never treated as app data.
+	home, _ := os.UserHomeDir()
+	conf, err := os.MkdirTemp(home, "bptest-conf-")
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		exec.Command("docker", "rm", "-f", ctr).Run()
+		exec.Command("docker", "rm", "-f", ctr, solo).Run()
 		exec.Command("docker", "volume", "rm", "-f", vol).Run()
+		os.RemoveAll(conf)
 	})
+	if err := os.WriteFile(filepath.Join(conf, "app.conf"), []byte("original settings"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	dockerOut(t, "volume", "create", vol)
 	dockerOut(t, "run", "--rm", "-v", vol+":/v", source.HelperImage, "sh", "-c",
 		"echo 'hello' > /v/a.txt && mkdir /v/db && echo 'rows' > /v/db/table && chown -R 999:999 /v/db && chmod 700 /v/db")
-	dockerOut(t, "run", "-d", "--name", ctr, "--label", "com.docker.compose.project="+id, "-v", vol+":/data", source.HelperImage, "sleep", "600")
+	dockerOut(t, "run", "-d", "--name", ctr, "--label", "com.docker.compose.project="+id, "-v", vol+":/data", "-v", conf+":/conf", source.HelperImage, "sleep", "600")
+	dockerOut(t, "run", "-d", "--name", solo, "-v", conf+":/conf:ro", source.HelperImage, "sleep", "600")
+	inv := discover.Collect(ctx)
+	var gotApp, gotSolo bool
+	for _, a := range inv.DockerApps {
+		if a.Name == id && !a.Standalone && len(a.Mounts) == 1 && a.Mounts[0] == conf {
+			gotApp = true
+		}
+		if a.Name == solo && a.Standalone {
+			gotSolo = true
+		}
+	}
+	if !gotApp || !gotSolo {
+		t.Errorf("discovery: app with its mounted folder %v, container on its own %v: %+v", gotApp, gotSolo, inv.DockerApps)
+	}
 
 	dir := t.TempDir()
 	data := filepath.Join(dir, "server")
@@ -83,7 +110,7 @@ func TestDockerBackupAndRestore(t *testing.T) {
 	a.do("POST", "/api/repositories", map[string]any{"name": "disk", "backend": map[string]any{"type": "local", "path": filepath.Join(dir, "repo")}, "password": "repository-password-123"}, &repo)
 	var src struct{ ID int64 }
 	a.do("POST", "/api/sources", map[string]any{"name": "app", "agentId": agents[0].ID, "repoId": repo.ID,
-		"spec":       map[string]any{"kind": "docker", "docker": map[string]any{"project": id, "stop": true}},
+		"spec":       map[string]any{"kind": "docker", "docker": map[string]any{"project": id, "stop": true, "mounts": true}},
 		"backupCron": "@daily", "drillCron": "0 4 * * 0"}, &src)
 
 	runJob := func(path string, body any) server.Job {
@@ -114,6 +141,7 @@ func TestDockerBackupAndRestore(t *testing.T) {
 
 	// Damage the volume, then put it back.
 	dockerOut(t, "exec", ctr, "sh", "-c", "echo broken > /data/a.txt && rm -rf /data/db && echo junk > /data/new.txt")
+	_ = os.WriteFile(filepath.Join(conf, "app.conf"), []byte("broken settings"), 0o644)
 	var pts struct{ Points []struct{ SnapshotID string } }
 	a.do("GET", fmt.Sprintf("/api/sources/%d/restore-points", src.ID), nil, &pts)
 	if j := runJob(fmt.Sprintf("/api/sources/%d/restore", src.ID), map[string]any{"snapshotId": pts.Points[0].SnapshotID, "paths": []string{"docker/volumes/" + vol}}); j.State != "succeeded" {
@@ -131,6 +159,20 @@ func TestDockerBackupAndRestore(t *testing.T) {
 	}
 	if running := dockerOut(t, "inspect", "-f", "{{.State.Running}}", ctr); running != "true" {
 		t.Error("the container was not started again after the restore")
+	}
+	// Putting back only the volume leaves the mounted folder alone…
+	if b, _ := os.ReadFile(filepath.Join(conf, "app.conf")); string(b) != "broken settings" {
+		t.Errorf("a volume-only restore changed the mounted folder: %q", b)
+	}
+	// …and putting back the whole app restores it too.
+	if j := runJob(fmt.Sprintf("/api/sources/%d/restore", src.ID), map[string]any{"snapshotId": pts.Points[0].SnapshotID}); j.State != "succeeded" {
+		t.Fatalf("whole app restore: %s\n%s", j.Error, j.Log)
+	}
+	if b, _ := os.ReadFile(filepath.Join(conf, "app.conf")); string(b) != "original settings" {
+		t.Errorf("mounted folder not put back: %q", b)
+	}
+	if running := dockerOut(t, "inspect", "-f", "{{.State.Running}}", ctr); running != "true" {
+		t.Error("the container was not started again after the whole app restore")
 	}
 	// Part of a volume can't be put back in place.
 	if j := runJob(fmt.Sprintf("/api/sources/%d/restore", src.ID), map[string]any{"snapshotId": pts.Points[0].SnapshotID, "paths": []string{"docker/volumes/" + vol + "/db"}}); j.State != "failed" {

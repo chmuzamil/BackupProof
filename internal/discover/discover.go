@@ -10,11 +10,14 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/chmuzamil/backupproof/internal/source"
 )
 
 type Item struct {
@@ -51,7 +54,8 @@ type Inventory struct {
 	Items     []Item     `json:"items"`
 	Databases []Database `json:"databases"`
 	Drives    []Drive    `json:"drives"`
-	// Docker apps (Compose projects) and named volumes found on this server.
+	// Docker apps (Compose projects and containers started on their own) and
+	// named volumes found on this server.
 	DockerApps    []DockerApp    `json:"dockerApps"`
 	DockerVolumes []DockerVolume `json:"dockerVolumes"`
 }
@@ -60,7 +64,11 @@ type DockerApp struct {
 	Name       string   `json:"name"`
 	Containers []string `json:"containers"`
 	Volumes    []string `json:"volumes"`
-	Running    bool     `json:"running"`
+	// Mounts are folders and files on this server mounted into the containers.
+	Mounts  []string `json:"mounts"`
+	Running bool     `json:"running"`
+	// Standalone is a container started without Compose (docker run).
+	Standalone bool `json:"standalone"`
 	// Database is true when one of its containers runs a database image.
 	Database bool `json:"database"`
 }
@@ -186,8 +194,9 @@ func (inv *Inventory) collectDocker(ctx context.Context) {
 	inv.collectDockerApps(ctx)
 }
 
-// collectDockerApps groups containers into Compose projects and lists named
-// volumes with the containers that use them.
+// collectDockerApps groups containers into Compose projects (a container
+// started on its own is an app by itself) and lists named volumes with the
+// containers that use them.
 func (inv *Inventory) collectDockerApps(ctx context.Context) {
 	ids, err := exec.CommandContext(ctx, "docker", "ps", "-aq").Output()
 	if err != nil {
@@ -202,7 +211,7 @@ func (inv *Inventory) collectDockerApps(ctx context.Context) {
 		}
 		var cs []struct {
 			Name   string
-			Mounts []struct{ Type, Name string }
+			Mounts []struct{ Type, Name, Source string }
 			Config struct {
 				Image  string
 				Labels map[string]string
@@ -214,24 +223,32 @@ func (inv *Inventory) collectDockerApps(ctx context.Context) {
 		}
 		for _, c := range cs {
 			name := strings.TrimPrefix(c.Name, "/")
-			var vols []string
+			var vols, mounts []string
 			for _, m := range c.Mounts {
 				if m.Type == "volume" && m.Name != "" {
 					vols = append(vols, m.Name)
 					used[m.Name] = append(used[m.Name], name)
 				}
+				if m.Type == "bind" && source.AppMount(m.Source) {
+					mounts = append(mounts, path.Clean(m.Source))
+				}
 			}
 			proj := c.Config.Labels["com.docker.compose.project"]
+			key := "compose:" + proj
 			if proj == "" {
-				continue
+				key = "container:" + name
 			}
-			a := apps[proj]
+			a := apps[key]
 			if a == nil {
-				a = &DockerApp{Name: proj, Containers: []string{}, Volumes: []string{}}
-				apps[proj] = a
+				a = &DockerApp{Name: proj, Containers: []string{}, Volumes: []string{}, Mounts: []string{}, Standalone: proj == ""}
+				if proj == "" {
+					a.Name = name
+				}
+				apps[key] = a
 			}
 			a.Containers = append(a.Containers, name)
 			a.Volumes = append(a.Volumes, vols...)
+			a.Mounts = append(a.Mounts, mounts...)
 			a.Running = a.Running || c.State.Running
 			img := strings.ToLower(c.Config.Image)
 			for _, db := range []string{"postgres", "postgis", "mysql", "mariadb", "mongo", "redis", "timescale"} {
@@ -243,10 +260,18 @@ func (inv *Inventory) collectDockerApps(ctx context.Context) {
 	}
 	for _, a := range apps {
 		sort.Strings(a.Containers)
-		sort.Strings(a.Volumes)
+		a.Volumes = sortedUniq(a.Volumes)
+		a.Mounts = sortedUniq(a.Mounts)
 		inv.DockerApps = append(inv.DockerApps, *a)
 	}
-	sort.Slice(inv.DockerApps, func(i, j int) bool { return inv.DockerApps[i].Name < inv.DockerApps[j].Name })
+	// Compose apps first, then containers started on their own.
+	sort.Slice(inv.DockerApps, func(i, j int) bool {
+		x, y := inv.DockerApps[i], inv.DockerApps[j]
+		if x.Standalone != y.Standalone {
+			return !x.Standalone
+		}
+		return x.Name < y.Name
+	})
 	out, err := exec.CommandContext(ctx, "docker", "volume", "ls", "-q").Output()
 	if err != nil {
 		return
@@ -262,6 +287,19 @@ func (inv *Inventory) collectDockerApps(ctx context.Context) {
 		}
 		inv.DockerVolumes = append(inv.DockerVolumes, DockerVolume{Name: v, UsedBy: u})
 	}
+}
+
+func sortedUniq(s []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, x := range s {
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func niceKind(k string) string {

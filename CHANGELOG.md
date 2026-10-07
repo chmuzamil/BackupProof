@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-08
+
+### Added
+
+- **Docker containers started on their own** (`docker run`, without Compose) are listed and can be protected like a Compose app.
+- **Mounted folders**: a Docker app's backup also includes the folders and files on the server mounted into its containers (bind mounts such as `./data`), and **Put the app's data back** returns them to where they came from. System paths such as `/proc`, `/tmp` and the Docker socket are left out.
+
+### Changed
+
+- Clearer messages when a server has no Docker apps or volumes.
+
 ## [0.2.2] - 2026-10-08
 
 The first published 0.2 release: no binaries were published for 0.2.0 or 0.2.1, whose release builds stopped at a failing test. It includes everything listed under them.
