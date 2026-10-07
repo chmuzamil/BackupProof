@@ -1164,9 +1164,18 @@ async function pageProtected() {
 // ---------------------------------------------------------- item detail
 
 async function pageSource(id) {
-  const [st, jobs, proofs] = await Promise.all([
-    api(`/sources/${id}`), api(`/jobs?${qs({ source: id, limit: 50 })}`), api(`/proofs?${qs({ source: id, limit: 100 })}`),
-  ]);
+  let st, jobs, proofs;
+  try {
+    [st, jobs, proofs] = await Promise.all([
+      api(`/sources/${id}`), api(`/jobs?${qs({ source: id, limit: 50 })}`), api(`/proofs?${qs({ source: id, limit: 100 })}`),
+    ]);
+  } catch (e) {
+    if (e.status !== 404) throw e;
+    document.title = 'Item removed · BackupProof';
+    return h('div', null, pageHead('Item removed'),
+      card(null, empty('This item isn’t protected any more: it was removed. Its earlier backups and proofs are kept in storage and under Proof history.',
+        h('div', { class: 'form-actions' }, h('a', { class: 'btn', href: '#/proofs' }, 'Proof history'), h('a', { class: 'btn primary', href: '#/protected' }, 'Go to Protected')))));
+  }
   const src = st.source, k = kindInfo(src.spec), isImp = src.spec && src.spec.kind === 'import';
   if (S.detailJob && S.detailJob.source !== id) S.detailJob = null;
   const drill = st.lastDrill, dp = pred(drill), backup = st.lastBackup, bp = pred(backup);

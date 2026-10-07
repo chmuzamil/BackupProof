@@ -275,9 +275,22 @@ func (s *Store) SourceWithSecrets(id int64) (*Source, error) {
 	return src, nil
 }
 
+// DeleteSource removes an item. Its open alerts are resolved (they can't be
+// fixed any more) and, like its proofs, unlinked, because SQLite may give the
+// next new item the same ID. Backups, proofs and alert history are kept.
 func (s *Store) DeleteSource(id int64) error {
-	_, err := s.db.Exec("DELETE FROM sources WHERE id=?", id)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec("DELETE FROM sources WHERE id=?", id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE alerts SET resolved=COALESCE(resolved, ?), source_id=NULL WHERE source_id=?", now(), id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetNextRuns(id int64, nextBackup, nextDrill time.Time) error {

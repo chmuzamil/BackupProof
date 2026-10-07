@@ -88,6 +88,12 @@ func OpenStore(dataDir string, secret []byte) (*Store, error) {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
+	// Older versions left the alerts of removed items open, linked to an item
+	// that no longer exists (and whose ID a new item could reuse).
+	if _, err := db.Exec("UPDATE alerts SET resolved=COALESCE(resolved, ?), source_id=NULL WHERE source_id IS NOT NULL AND source_id NOT IN (SELECT id FROM sources)", now()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return &Store{db: db, secret: secret}, nil
 }
 

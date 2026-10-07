@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-07
+
+### Fixed
+
+- Removing an item left its alerts open, with an "Open item" link to a page that no longer exists. Removing an item now resolves its alerts and unlinks them, like its proofs, so a new item that gets the same ID doesn't inherit them. Alerts left behind by older versions are cleaned up when the server starts.
+- Opening a removed item showed "source N not found". It now says the item was removed, with links to Proof history and Protected.
+
 ## [0.1.3] - 2026-10-07
 
 ### Added
@@ -55,7 +62,8 @@ First release.
 - Anything that could give control of a server is admin-only: commands and hooks, custom restore-test commands, moving items between servers, connecting servers, on-the-fly rclone remotes and the old-backup preview.
 - The built-in agent never backs up, imports from or stores into the server's own data folder.
 
-[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/chmuzamil/BackupProof/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/chmuzamil/BackupProof/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/chmuzamil/BackupProof/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/chmuzamil/BackupProof/compare/v0.1.0...v0.1.1
