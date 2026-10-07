@@ -54,6 +54,12 @@ Standalone (no server needed):
                        convert existing backups (e.g. encrypted dumps in S3/B2) into restore-tested copies.
                        Secrets: BP_IMPORT_PASSWORD, BP_IMPORT_KEY_FILE, BP_IMPORT_ACCESS_KEY, BP_IMPORT_SECRET_KEY
 
+Locked out of the dashboard (run on the server, with access to its data folder):
+  backupproof admin users          [--data DIR]
+  backupproof admin reset-password [--data DIR] USERNAME   new password from BP_NEW_PASSWORD or typed in
+  backupproof admin reset-2fa      [--data DIR] USERNAME   turn off two-factor sign-in
+  (DIR defaults to BP_DATA, or /var/lib/backupproof when that exists)
+
 Proofs:
   backupproof proof list   --repo REPO
   backupproof proof export --repo REPO DIGEST_PREFIX [-o bundle.json]
@@ -103,6 +109,8 @@ func main() {
 		err = cmdImport(ctx, args)
 	case "proof":
 		err = cmdProof(ctx, args)
+	case "admin":
+		err = cmdAdmin(args)
 	case "version", "--version":
 		fmt.Println(engine.Version)
 	case "help", "-h", "--help":
@@ -958,4 +966,64 @@ func cmdImport(ctx context.Context, args []string) error {
 		}
 	}
 	return err
+}
+
+// cmdAdmin recovers access to the dashboard from the server's own console.
+func cmdAdmin(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: backupproof admin users|reset-password|reset-2fa [--data DIR] [USERNAME]")
+	}
+	sub := args[0]
+	def := os.Getenv("BP_DATA")
+	if def == "" {
+		def = "./backupproof-data"
+		if fi, err := os.Stat("/var/lib/backupproof"); err == nil && fi.IsDir() {
+			def = "/var/lib/backupproof"
+		}
+	}
+	fs := flag.NewFlagSet("admin "+sub, flag.ExitOnError)
+	data := fs.String("data", def, "dashboard data folder")
+	if err := fs.Parse(reorder(args[1:])); err != nil {
+		return err
+	}
+	switch sub {
+	case "users":
+		users, err := server.ListAccounts(*data)
+		if err != nil {
+			return err
+		}
+		for _, u := range users {
+			tf := ""
+			if u.TwoFactor {
+				tf = "  (two-factor on)"
+			}
+			fmt.Printf("%-24s %s%s\n", u.Username, u.Role, tf)
+		}
+		return nil
+	case "reset-password", "reset-2fa":
+		if fs.NArg() != 1 {
+			return fmt.Errorf("usage: backupproof admin %s [--data DIR] USERNAME", sub)
+		}
+		user := fs.Arg(0)
+		if sub == "reset-2fa" {
+			if err := server.RecoverAccount(*data, user, "", true); err != nil {
+				return err
+			}
+			fmt.Printf("Two-factor sign-in is off for %s. They can sign in with their password and set it up again under Settings.\n", user)
+			return nil
+		}
+		pw := os.Getenv("BP_NEW_PASSWORD")
+		if pw == "" {
+			fmt.Fprint(os.Stderr, "new password (at least 10 characters): ")
+			in := bufio.NewReader(os.Stdin)
+			line, _ := in.ReadString('\n')
+			pw = strings.TrimRight(line, "\r\n")
+		}
+		if err := server.RecoverAccount(*data, user, pw, false); err != nil {
+			return err
+		}
+		fmt.Printf("New password set for %s. Their existing sessions were signed out.\n", user)
+		return nil
+	}
+	return fmt.Errorf("unknown admin command %q (users, reset-password or reset-2fa)", sub)
 }

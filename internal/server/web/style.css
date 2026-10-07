@@ -407,7 +407,7 @@ form .row, .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(
 .field-error { color: var(--bad); font-size: var(--fs-sm); font-weight: 550; }
 .field-error::before { content: "✗ "; }
 [aria-invalid="true"] { border-color: var(--bad) !important; }
-input[type=text], input[type=password], input[type=number], input[type=url], input[type=date], input[type=email], select, textarea {
+input[type=text], input[type=password], input[type=number], input[type=url], input[type=date], input[type=email], input[type=search], select, textarea {
   font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--text); width: 100%; min-width: 0; min-height: 36px;
   transition: border-color .15s var(--ease);
@@ -742,3 +742,15 @@ code.pw { font-size: 16px; letter-spacing: .5px; word-break: break-all; flex: 1 
 .theme-switch button:hover { color: #fff; }
 .theme-switch button[aria-pressed="true"] { background: var(--ink-2); color: #fff; }
 .theme-switch button:focus-visible { outline: 2px solid var(--ink-accent); outline-offset: 1px; }
+
+/* two-factor setup, recovery codes, activity search */
+.tfa-steps { margin: 0 0 8px; padding-left: 20px; }
+.tfa-steps > li { margin-bottom: 14px; }
+.qr-wrap { margin: 10px 0 6px; }
+.qr { width: 184px; height: 184px; display: block; border-radius: 8px; border: 1px solid var(--border); }
+.codes { list-style: none; padding: 0; margin: 10px 0 14px; display: grid; grid-template-columns: repeat(2, minmax(0, max-content)); gap: 6px 22px; }
+.codes code { font-size: 14px; letter-spacing: .04em; }
+.search-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.search-row input { flex: 1; max-width: 420px; }
+.center { text-align: center; }
+.auth .small.center { margin: 14px 0 0; }

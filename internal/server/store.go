@@ -81,7 +81,7 @@ func OpenStore(dataDir string, secret []byte) (*Store, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	// Additive migrations for databases created by older versions.
-	for _, m := range []string{"ALTER TABLE agents ADD COLUMN inventory TEXT"} {
+	for _, m := range append([]string{"ALTER TABLE agents ADD COLUMN inventory TEXT"}, accountMigrations...) {
 		// "duplicate column" on up-to-date databases is expected.
 		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
@@ -255,10 +255,13 @@ func (s *Store) LedgerEntries(fromSeq int64) ([]proof.LedgerEntry, error) {
 // --- users & sessions ----------------------------------------------------
 
 type User struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
-	Created  string `json:"created"`
+	ID        int64  `json:"id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	Created   string `json:"created"`
+	TwoFactor bool   `json:"twoFactor"`
+	// ViaToken names the API token a request was made with ("" for a browser session).
+	ViaToken string `json:"viaToken,omitempty"`
 }
 
 func (s *Store) UserCount() (int, error) {
@@ -285,7 +288,7 @@ func (s *Store) CreateUser(username, password, role string) (int64, error) {
 func (s *Store) Authenticate(username, password string) (*User, error) {
 	var u User
 	var h string
-	err := s.db.QueryRow("SELECT id,username,role,created,password_hash FROM users WHERE username=?", username).Scan(&u.ID, &u.Username, &u.Role, &u.Created, &h)
+	err := s.db.QueryRow("SELECT id,username,role,created,totp_enabled,password_hash FROM users WHERE username=?", username).Scan(&u.ID, &u.Username, &u.Role, &u.Created, &u.TwoFactor, &h)
 	if err != nil {
 		bpcrypto.CheckPassword("$argon2id$v=19$m=65536,t=3,p=2$00$00", password) // equalize timing
 		return nil, errors.New("invalid username or password")
@@ -296,8 +299,17 @@ func (s *Store) Authenticate(username, password string) (*User, error) {
 	return &u, nil
 }
 
+func (s *Store) UserByID(id int64) (*User, error) {
+	var u User
+	err := s.db.QueryRow("SELECT id,username,role,created,totp_enabled FROM users WHERE id=?", id).Scan(&u.ID, &u.Username, &u.Role, &u.Created, &u.TwoFactor)
+	if err != nil {
+		return nil, fmt.Errorf("user %d not found", id)
+	}
+	return &u, nil
+}
+
 func (s *Store) Users() ([]User, error) {
-	rows, err := s.db.Query("SELECT id,username,role,created FROM users ORDER BY id")
+	rows, err := s.db.Query("SELECT id,username,role,created,totp_enabled FROM users ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +317,7 @@ func (s *Store) Users() ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.Created); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.Created, &u.TwoFactor); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -354,8 +366,8 @@ func (s *Store) CreateSession(userID int64, ttl time.Duration) (token, csrf stri
 func (s *Store) Session(token string) (*User, string, error) {
 	var u User
 	var csrf, exp string
-	err := s.db.QueryRow(`SELECT u.id,u.username,u.role,u.created,s.csrf,s.expires FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?`,
-		bpcrypto.TokenHash(token)).Scan(&u.ID, &u.Username, &u.Role, &u.Created, &csrf, &exp)
+	err := s.db.QueryRow(`SELECT u.id,u.username,u.role,u.created,u.totp_enabled,s.csrf,s.expires FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?`,
+		bpcrypto.TokenHash(token)).Scan(&u.ID, &u.Username, &u.Role, &u.Created, &u.TwoFactor, &csrf, &exp)
 	if err != nil {
 		return nil, "", errors.New("not signed in")
 	}

@@ -28,6 +28,27 @@ var roleRank = map[string]int{"auditor": 1, "operator": 2, "admin": 3}
 // for state-changing requests.
 func (s *Server) auth(minRole string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// API tokens (Authorization: Bearer bpt_…) for scripts. They are not
+		// cookies, so CSRF doesn't apply, but they can't manage accounts or
+		// tokens: a leaked token must not be able to create a way back in.
+		if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+			u, name, err := s.store.TokenUser(strings.TrimSpace(bearer))
+			if err != nil {
+				writeErr(w, http.StatusUnauthorized, err)
+				return
+			}
+			u.ViaToken = name
+			if tokenForbidden(r.Pattern) {
+				writeErr(w, http.StatusForbidden, errors.New("API tokens can't manage users, tokens or two-factor sign-in; use the dashboard"))
+				return
+			}
+			if roleRank[u.Role] < roleRank[minRole] {
+				writeErr(w, http.StatusForbidden, fmt.Errorf("this token's role (%s) can't do this; it needs %s", u.Role, minRole))
+				return
+			}
+			h(w, r.WithContext(context.WithValue(r.Context(), userKey, u)))
+			return
+		}
 		c, err := r.Cookie(sessionCookie)
 		if err != nil {
 			writeErr(w, http.StatusUnauthorized, errors.New("not signed in"))
@@ -59,6 +80,9 @@ func currentUser(r *http.Request) *User {
 
 func (s *Server) actor(r *http.Request) string {
 	if u := currentUser(r); u != nil {
+		if u.ViaToken != "" {
+			return u.Username + " (API token “" + u.ViaToken + "”)"
+		}
 		return u.Username
 	}
 	return "anonymous"
@@ -112,6 +136,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/users", s.auth("admin", s.handleCreateUser))
 	mux.HandleFunc("DELETE /api/users/{id}", s.auth("admin", s.handleDeleteUser))
 	mux.HandleFunc("POST /api/users/password", s.auth("auditor", s.handleChangePassword))
+	s.accountRoutes(mux)
 }
 
 // --- session ---------------------------------------------------------------
@@ -177,21 +202,6 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	s.removeSetupCode()
 	s.audit(req.Username, "setup", "created initial admin account")
 	s.startSession(w, r, &User{ID: id, Username: req.Username, Role: "admin"})
-}
-
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Username, Password string }
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, 400, err)
-		return
-	}
-	u, err := s.store.Authenticate(req.Username, req.Password)
-	if err != nil {
-		time.Sleep(300 * time.Millisecond)
-		writeErr(w, 401, err)
-		return
-	}
-	s.startSession(w, r, u)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -803,21 +813,6 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(s.actor(r), "delete-user", fmt.Sprintf("user #%d", id))
-	writeJSON(w, 200, map[string]bool{"ok": true})
-}
-
-func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Password string }
-	if err := readJSON(r, &req); err != nil {
-		writeErr(w, 400, err)
-		return
-	}
-	u := currentUser(r)
-	if err := s.store.SetPassword(u.ID, req.Password); err != nil {
-		writeErr(w, 400, err)
-		return
-	}
-	s.audit(u.Username, "change-password", "")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

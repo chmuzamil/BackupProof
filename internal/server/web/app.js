@@ -230,6 +230,7 @@ const ICONS = {
   bell: ['M6 16V11a6 6 0 0 1 12 0v5l2 2H4z', 'M10 21h4'],
   plus: ['M12 5v14', 'M5 12h14'],
   history: ['M3 12a9 9 0 1 0 3-6.7', 'M3 4v5h5', 'M12 7v5l3 3'],
+  list: ['M9 6h11', 'M9 12h11', 'M9 18h11', 'M4.5 6h.01', 'M4.5 12h.01', 'M4.5 18h.01'],
   info: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M12 11v5', 'M12 8h.01'],
   menu: ['M4 7h16', 'M4 12h16', 'M4 17h16'],
   close: ['M6 6l12 12', 'M18 6L6 18'],
@@ -797,6 +798,7 @@ function renderAuth(errMsg) {
         const body = { username: user.value.trim(), password: pass.value };
         if (needCode) body.setupCode = code.value.trim();
         const r = await api(setup ? '/setup' : '/login', { method: 'POST', body, noAuthRedirect: true });
+        if (r && r.needCode) { renderCodeStep(r.challenge); return; }
         S.user = r.user; S.csrf = r.csrf || S.csrf;
         if (S.status) S.status.setupRequired = false;
         if (!location.hash || location.hash === '#/') history.replaceState(null, '', '#/dashboard');
@@ -849,6 +851,39 @@ function themeSwitch() {
   return wrap;
 }
 
+// renderCodeStep is the second sign-in step for accounts with two-factor on.
+function renderCodeStep(challenge) {
+  const app = clear(document.getElementById('app'));
+  const code = input({ name: 'one-time-code', autocomplete: 'one-time-code', inputmode: 'text', code: true, required: true, placeholder: '123456…', spellcheck: 'false' });
+  const err = errBox();
+  const form = h('form', {
+    onsubmit: busy(async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      if (!code.value.trim()) return fieldError(code, 'Enter the 6-digit code from your authenticator app.');
+      try {
+        const r = await api('/login', { method: 'POST', body: { challenge, code: code.value.trim() }, noAuthRedirect: true });
+        S.user = r.user; S.csrf = r.csrf || S.csrf;
+        if (!location.hash || location.hash === '#/') history.replaceState(null, '', '#/dashboard');
+        renderShell();
+      } catch (ex) {
+        if (/password again/i.test(ex.message)) { renderAuth(ex.message); return; }
+        showErr(err, ex.message);
+        code.select();
+      }
+    }, 'Checking…'),
+  },
+  field('Code', code, 'From your authenticator app. Lost your phone? Enter one of your recovery codes instead.'),
+  err,
+  h('button', { type: 'submit', class: 'btn primary block lg' }, 'Sign in'),
+  h('p', { class: 'small center' }, h('a', { href: '#/', onclick: (e) => { e.preventDefault(); renderAuth(); } }, 'Use a different account')));
+  app.append(h('main', { class: 'auth', id: 'main', tabindex: '-1' },
+    h('div', { class: 'card' }, brand(), h('h1', { class: 'auth-title' }, 'Enter your code'),
+      h('p', { class: 'muted' }, 'This account uses two-factor sign-in.'), form)));
+  document.title = 'Enter your code · BackupProof';
+  code.focus();
+}
+
 function verLabel() { const v = String(S.status.version).replace(/^backupproof\//, ''); return /^\d/.test(v) ? 'v' + v : v; }
 
 // markSvg is the BackupProof mark, the same shield and check as backupproof.dev.
@@ -888,6 +923,7 @@ const NAV = [
   ['import', 'Import', 'import'],
   ['proofs', 'Proof history', 'history'],
   ['alerts', 'Alerts', 'bell'],
+  ['activity', 'Activity', 'list'],
   ['settings', 'Settings', 'sliders'],
 ];
 
@@ -978,6 +1014,7 @@ const ROUTES = [
   [/^\/proofs$/, pageProofs],
   [/^\/keys$/, pageKeys],
   [/^\/alerts$/, pageAlerts],
+  [/^\/activity$/, pageActivity],
   [/^\/settings$/, pageSettings],
 ];
 
@@ -3098,13 +3135,56 @@ async function pageAlerts() {
 
 // -------------------------------------------------------------- settings
 
+// Plain words for the actions in the activity log.
+const ACTION_WORDS = {
+  setup: 'Created the first administrator', 'sign-in': 'Signed in', 'change-password': 'Changed their password',
+  'reset-password': 'Reset a password', 'enable-2fa': 'Turned on two-factor sign-in', 'disable-2fa': 'Turned off two-factor sign-in',
+  'reset-2fa': 'Reset two-factor sign-in', 'create-user': 'Added a person', 'delete-user': 'Removed a person',
+  'create-token': 'Created an API token', 'delete-token': 'Deleted an API token', 'create-repository': 'Added storage',
+  'delete-repository': 'Removed storage', 'save-source': 'Saved an item', 'delete-source': 'Removed an item',
+  'run-backup': 'Started a backup', 'run-drill': 'Started a restore test', 'run-check': 'Started a storage health check',
+  'create-enroll-token': 'Created a server connection code', enroll: 'Connected a server', 'revoke-agent': 'Disconnected a server',
+  'update-notifications': 'Changed alert settings', 'update-public-url': 'Changed the dashboard address', 'update-tsa': 'Changed timestamp services',
+  'export-evidence': 'Downloaded a proof report',
+};
+
+async function pageActivity() {
+  const { params } = hashParts();
+  const q = params.get('q') || '';
+  const rows = (await api('/activity?' + qs({ q, limit: 50 }))) || [];
+  const H = ['When', 'Who', 'What', 'Details'];
+  const body = h('tbody');
+  const addRows = (list) => list.forEach((a) => body.append(tr([timeEl(a.time), h('span', { class: 'break' }, a.actor), ACTION_WORDS[a.action] || a.action, h('span', { class: 'break small' }, a.detail || '—')], H)));
+  addRows(rows);
+  const more = h('div', { class: 'form-actions start' });
+  let last = rows.length ? rows[rows.length - 1].seq : 0;
+  const showMore = (n) => fill(more, n === 50 ? btn('Show older', busy(async () => {
+    const next = (await api('/activity?' + qs({ q, limit: 50, before: last }))) || [];
+    addRows(next);
+    if (next.length) last = next[next.length - 1].seq;
+    showMore(next.length);
+  }, 'Loading…')) : null);
+  showMore(rows.length);
+  const search = input({ name: 'q', type: 'search', value: q, placeholder: 'Search by person, action or item…', autocomplete: 'off', 'aria-label': 'Search the activity' });
+  const form = h('form', { class: 'search-row', role: 'search', onsubmit: (e) => { e.preventDefault(); location.hash = '#/activity' + (search.value.trim() ? '?' + qs({ q: search.value.trim() }) : ''); } },
+    search, h('button', { type: 'submit', class: 'btn' }, 'Search'));
+  const t = table(H, []);
+  t.querySelector('tbody').replaceWith(body);
+  return h('div', null,
+    pageHead('Activity', 'Who did what, from sign-ins to changed settings. Every entry is part of the tamper-evident ledger.'),
+    h('section', { class: 'card' }, form,
+      rows.length ? t : empty(q ? `Nothing matches “${q}”.` : 'Nothing recorded yet.'),
+      more));
+}
+
 async function pageSettings() {
   const parts = [pageHead('Settings')];
   if (isAdmin()) {
     const [notify, tsa, users, st] = await Promise.all([api('/settings/notify'), api('/settings/tsa'), api('/users'), api('/status', { noAuthRedirect: true })]);
-    parts.push(serverCard(st || {}), notifyCard(notify || {}), usersCard(users || []), tsaCard(tsa || { urls: [] }));
+    const tokens = await api('/tokens').catch(() => []);
+    parts.push(serverCard(st || {}), notifyCard(notify || {}), usersCard(users || []), tokensCard(tokens || []), tsaCard(tsa || { urls: [] }));
   }
-  parts.push(passwordCard());
+  parts.push(twoFactorCard(), passwordCard());
   return settingsGuard(h('div', null, parts));
 }
 
@@ -3185,7 +3265,7 @@ function tsaCard(t) {
 }
 
 function usersCard(users) {
-  const H = ['Username', 'Can', 'Added', ''];
+  const H = ['Username', 'Can', 'Two-factor', 'Added', ''];
   const ROLE_WORDS = { admin: 'everything (administrator)', operator: 'set up and run backups', auditor: 'only view and download proofs' };
   const u = input({ name: 'new-username', code: true, autocomplete: 'off' });
   const p = input({ name: 'new-user-password', type: 'password', autocomplete: 'off', minlength: 10 });
@@ -3204,15 +3284,22 @@ function usersCard(users) {
   }, h('h3', null, 'Add a person'), h('div', { class: 'row' }, field('Username', u), field('Password', p, 'At least 10 characters.'), field('They can', r)),
   h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Add person')));
   return card('People who can sign in',
-    table(H, users.map((x) => tr([h('span', { class: 'break' }, x.username), ROLE_WORDS[x.role] || x.role, timeEl(x.created),
-      x.id === S.user.id ? h('span', { class: 'muted small' }, 'you') : btn('Remove', busy(async () => {
-        if (!(await confirmDlg(`Remove “${x.username}”? They will no longer be able to sign in.`, 'Remove'))) return;
-        await del(`/users/${x.id}`); toast('Removed', 'ok'); reload();
-      }), 'sm danger', { 'aria-label': 'Remove ' + x.username })], H))),
+    table(H, users.map((x) => tr([h('span', { class: 'break' }, x.username), ROLE_WORDS[x.role] || x.role,
+      x.twoFactor ? h('span', { class: 'pill ok' }, 'On') : h('span', { class: 'muted' }, 'Off'), timeEl(x.created),
+      x.id === S.user.id ? h('span', { class: 'muted small' }, 'you') : h('div', { class: 'btns' },
+        x.twoFactor ? btn('Reset two-factor', busy(async () => {
+          if (!(await confirmDlg(`Turn off two-factor sign-in for “${x.username}”? Use this when they’ve lost their phone and recovery codes. They can set it up again after signing in.`, 'Turn it off'))) return;
+          await post(`/users/${x.id}/2fa/reset`); toast('Two-factor sign-in turned off for ' + x.username, 'ok'); reload();
+        }), 'sm', { 'aria-label': 'Reset two-factor for ' + x.username }) : null,
+        btn('Remove', busy(async () => {
+          if (!(await confirmDlg(`Remove “${x.username}”? They will no longer be able to sign in.`, 'Remove'))) return;
+          await del(`/users/${x.id}`); toast('Removed', 'ok'); reload();
+        }), 'sm danger', { 'aria-label': 'Remove ' + x.username }))], H))),
     form);
 }
 
 function passwordCard() {
+  const cur = input({ name: 'current-password', type: 'password', autocomplete: 'current-password' });
   const p1 = input({ name: 'new-password', type: 'password', autocomplete: 'new-password', minlength: 10 });
   const p2 = input({ name: 'new-password-2', type: 'password', autocomplete: 'new-password' });
   const form = h('form', {
@@ -3220,16 +3307,121 @@ function passwordCard() {
     onsubmit: busy(async (e) => {
       e.preventDefault();
       clearErrors(form);
+      if (!cur.value) return fieldError(cur, 'Enter your current password.');
       if (p1.value.length < 10) return fieldError(p1, 'The password must be at least 10 characters.');
       if (p1.value !== p2.value) return fieldError(p2, 'The two passwords are different. Type the same password twice.');
-      await post('/users/password', { password: p1.value });
-      p1.value = p2.value = '';
+      try { await post('/users/password', { currentPassword: cur.value, password: p1.value }); }
+      catch (ex) { if (ex.status === 403) return fieldError(cur, ex.message); throw ex; }
       S.dirty = false;
-      toast('Password changed', 'ok');
+      toast('Password changed. Sign in with the new one.', 'ok');
+      S.user = null; renderAuth();
     }),
-  }, h('input', { type: 'text', name: 'username', autocomplete: 'username', value: S.user.username, hidden: true, readonly: true }), h('div', { class: 'row' }, field('New password', p1, 'At least 10 characters.'), field('Type it again', p2)),
+  }, h('input', { type: 'text', name: 'username', autocomplete: 'username', value: S.user.username, hidden: true, readonly: true }), field('Current password', cur), h('div', { class: 'row' }, field('New password', p1, 'At least 10 characters.'), field('Type it again', p2)),
   h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Change password')));
   return card(`Your sign-in password (${S.user.username})`, form);
+}
+
+// qrSvg draws a QR code from rows of "0"/"1" sent by the server.
+function qrSvg(rows) {
+  const NS = 'http://www.w3.org/2000/svg', n = rows.length, q = 4;
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${n + 2 * q} ${n + 2 * q}`);
+  svg.setAttribute('class', 'qr');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'QR code to scan with your authenticator app');
+  svg.setAttribute('shape-rendering', 'crispEdges');
+  const bg = document.createElementNS(NS, 'rect');
+  bg.setAttribute('width', n + 2 * q); bg.setAttribute('height', n + 2 * q); bg.setAttribute('fill', '#fff');
+  let d = '';
+  rows.forEach((row, y) => { for (let x = 0; x < row.length; x++) if (row[x] === '1') d += `M${x + q} ${y + q}h1v1h-1z`; });
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', d); path.setAttribute('fill', '#000');
+  svg.append(bg, path);
+  return svg;
+}
+
+function recoveryCodesBox(codes) {
+  const text = 'BackupProof recovery codes for ' + S.user.username + '\nEach works once, instead of a code from your authenticator app.\n\n' + codes.join('\n') + '\n';
+  return h('div', null,
+    h('p', null, h('strong', null, 'Save these recovery codes.'), ' If you lose your phone, each one lets you sign in once. They won’t be shown again.'),
+    h('ul', { class: 'codes', translate: 'no' }, codes.map((c) => h('li', null, h('code', null, c)))),
+    h('div', { class: 'btns' }, copyBtn(() => text, 'Copy codes'), btn('Download', () => download(`backupproof-recovery-codes-${S.user.username}.txt`, text), 'sm')));
+}
+
+function twoFactorCard() {
+  const on = !!S.user.twoFactor;
+  const setup = busy(async () => {
+    const t = await post('/2fa/setup');
+    const code = input({ name: 'one-time-code', autocomplete: 'one-time-code', inputmode: 'numeric', code: true, placeholder: '123456…' });
+    const err = errBox();
+    const body = h('div', { class: 'tfa-setup' },
+      h('ol', { class: 'tfa-steps' },
+        h('li', null, 'Open an authenticator app on your phone, such as Google Authenticator, Microsoft Authenticator, 1Password or Bitwarden.'),
+        h('li', null, 'Scan this code with it.', h('div', { class: 'qr-wrap' }, qrSvg(t.qr)),
+          details('Can’t scan? Enter this key instead', h('p', null, h('code', { class: 'break', translate: 'no' }, t.secret.replace(/(.{4})/g, '$1 ').trim())))),
+        h('li', null, 'Type the 6-digit code the app shows.', field('Code', code))),
+      err);
+    let close;
+    const confirm = btn('Turn on two-factor sign-in', busy(async () => {
+      err.textContent = '';
+      if (!/^\d{6}$/.test(code.value.trim())) return fieldError(code, 'Enter the 6 digits from the app.');
+      try {
+        const res = await post('/2fa/enable', { code: code.value.trim() });
+        S.user.twoFactor = true;
+        close();
+        modal('Two-factor sign-in is on', recoveryCodesBox(res.recoveryCodes), [], { closeLabel: 'I’ve saved them', onClose: () => reload() });
+      } catch (ex) { showErr(err, ex.message); }
+    }, 'Checking…'), 'primary');
+    close = modal('Set up two-factor sign-in', body, [confirm], { wide: true, initialFocus: code });
+  }, 'Preparing…');
+  const off = busy(async () => {
+    const pw = input({ name: 'current-password', type: 'password', autocomplete: 'current-password' });
+    const err = errBox();
+    let close;
+    const go = btn('Turn off', busy(async () => {
+      try { await post('/2fa/disable', { password: pw.value }); S.user.twoFactor = false; close(); toast('Two-factor sign-in is off', 'ok'); reload(); }
+      catch (ex) { showErr(err, ex.message); }
+    }), 'danger solid');
+    close = modal('Turn off two-factor sign-in?', h('div', null, h('p', null, 'Signing in will only need your password. Enter it to confirm.'), field('Your password', pw), err), [go], { initialFocus: pw });
+  });
+  return card('Two-factor sign-in',
+    h('p', null, on
+      ? [h('span', { class: 'pill ok' }, 'On'), ' Signing in needs your password and a code from your authenticator app.']
+      : [h('span', { class: 'pill' }, 'Off'), ' Add a code from your phone to signing in, so a stolen password isn’t enough.']),
+    h('div', { class: 'form-actions start' }, on ? btn('Turn off', off, 'danger') : btn('Set up two-factor sign-in', setup, 'primary')));
+}
+
+function tokensCard(tokens) {
+  const H = ['Name', 'Can', 'Created by', 'Last used', 'Expires', ''];
+  const ROLE = { admin: 'Everything', operator: 'Set up and run backups', auditor: 'Only view' };
+  const name = input({ name: 'token-name', autocomplete: 'off', placeholder: 'CI deploys…' });
+  const role = select([['auditor', 'Only view (monitoring, reports)'], ['operator', 'Set up and run backups'], ['admin', 'Everything except people and tokens']], 'auditor', { name: 'token-role' });
+  const exp = select([['30', '30 days'], ['90', '90 days'], ['365', '1 year'], ['0', 'Never']], '90', { name: 'token-expiry' });
+  const form = h('form', {
+    novalidate: true,
+    onsubmit: busy(async (e) => {
+      e.preventDefault();
+      clearErrors(form);
+      if (!name.value.trim()) return fieldError(name, 'Give the token a name, so you know what uses it.');
+      const res = await post('/tokens', { name: name.value.trim(), role: role.value, expiresDays: Number(exp.value) });
+      S.dirty = false;
+      modal('Copy your new token', h('div', null,
+        h('p', null, 'This is the only time it’s shown. Store it where the script can read it, such as a secret in your CI.'),
+        h('div', { class: 'pwbox' }, h('code', { class: 'break', translate: 'no' }, res.token), copyBtn(() => res.token, 'Copy', 'Copy the token')),
+        h('p', { class: 'hint' }, 'Send it as a header: ', h('code', { translate: 'no' }, 'Authorization: Bearer ' + res.token.slice(0, 12) + '…'))),
+      [], { closeLabel: 'Done', onClose: () => reload() });
+    }, 'Creating…'),
+  }, h('h3', null, 'Create a token'), h('div', { class: 'row' }, field('Name', name), field('It can', role), field('Expires after', exp)),
+  h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Create token')));
+  return card('API tokens',
+    h('p', { class: 'muted' }, 'For scripts and monitoring that use the BackupProof API. Tokens can’t manage people or other tokens.'),
+    tokens.length ? table(H, tokens.map((t) => tr([h('span', { class: 'break' }, t.name, ' ', h('code', { class: 'muted small', translate: 'no' }, t.prefix + '…')), ROLE[t.role] || t.role, t.username,
+      t.lastUsed ? timeEl(t.lastUsed) : h('span', { class: 'muted' }, 'never'), t.expires ? timeEl(t.expires) : 'never',
+      btn('Delete', busy(async () => {
+        if (!(await confirmDlg(`Delete the token “${t.name}”? Anything using it stops working straight away.`, 'Delete token'))) return;
+        await del(`/tokens/${t.id}`); toast('Token deleted', 'ok'); reload();
+      }), 'sm danger quiet', { 'aria-label': 'Delete token ' + t.name })], H))) : h('p', { class: 'muted' }, 'No tokens yet.'),
+    form);
 }
 
 function settingsGuard(node) {
