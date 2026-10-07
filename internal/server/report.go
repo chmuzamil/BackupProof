@@ -124,9 +124,10 @@ func (r *weeklyReport) html(dashboard string) string {
 	b.WriteString(`<tr style="text-align:left;color:#56607a;font-size:13px"><th style="padding:10px">Item</th><th style="padding:10px">Status</th><th style="padding:10px">Backups</th><th style="padding:10px">Restore tests</th></tr>`)
 	for _, row := range r.Rows {
 		color := "#b3261e"
-		if row.Status == "Restore tested" {
+		switch row.Status {
+		case "Restore tested":
 			color = "#157a52"
-		} else if row.Status == "Not tested yet" {
+		case "Not tested yet":
 			color = "#56607a"
 		}
 		fmt.Fprintf(&b, `<tr style="border-top:1px solid #d9dfec"><td style="padding:10px;font-weight:600">%s</td><td style="padding:10px;color:%s">%s</td><td style="padding:10px">%d%s</td><td style="padding:10px">%d%s</td></tr>`,

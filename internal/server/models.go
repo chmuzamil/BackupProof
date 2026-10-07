@@ -139,7 +139,8 @@ type Source struct {
 	Name       string `json:"name"`
 	AgentID    int64  `json:"agentId"`
 	VerifierID *int64 `json:"verifierId,omitempty"`
-	// CopyRepoID is a second storage that gets a copy of every backup.
+	// CopyRepoID is a second storage that gets a copy of every backup. Only
+	// handleSetCopy (admins) changes it; saving an item leaves it alone.
 	CopyRepoID       *int64           `json:"copyRepoId,omitempty"`
 	RepoID           int64            `json:"repoId"`
 	Spec             source.Spec      `json:"spec"`
@@ -228,15 +229,15 @@ func (s *Store) SaveSource(src *Source, sec *SourceSecret) (int64, error) {
 		}
 	}
 	if src.ID == 0 {
-		res, err := s.db.Exec(`INSERT INTO sources(name,agent_id,verifier_id,repo_id,spec,secret,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,created,copy_repo_id)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, src.Name, src.AgentID, src.VerifierID, src.RepoID, string(spec), ct, src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled, now(), src.CopyRepoID)
+		res, err := s.db.Exec(`INSERT INTO sources(name,agent_id,verifier_id,repo_id,spec,secret,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,created)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, src.Name, src.AgentID, src.VerifierID, src.RepoID, string(spec), ct, src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled, now())
 		if err != nil {
 			return 0, err
 		}
 		return res.LastInsertId()
 	}
-	q := `UPDATE sources SET agent_id=?,verifier_id=?,repo_id=?,spec=?,backup_cron=?,drill_cron=?,retention=?,proof_max_age_hours=?,enabled=?,copy_repo_id=?,next_backup=NULL,next_drill=NULL`
-	args := []any{src.AgentID, src.VerifierID, src.RepoID, string(spec), src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled, src.CopyRepoID}
+	q := `UPDATE sources SET agent_id=?,verifier_id=?,repo_id=?,spec=?,backup_cron=?,drill_cron=?,retention=?,proof_max_age_hours=?,enabled=?,next_backup=NULL,next_drill=NULL`
+	args := []any{src.AgentID, src.VerifierID, src.RepoID, string(spec), src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled}
 	if ct != nil {
 		q += ",secret=?"
 		args = append(args, ct)

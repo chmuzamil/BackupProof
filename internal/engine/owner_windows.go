@@ -14,6 +14,9 @@ func ownerOf(fs.FileInfo) (int, int, bool) { return -1, -1, false }
 
 func adoptParentOwner(*os.Root, string) {}
 
+// trustedLink: links and junctions are never followed by an in-place restore.
+func trustedLink(*os.Root, fs.FileInfo) bool { return false }
+
 func pathExists(root *os.Root, name string) bool {
 	_, err := root.Lstat(name)
 	return err == nil

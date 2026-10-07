@@ -145,8 +145,9 @@ func restoreMySQL(ctx context.Context, s Spec, dump, target string, replace bool
 			if bytes.HasPrefix(line, []byte("CREATE DATABASE ")) || bytes.HasPrefix(line, []byte("USE `")) {
 				continue
 			}
-			w.Write(line)
-			w.WriteByte('\n')
+			// A failed write shows up in Flush below, as the pipe is closed.
+			_, _ = w.Write(line)
+			_ = w.WriteByte('\n')
 		}
 		if err := sc.Err(); err != nil {
 			_ = pw.CloseWithError(err)

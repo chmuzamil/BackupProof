@@ -89,9 +89,7 @@ func inspectContainers(ctx context.Context, d *DockerSpec) ([]dockerContainer, e
 		if err != nil {
 			return nil, err
 		}
-		for _, n := range strings.Fields(string(out)) {
-			names = append(names, n)
-		}
+		names = append(names, strings.Fields(string(out))...)
 		if len(names) == 0 && len(d.Volumes) == 0 {
 			return nil, fmt.Errorf("no containers belong to the Docker app %q", d.Project)
 		}

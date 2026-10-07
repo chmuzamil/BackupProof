@@ -105,3 +105,31 @@ func TestWeeklyReportSchedule(t *testing.T) {
 		t.Errorf("report: %q", rep.subject())
 	}
 }
+
+// A saved password or token is kept when left empty, but not when its
+// destination changes, so it can't be sent to a server someone else picked.
+func TestSavedSecretsStayWithTheirDestination(t *testing.T) {
+	srv, err := New(Config{DataDir: filepath.Join(t.TempDir(), "s"), NoLocalAgent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	b, _ := json.Marshal(NotifySettings{SMTPHost: "mail.example.com", SMTPPort: 587, SMTPPass: "smtp-secret", GotifyURL: "https://gotify.example.com", GotifyToken: "g-secret", PagerDutyKey: "pd-secret"})
+	_ = srv.store.SetSetting("notify", string(b))
+	put := func(body string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		srv.handlePutNotify(w, httptest.NewRequest("PUT", "/api/settings/notify", strings.NewReader(body)))
+		if w.Code != 200 {
+			t.Fatalf("HTTP %d: %s", w.Code, w.Body)
+		}
+	}
+	put(`{"smtpHost":"mail.example.com","smtpPort":587,"gotifyUrl":"https://gotify.example.com"}`)
+	if n := srv.notifySettings(); n.SMTPPass != "smtp-secret" || n.GotifyToken != "g-secret" || n.PagerDutyKey != "pd-secret" {
+		t.Fatalf("unchanged destinations lost their secrets: %+v", n)
+	}
+	put(`{"smtpHost":"attacker.example","smtpPort":587,"gotifyUrl":"https://attacker.example"}`)
+	if n := srv.notifySettings(); n.SMTPPass != "" || n.GotifyToken != "" || n.PagerDutyKey != "pd-secret" {
+		t.Fatalf("secrets followed a changed destination: %+v", n)
+	}
+}

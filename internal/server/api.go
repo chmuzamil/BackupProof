@@ -108,7 +108,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sources/{id}/download", s.auth("admin", s.handleDownloadFiles))
 	mux.HandleFunc("POST /api/sources/{id}/restore", s.auth("admin", s.handleRestore))
 	mux.HandleFunc("POST /api/sources/{id}/restore-db", s.auth("admin", s.handleRestoreDB))
-	mux.HandleFunc("PUT /api/sources/{id}/copy", s.auth("operator", s.handleSetCopy))
+	mux.HandleFunc("PUT /api/sources/{id}/copy", s.auth("admin", s.handleSetCopy))
 
 	mux.HandleFunc("GET /api/jobs", s.auth("auditor", s.handleListJobs))
 	mux.HandleFunc("GET /api/jobs/{id}", s.auth("auditor", s.handleGetJob))
@@ -119,7 +119,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/agents/{id}/limits", s.auth("operator", s.handlePutLimits))
 
 	mux.HandleFunc("GET /api/repositories", s.auth("auditor", s.handleListRepos))
-	mux.HandleFunc("POST /api/repositories", s.auth("operator", s.handleCreateRepo))
+	mux.HandleFunc("POST /api/repositories", s.auth("admin", s.handleCreateRepo))
 	mux.HandleFunc("DELETE /api/repositories/{id}", s.auth("admin", s.handleDeleteRepo))
 	mux.HandleFunc("POST /api/repositories/{id}/check", s.auth("operator", s.handleCheckRepo))
 	mux.HandleFunc("GET /api/repositories/stats", s.auth("auditor", s.handleRepoStats))
@@ -735,12 +735,19 @@ func (s *Server) handlePutNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n := req.NotifySettings
-	// An empty secret keeps the saved one.
+	// An empty secret keeps the saved one, but only while it still goes to
+	// the same place: otherwise changing the address and sending a test
+	// would hand the saved password or token to another server.
 	old := s.notifySettings()
 	oldSecrets := old.secretFields()
+	moved := map[string]bool{
+		"smtpPass":    n.SMTPHost != old.SMTPHost || n.SMTPPort != old.SMTPPort,
+		"ntfyToken":   n.NtfyURL != old.NtfyURL,
+		"gotifyToken": n.GotifyURL != old.GotifyURL,
+	}
 	clear := req
 	for k, p := range n.secretFields() {
-		if *p == "" {
+		if *p == "" && !moved[k] {
 			*p = *oldSecrets[k]
 		}
 	}

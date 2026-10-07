@@ -16,7 +16,7 @@ func RecoverAccount(dataDir, username, newPassword string, resetTwoFactor bool) 
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	var id int64
 	if err := st.db.QueryRow("SELECT id FROM users WHERE username=?", username).Scan(&id); err != nil {
 		return fmt.Errorf("no account named %q (run `backupproof admin users` to list them)", username)
@@ -42,7 +42,7 @@ func ListAccounts(dataDir string) ([]User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	return st.Users()
 }
 

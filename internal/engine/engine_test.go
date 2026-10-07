@@ -260,3 +260,39 @@ func TestRestoreRefusesWritesThroughSymlinks(t *testing.T) {
 		t.Logf("case 3 skipped: cannot create symlinks here (%v)", err)
 	}
 }
+
+// TestRestoreInPlaceRefusesPlantedSymlinks: restoring in place writes as root
+// into folders other people own. A folder someone swapped for a symlink after
+// the backup (here to the target's own etc folder) must not be followed.
+func TestRestoreInPlaceRefusesPlantedSymlinks(t *testing.T) {
+	ctx := context.Background()
+	r, dir := newRepo(t)
+	target := filepath.Join(dir, "root")
+	os.MkdirAll(filepath.Join(target, "etc"), 0o755)
+	shadow := filepath.Join(target, "etc", "shadow")
+	os.WriteFile(shadow, []byte("root secrets"), 0o600)
+	os.MkdirAll(filepath.Join(target, "home", "alice"), 0o755)
+	link := filepath.Join(target, "home", "alice", "docs")
+	if err := os.Symlink(filepath.Join("..", "..", "etc"), link); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	if os.Geteuid() == 0 { // the link is alice's, not root's (root's own links are trusted)
+		os.Lchown(link, 65534, 65534)
+	}
+	s := craftedSnapshot(t, r, nil, map[string]string{"home/alice/docs/shadow": "alice was here", "home/alice/notes.txt": "fine"})
+	if _, err := Restore(ctx, r, s, target, RestoreOptions{Original: true}); err == nil {
+		t.Fatal("in-place restore through a planted symlink must be refused")
+	}
+	if b, _ := os.ReadFile(shadow); string(b) != "root secrets" {
+		t.Fatalf("file outside the folder was overwritten: %q", b)
+	}
+
+	// Without the symlink, the same restore works.
+	os.Remove(filepath.Join(target, "home", "alice", "docs"))
+	if _, err := Restore(ctx, r, s, target, RestoreOptions{Original: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(target, "home", "alice", "docs", "shadow")); string(b) != "alice was here" {
+		t.Fatalf("restored file: %q", b)
+	}
+}

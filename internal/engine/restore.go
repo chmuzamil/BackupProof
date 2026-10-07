@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -80,8 +81,20 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		return res, err
 	}
 	defer root.Close()
+	pl := &placer{base: root, abs: target, open: map[string]*os.Root{}}
+	defer pl.close()
+	// at returns the folder an entry goes in and its name there. In place,
+	// that folder is opened level by level (see placer).
+	at := func(name string) (*os.Root, string, error) {
+		if !opts.Original {
+			return root, name, nil
+		}
+		d, err := pl.dir(filepath.Dir(name))
+		return d, filepath.Base(name), err
+	}
 
 	type dirTime struct {
+		root  *os.Root
 		path  string
 		mtime int64
 	}
@@ -116,23 +129,40 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		name := filepath.FromSlash(e.Path)
 		switch e.Type {
 		case snapshot.TypeDir:
-			existed := pathExists(root, name)
-			if err := root.MkdirAll(name, 0o700); err != nil {
+			if !opts.Original {
+				if err := root.MkdirAll(name, 0o700); err != nil {
+					return res, fmt.Errorf("%s: %w", e.Path, err)
+				}
+				dirs = append(dirs, dirTime{root, name, e.MTime})
+				res.Dirs++
+				continue
+			}
+			parent, base, err := at(name)
+			if err != nil {
 				return res, fmt.Errorf("%s: %w", e.Path, err)
 			}
-			if opts.Original && !restoreOwner(root, name, e) && !existed {
-				adoptParentOwner(root, name)
+			existed := pathExists(parent, base)
+			d, err := pl.dir(name)
+			if err != nil {
+				return res, fmt.Errorf("%s: %w", e.Path, err)
 			}
-			if opts.Original && e.Mode != 0 && runtime.GOOS != "windows" {
-				root.Chmod(name, fs.FileMode(e.Mode).Perm())
+			if !restoreOwner(d, ".", e) && !existed {
+				adoptParentOwner(parent, base)
 			}
-			dirs = append(dirs, dirTime{name, e.MTime})
+			if e.Mode != 0 && runtime.GOOS != "windows" {
+				d.Chmod(".", fs.FileMode(e.Mode).Perm())
+			}
+			dirs = append(dirs, dirTime{d, ".", e.MTime})
 			res.Dirs++
 		case snapshot.TypeSymlink:
 			links = append(links, e)
 			linkSet[e.Path] = true
 		case snapshot.TypeFile, snapshot.TypeStream:
-			if err := restoreFile(ctx, r, root, e, name, opts.Original); err != nil {
+			parent, base, err := at(name)
+			if err == nil {
+				err = restoreFile(ctx, r, parent, e, base, opts.Original)
+			}
+			if err != nil {
 				return res, fmt.Errorf("%s: %w", e.Path, err)
 			}
 			res.Files++
@@ -141,23 +171,27 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 	}
 	for _, e := range links {
 		name := filepath.FromSlash(e.Path)
-		if dir := filepath.Dir(name); dir != "." {
+		if dir := filepath.Dir(name); dir != "." && !opts.Original {
 			if err := root.MkdirAll(dir, 0o700); err != nil {
 				return res, fmt.Errorf("%s: %w", e.Path, err)
 			}
 		}
-		root.Remove(name)
-		if err := root.Symlink(filepath.FromSlash(e.Link), name); err != nil {
+		parent, base, err := at(name)
+		if err != nil {
+			return res, fmt.Errorf("%s: %w", e.Path, err)
+		}
+		parent.Remove(base)
+		if err := parent.Symlink(filepath.FromSlash(e.Link), base); err != nil {
 			opts.Log("warning: cannot create symlink %s: %v", e.Path, err)
 		} else if opts.Original {
-			restoreOwner(root, name, e)
+			restoreOwner(parent, base, e)
 		}
 	}
 	// Directory mtimes last, deepest first, so file writes don't bump them.
 	for i := len(dirs) - 1; i >= 0; i-- {
 		if dirs[i].mtime > 0 {
 			t := time.Unix(0, dirs[i].mtime)
-			root.Chtimes(dirs[i].path, t, t)
+			dirs[i].root.Chtimes(dirs[i].path, t, t)
 		}
 	}
 	res.DurationMs = time.Since(start).Milliseconds()
@@ -218,11 +252,17 @@ func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.E
 	if err := root.Rename(tmp, name); err != nil {
 		return err
 	}
-	if original && !restoreOwner(root, name, e) {
-		if hadOwner {
-			_ = root.Lchown(name, uid, gid)
-		} else {
-			adoptParentOwner(root, name)
+	if original {
+		if !restoreOwner(root, name, e) {
+			if hadOwner {
+				_ = root.Lchown(name, uid, gid)
+			} else {
+				adoptParentOwner(root, name)
+			}
+		}
+		// Chmod and Chtimes follow links: touch only the file just placed.
+		if fi, err := root.Lstat(name); err != nil || !fi.Mode().IsRegular() {
+			return nil
 		}
 	}
 	if runtime.GOOS != "windows" && e.Mode != 0 {
@@ -233,6 +273,67 @@ func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.E
 		root.Chtimes(name, t, t)
 	}
 	return nil
+}
+
+// placer opens folders for an in-place restore one level at a time, each
+// inside the folder above it. Restoring in place means writing as root into
+// folders other people may own, so a folder that is a symlink on disk is
+// refused (unless root made it in a folder only root can change, such as
+// /var/run), and because every level is opened inside its parent, a folder
+// swapped for a symlink after the check still can't lead outside that parent.
+// Open folders are kept, so later entries use the folder that was checked.
+type placer struct {
+	base *os.Root
+	abs  string
+	open map[string]*os.Root
+}
+
+func (p *placer) close() {
+	for _, r := range p.open {
+		r.Close()
+	}
+}
+
+// dir opens (creating if needed) the folder name, relative to the target.
+func (p *placer) dir(name string) (*os.Root, error) {
+	if name == "." || name == "" {
+		return p.base, nil
+	}
+	if r, ok := p.open[name]; ok {
+		return r, nil
+	}
+	parent, err := p.dir(filepath.Dir(name))
+	if err != nil {
+		return nil, err
+	}
+	base := filepath.Base(name)
+	fi, err := parent.Lstat(base)
+	if errors.Is(err, fs.ErrNotExist) {
+		if err := parent.Mkdir(base, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return nil, err
+		}
+		fi, err = parent.Lstat(base)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var r *os.Root
+	switch {
+	case fi.Mode().Type() == fs.ModeDir:
+		r, err = parent.OpenRoot(base)
+	case fi.Mode()&fs.ModeSymlink != 0 && trustedLink(parent, fi):
+		var real string
+		if real, err = filepath.EvalSymlinks(filepath.Join(p.abs, name)); err == nil {
+			r, err = os.OpenRoot(real)
+		}
+	default:
+		return nil, fmt.Errorf("%s is a link or not a folder on this server, so nothing is restored through it; restore to a folder instead", filepath.Join(p.abs, name))
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.open[name] = r
+	return r, nil
 }
 
 // TreeRoot recomputes the Merkle content root from a restored directory tree.

@@ -173,7 +173,8 @@ func (a *Agent) runRestore(ctx context.Context, r *repo.Repo, lease *protocol.Le
 func volumesToRestore(entries []*snapshot.Entry, paths []string) ([]string, error) {
 	for _, p := range paths {
 		parts := strings.Split(p, "/")
-		if p != "docker" && p != "docker/volumes" && !(len(parts) == 3 && parts[0] == "docker" && parts[1] == "volumes") {
+		whole := p == "docker" || p == "docker/volumes" || (len(parts) == 3 && parts[0] == "docker" && parts[1] == "volumes")
+		if !whole {
 			return nil, fmt.Errorf("%s: only whole volumes can be put back; to get part of one, restore it to a folder", p)
 		}
 	}

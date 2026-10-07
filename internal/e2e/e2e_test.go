@@ -360,6 +360,12 @@ func TestOperatorCannotTakeOverServer(t *testing.T) {
 		{"import scan", func() int {
 			return op.do("POST", "/api/import/scan", map[string]any{"format": "files", "storage": map[string]any{"type": "local", "path": dir}}, nil)
 		}},
+		// Storage with a password the operator chose would let them decrypt
+		// whatever is sent there.
+		{"new storage", func() int {
+			return op.do("POST", "/api/repositories", map[string]any{"name": "mine", "backend": map[string]any{"type": "local", "path": filepath.Join(dir, "mine")}, "password": "operator-chosen-pass"}, nil)
+		}},
+		{"second copy", func() int { return op.do("PUT", "/api/sources/1/copy", map[string]any{"repoId": repo.ID}, nil) }},
 	}
 	for _, f := range forbidden {
 		if code := f.do(); code != http.StatusForbidden {

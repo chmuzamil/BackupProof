@@ -6,9 +6,9 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/chmuzamil/backupproof/internal/snapshot"
-	"path/filepath"
 	"syscall"
+
+	"github.com/chmuzamil/backupproof/internal/snapshot"
 )
 
 func ownerOf(fi fs.FileInfo) (uid, gid int, ok bool) {
@@ -18,17 +18,29 @@ func ownerOf(fi fs.FileInfo) (uid, gid int, ok bool) {
 	return -1, -1, false
 }
 
-// adoptParentOwner gives a newly restored file or folder the owner of the
-// folder it was created in, as if the folder's owner had created it.
-func adoptParentOwner(root *os.Root, name string) {
-	dir := filepath.Dir(name)
-	fi, err := root.Stat(dir)
+// adoptParentOwner gives a newly restored file or folder (name, directly in
+// parent) the owner of that folder, as if the folder's owner had created it.
+func adoptParentOwner(parent *os.Root, name string) {
+	fi, err := parent.Stat(".")
 	if err != nil {
 		return
 	}
 	if uid, gid, ok := ownerOf(fi); ok {
-		_ = root.Lchown(name, uid, gid)
+		_ = parent.Lchown(name, uid, gid)
 	}
+}
+
+// trustedLink reports whether a symlink found on the way to an in-place
+// restore was made by root in a folder only root can change (such as
+// /var/run -> /run), so following it can't be someone else's doing.
+func trustedLink(parent *os.Root, link fs.FileInfo) bool {
+	dir, err := parent.Stat(".")
+	if err != nil {
+		return false
+	}
+	luid, _, ok1 := ownerOf(link)
+	duid, _, ok2 := ownerOf(dir)
+	return ok1 && ok2 && luid == 0 && duid == 0 && dir.Mode().Perm()&0o022 == 0
 }
 
 func pathExists(root *os.Root, name string) bool {
