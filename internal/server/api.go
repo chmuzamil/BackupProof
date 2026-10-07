@@ -128,6 +128,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings/notify", s.auth("admin", s.handleGetNotify))
 	mux.HandleFunc("PUT /api/settings/notify", s.auth("admin", s.handlePutNotify))
 	mux.HandleFunc("POST /api/settings/notify/test", s.auth("admin", s.handleTestNotify))
+	mux.HandleFunc("POST /api/settings/report/send", s.auth("admin", s.handleSendReport))
 	mux.HandleFunc("GET /api/settings/tsa", s.auth("auditor", s.handleGetTSA))
 	mux.HandleFunc("PUT /api/settings/tsa", s.auth("admin", s.handlePutTSA))
 	mux.HandleFunc("PUT /api/settings/server", s.auth("admin", s.handlePutServerSettings))
@@ -702,20 +703,46 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 
 // --- settings ------------------------------------------------------------------
 
+// handleGetNotify never returns secrets; "saved" lists the ones that are set.
 func (s *Server) handleGetNotify(w http.ResponseWriter, r *http.Request) {
 	n := s.notifySettings()
-	n.SMTPPass = ""
-	writeJSON(w, 200, n)
+	saved := []string{}
+	for k, p := range n.secretFields() {
+		if *p != "" {
+			saved = append(saved, k)
+		}
+		*p = ""
+	}
+	writeJSON(w, 200, map[string]any{"settings": n, "saved": saved})
 }
 
 func (s *Server) handlePutNotify(w http.ResponseWriter, r *http.Request) {
-	var n NotifySettings
-	if err := readJSON(r, &n); err != nil {
+	var req struct {
+		NotifySettings
+		Clear []string `json:"clear"` // secrets to remove
+	}
+	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	if n.SMTPPass == "" {
-		n.SMTPPass = s.notifySettings().SMTPPass
+	n := req.NotifySettings
+	// An empty secret keeps the saved one.
+	old := s.notifySettings()
+	oldSecrets := old.secretFields()
+	clear := req
+	for k, p := range n.secretFields() {
+		if *p == "" {
+			*p = *oldSecrets[k]
+		}
+	}
+	for _, k := range clear.Clear {
+		if p, ok := n.secretFields()[k]; ok {
+			*p = ""
+		}
+	}
+	if n.ReportDay < 0 || n.ReportDay > 6 || n.ReportHour < 0 || n.ReportHour > 23 {
+		writeErr(w, 400, errors.New("choose a day of the week and an hour between 0 and 23 for the weekly summary"))
+		return
 	}
 	b, _ := jsonMarshal(n)
 	if err := s.store.SetSetting("notify", string(b)); err != nil {
@@ -727,7 +754,7 @@ func (s *Server) handlePutNotify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTestNotify(w http.ResponseWriter, r *http.Request) {
-	if err := s.send("BackupProof test notification", "If you can read this, alerts will reach you."); err != nil {
+	if err := s.send("BackupProof test alert", "If you can read this, BackupProof alerts will reach you here."); err != nil {
 		writeErr(w, 502, err)
 		return
 	}

@@ -230,6 +230,10 @@ const ICONS = {
   bell: ['M6 16V11a6 6 0 0 1 12 0v5l2 2H4z', 'M10 21h4'],
   plus: ['M12 5v14', 'M5 12h14'],
   history: ['M3 12a9 9 0 1 0 3-6.7', 'M3 4v5h5', 'M12 7v5l3 3'],
+  sun: ['M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M12 2v2', 'M12 20v2', 'M4.9 4.9l1.4 1.4', 'M17.7 17.7l1.4 1.4', 'M2 12h2', 'M20 12h2', 'M4.9 19.1l1.4-1.4', 'M17.7 6.3l1.4-1.4'],
+  moon: ['M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z'],
+  auto: ['M12 3a9 9 0 1 0 0 18z', 'M12 3a9 9 0 0 1 0 18'],
+  chevron: ['M6 9l6 6 6-6'],
   list: ['M9 6h11', 'M9 12h11', 'M9 18h11', 'M4.5 6h.01', 'M4.5 12h.01', 'M4.5 18h.01'],
   info: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M12 11v5', 'M12 8h.01'],
   menu: ['M4 7h16', 'M4 12h16', 'M4 17h16'],
@@ -829,7 +833,7 @@ function renderAuth(errMsg) {
 
 // Theme: "auto" follows the device; "light" and "dark" are fixed. Saved in
 // this browser only.
-const THEMES = [['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']];
+const THEMES = [['auto', 'Automatic (follow this device)', 'auto'], ['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']];
 function savedTheme() { try { return localStorage.getItem('bp-theme') || 'auto'; } catch { return 'auto'; } }
 function applyTheme(t) {
   if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
@@ -843,11 +847,36 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 function themeSwitch() {
   const wrap = h('div', { class: 'theme-switch', role: 'group', 'aria-label': 'Colour theme' });
   const paint = () => wrap.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.t === savedTheme())));
-  for (const [t, label] of THEMES) {
-    wrap.append(h('button', { type: 'button', 'data-t': t, title: t === 'auto' ? 'Follow this device’s light or dark setting' : label + ' theme',
-      onclick: () => { try { localStorage.setItem('bp-theme', t); } catch { /* private mode: applies until reload */ } applyTheme(t); paint(); } }, label));
+  for (const [t, label, ic] of THEMES) {
+    wrap.append(h('button', { type: 'button', 'data-t': t, 'aria-label': label + ' theme', title: label,
+      onclick: () => { try { localStorage.setItem('bp-theme', t); } catch { /* private mode: applies until reload */ } applyTheme(t); paint(); } }, icon(ic)));
   }
   paint();
+  return wrap;
+}
+
+// userMenu is the signed-in person, top right, with Settings and Sign out.
+function userMenu() {
+  const roleWords = { admin: 'Administrator', operator: 'Can set up backups', auditor: 'View only' }[S.user.role] || S.user.role;
+  const id = uid('usermenu');
+  const btnEl = h('button', { type: 'button', class: 'user-btn', 'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': id },
+    h('span', { class: 'avatar', 'aria-hidden': 'true' }, (S.user.username || '?').slice(0, 1).toUpperCase()),
+    h('span', { class: 'user-name' }, S.user.username), icon('chevron', 'user-chev'));
+  const panel = h('div', { class: 'user-panel', id, hidden: true },
+    h('div', { class: 'user-head' }, h('div', { class: 'who' }, S.user.username), h('div', { class: 'role' }, roleWords)),
+    h('a', { href: '#/settings', class: 'user-item', onclick: () => setOpen(false) }, 'Settings and security'),
+    btn('Sign out', busy(logout, 'Signing out…'), 'user-item'));
+  const wrap = h('div', { class: 'user-menu' }, btnEl, panel);
+  const setOpen = (open, focus) => {
+    panel.hidden = !open;
+    btnEl.setAttribute('aria-expanded', String(open));
+    if (open) panel.querySelector('a').focus();
+    else if (focus) btnEl.focus();
+  };
+  btnEl.addEventListener('click', () => setOpen(panel.hidden));
+  wrap.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) { e.stopPropagation(); setOpen(false, true); } });
+  document.addEventListener('click', (e) => { if (!panel.hidden && !wrap.contains(e.target)) setOpen(false); });
+  wrap.addEventListener('focusout', (e) => { if (!panel.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) setOpen(false); });
   return wrap;
 }
 
@@ -949,20 +978,12 @@ function renderShell() {
   const nav = h('nav', { class: 'nav', id: 'nav', 'aria-label': 'Main' }, NAV.map(([k, l, ic]) =>
     h('a', { href: '#/' + k, 'data-k': k, onclick: () => { if (navOpen()) setNav(false, false); } }, h('span', { class: 'nav-l' }, icon(ic), h('span', null, l)),
       k === 'alerts' ? h('span', { class: 'count hidden', id: 'alert-count' }) : null)));
-  const sidebar = h('aside', { class: 'sidebar', id: 'sidebar' },
-    brand('#/dashboard'),
-    nav,
-    themeSwitch(),
-    h('div', { class: 'userbox' },
-      h('span', { class: 'avatar', 'aria-hidden': 'true' }, (S.user.username || '?').slice(0, 1).toUpperCase()),
-      h('div', { class: 'who-wrap' },
-        h('div', { class: 'who' }, S.user.username), h('div', { class: 'role' }, { admin: 'Administrator', operator: 'Can set up backups', auditor: 'View only' }[S.user.role] || S.user.role)),
-      btn('Sign out', busy(logout, 'Signing out…'), 'sm ghost')));
+  const sidebar = h('aside', { class: 'sidebar', id: 'sidebar' }, nav);
   const footer = h('footer', { class: 'app-foot' },
     h('span', { translate: 'no' }, 'BackupProof', S.status && S.status.version ? ' ' + verLabel() : ''),
     h('nav', { 'aria-label': 'BackupProof links' }, EXT('https://backupproof.dev', 'Website'), EXT('https://github.com/chmuzamil/BackupProof', 'GitHub')));
   add(layout, [
-    h('header', { class: 'topbar' }, menuBtn, brand('#/dashboard')),
+    h('header', { class: 'topbar' }, menuBtn, brand('#/dashboard'), h('div', { class: 'top-right' }, themeSwitch(), userMenu())),
     h('div', { class: 'scrim', onclick: () => setNav(false, true) }),
     sidebar,
     h('div', { class: 'content' }, h('main', { class: 'main', id: 'main', tabindex: '-1' }), footer),
@@ -3209,51 +3230,108 @@ function serverCard(st) {
   return card('Dashboard address', form);
 }
 
-function notifyCard(n) {
-  const f = {
-    webhookUrl: input({ name: 'webhook', type: 'url', code: true, value: n.webhookUrl || '', placeholder: 'https://hooks.slack.com/…' }),
-    smtpHost: input({ name: 'smtp-host', code: true, value: n.smtpHost || '', placeholder: 'smtp.gmail.com…' }),
-    smtpPort: input({ name: 'smtp-port', type: 'number', inputmode: 'numeric', value: n.smtpPort || 587 }),
-    smtpUser: input({ name: 'smtp-user', code: true, value: n.smtpUser || '', autocomplete: 'off' }),
-    smtpPass: input({ name: 'smtp-password', type: 'password', autocomplete: 'off' }),
-    from: input({ name: 'from', type: 'email', code: true, value: n.from || '', placeholder: 'backupproof@example.com…' }),
-    to: input({ name: 'to', type: 'email', multiple: true, code: true, value: n.to || '', placeholder: 'me@example.com…' }),
-    heartbeatUrl: input({ name: 'heartbeat', type: 'url', code: true, value: n.heartbeatUrl || '', placeholder: 'https://hc-ping.com/…' }),
+// notifyCard: every alert channel, and the weekly summary. Secrets are never
+// shown again after saving; leaving one empty keeps it.
+function notifyCard(resp) {
+  const n = (resp && resp.settings) || resp || {};
+  const saved = new Set((resp && resp.saved) || []);
+  const clear = new Set();
+  const txt = (name, value, attrs = {}) => input({ name, code: true, autocomplete: 'off', value: value || '', ...attrs });
+  const secret = (key, name) => {
+    const el = input({ name, type: 'password', autocomplete: 'off', placeholder: saved.has(key) ? 'Saved — leave empty to keep…' : '' });
+    el.dataset.secret = key;
+    return el;
   };
+  const f = {
+    to: input({ name: 'to', type: 'email', multiple: true, code: true, value: n.to || '', placeholder: 'me@example.com…' }),
+    from: input({ name: 'from', type: 'email', code: true, value: n.from || '', placeholder: 'backupproof@example.com…' }),
+    smtpHost: txt('smtp-host', n.smtpHost, { placeholder: 'smtp.gmail.com…' }),
+    smtpPort: input({ name: 'smtp-port', type: 'number', inputmode: 'numeric', value: n.smtpPort || 587 }),
+    smtpUser: txt('smtp-user', n.smtpUser),
+    smtpPass: secret('smtpPass', 'smtp-password'),
+    webhookUrl: txt('webhook', n.webhookUrl, { type: 'url', placeholder: 'https://hooks.slack.com/services/…' }),
+    teamsUrl: txt('teams-url', n.teamsUrl, { type: 'url', placeholder: 'https://prod-00.westeurope.logic.azure.com/workflows/…' }),
+    telegramToken: secret('telegramToken', 'telegram-token'),
+    telegramChatId: txt('telegram-chat', n.telegramChatId, { placeholder: '-1001234567890…' }),
+    ntfyUrl: txt('ntfy-url', n.ntfyUrl, { type: 'url', placeholder: 'https://ntfy.sh/my-backups…' }),
+    ntfyToken: secret('ntfyToken', 'ntfy-token'),
+    gotifyUrl: txt('gotify-url', n.gotifyUrl, { type: 'url', placeholder: 'https://gotify.example.com…' }),
+    gotifyToken: secret('gotifyToken', 'gotify-token'),
+    pushoverUser: secret('pushoverUser', 'pushover-user'),
+    pushoverToken: secret('pushoverToken', 'pushover-token'),
+    pagerDutyKey: secret('pagerDutyKey', 'pagerduty-key'),
+    heartbeatUrl: txt('heartbeat', n.heartbeatUrl, { type: 'url', placeholder: 'https://hc-ping.com/…' }),
+  };
+  const weekly = checkbox('Send a weekly summary by email', !!n.weeklyReport);
+  const day = select([[1, 'Monday'], [2, 'Tuesday'], [3, 'Wednesday'], [4, 'Thursday'], [5, 'Friday'], [6, 'Saturday'], [0, 'Sunday']].map(([v, l]) => [String(v), l]),
+    String(n.weeklyReport ? n.reportDay : 1), { name: 'report-day' });
+  const hour = select(Array.from({ length: 24 }, (_, i) => [String(i), clock(i)]), String(n.weeklyReport ? n.reportHour : 8), { name: 'report-hour' });
+
+  // forget lets someone remove a saved secret (turning that channel off).
+  const forget = (key) => saved.has(key) ? btn('Forget saved', (e) => { clear.add(key); e.currentTarget.replaceWith(h('span', { class: 'hint' }, 'Will be removed when you save.')); S.dirty = true; }, 'sm quiet') : null;
+  const on = (...keys) => keys.some((k) => (f[k] && f[k].value && !f[k].dataset.secret) || saved.has(k)) ? h('span', { class: 'pill ok' }, 'On') : null;
+  const channel = (title, state, ...body) => {
+    const d = details(title, ...body);
+    if (state) d.querySelector('summary').append(' ', state);
+    d.classList.add('channel');
+    return d;
+  };
+
   const form = h('form', {
     novalidate: true,
     onsubmit: busy(async (e) => {
       e.preventDefault();
       clearErrors(form);
       for (const [el, what] of [[f.to, 'Enter valid email addresses, separated by commas, for example me@example.com.'], [f.from, 'Enter a valid email address, for example backupproof@example.com.'],
-        [f.webhookUrl, 'Enter the full webhook address, starting with https://.'], [f.heartbeatUrl, 'Enter the full heartbeat address, starting with https://.']]) {
-        if (!el.checkValidity()) { if (el === f.heartbeatUrl) el.closest('details').open = true; return fieldError(el, what); }
+        [f.webhookUrl, 'Enter the full webhook address, starting with https://.'], [f.teamsUrl, 'Enter the full Workflows address, starting with https://.'],
+        [f.ntfyUrl, 'Enter the full topic address, for example https://ntfy.sh/my-backups.'], [f.gotifyUrl, 'Enter your Gotify server address, starting with https://.'],
+        [f.heartbeatUrl, 'Enter the full heartbeat address, starting with https://.']]) {
+        if (!el.checkValidity()) { const d = el.closest('details'); if (d) d.open = true; return fieldError(el, what); }
       }
-      await put('/settings/notify', {
-        webhookUrl: f.webhookUrl.value.trim(), smtpHost: f.smtpHost.value.trim(), smtpPort: num(f.smtpPort.value), smtpUser: f.smtpUser.value.trim(),
-        smtpPass: f.smtpPass.value, from: f.from.value.trim(), to: f.to.value.trim(), heartbeatUrl: f.heartbeatUrl.value.trim(),
-      });
-      f.smtpPass.value = '';
+      if (weekly.cb.checked && !(f.smtpHost.value.trim() && f.to.value.trim())) return fieldError(f.to, 'The weekly summary is sent by email. Fill in the email settings above.');
+      const body = { clear: [...clear], weeklyReport: weekly.cb.checked, reportDay: Number(day.value), reportHour: Number(hour.value), smtpPort: num(f.smtpPort.value) };
+      for (const [k, el] of Object.entries(f)) if (k !== 'smtpPort') body[k] = el.dataset.secret ? el.value : el.value.trim();
+      await put('/settings/notify', body);
       S.dirty = false;
-      toast('Notification settings saved', 'ok');
+      toast('Alert settings saved', 'ok');
+      reload();
     }),
   },
-  h('p', { class: 'muted small' }, 'Get told when a backup or restore test fails.'),
-  h('h3', null, 'By email'),
-  h('div', { class: 'row' }, field('To', f.to, 'Your email address (several: separate with commas).'), field('From', f.from)),
-  h('div', { class: 'row' }, field('Mail server', f.smtpHost, 'From your email provider, e.g. smtp.gmail.com'), field('Port', f.smtpPort, 'Usually 587.'), field('Username', f.smtpUser), field('Password', f.smtpPass, 'Leave empty to keep the saved password.')),
-  h('h3', null, 'By chat'),
-  field('Webhook address', f.webhookUrl, 'Slack, Microsoft Teams, ntfy, Discord… paste the incoming-webhook URL.'),
-  details('Advanced', field('Heartbeat address', f.heartbeatUrl, 'Pinged regularly while BackupProof is healthy, so a service like healthchecks.io can tell you if BackupProof itself stops.')),
+  h('p', { class: 'muted' }, 'Get told when a backup or restore test fails, a backup is late, or a server goes quiet, and again when it’s fixed. Use as many channels as you like.'),
+  channel('Email', on('smtpHost'),
+    h('div', { class: 'row' }, field('To', f.to, 'Several addresses: separate them with commas.'), field('From', f.from)),
+    h('div', { class: 'row' }, field('Mail server', f.smtpHost, 'From your email provider, for example smtp.gmail.com.'), field('Port', f.smtpPort, 'Usually 587.'), field('Username', f.smtpUser), field('Password', f.smtpPass)), forget('smtpPass')),
+  channel('Slack, Discord or Mattermost', on('webhookUrl'),
+    field('Incoming webhook address', f.webhookUrl, 'Create an incoming webhook in your chat app and paste its address.')),
+  channel('Microsoft Teams', on('teamsUrl'),
+    field('Workflows webhook address', f.teamsUrl, 'In Teams, add the Workflows app to a channel, choose “Post to a channel when a webhook request is received”, and paste the address it gives you.')),
+  channel('Telegram', on('telegramToken'),
+    h('div', { class: 'row' }, field('Bot token', f.telegramToken, 'From @BotFather in Telegram.'), field('Chat ID', f.telegramChatId, 'Add the bot to your chat; a group ID starts with -100.')), forget('telegramToken')),
+  channel('ntfy', on('ntfyUrl'),
+    h('div', { class: 'row' }, field('Topic address', f.ntfyUrl, 'ntfy.sh or your own server, with a hard-to-guess topic name.'), field('Access token (optional)', f.ntfyToken, 'Only for protected topics.')), forget('ntfyToken')),
+  channel('Gotify', on('gotifyUrl'),
+    h('div', { class: 'row' }, field('Server address', f.gotifyUrl), field('Application token', f.gotifyToken, 'Create an application in Gotify and copy its token.')), forget('gotifyToken')),
+  channel('Pushover', on('pushoverToken'),
+    h('div', { class: 'row' }, field('Your user key', f.pushoverUser, 'Shown on your Pushover dashboard.'), field('Application token', f.pushoverToken, 'Create an application in Pushover.')), forget('pushoverUser'), forget('pushoverToken')),
+  channel('PagerDuty', on('pagerDutyKey'),
+    field('Integration key', f.pagerDutyKey, 'Add an “Events API v2” integration to a service. Problems open an incident, which is resolved automatically when fixed.'), forget('pagerDutyKey')),
+  channel('Heartbeat (advanced)', on('heartbeatUrl'),
+    field('Heartbeat address', f.heartbeatUrl, 'Pinged every minute while BackupProof is healthy, so a service like healthchecks.io can tell you if BackupProof itself stops.')),
+  h('h3', null, 'Weekly summary'),
+  h('p', { class: 'muted small' }, 'One email a week: what was backed up and restore-tested, what failed, and anything that needs attention.'),
+  weekly.el,
+  h('div', { class: 'row' }, field('Day', day), field('Time', hour, 'In the server’s time zone.')),
   h('div', { class: 'form-actions' },
-    btn('Send a test', busy(async () => {
-      const r = await post('/settings/notify/test');
-      if (r && r.ok === false) toast('The test message couldn’t be sent' + (r.error ? ': ' + r.error : '') + '. Check the mail server or webhook details, save, and send another test.', 'bad');
-      else toast('Test sent — check your inbox or chat', 'ok');
+    btn('Send a test alert', busy(async () => {
+      try { await post('/settings/notify/test'); toast('Test sent to every channel that’s set up. Check them.', 'ok'); }
+      catch (ex) { toast('Some channels failed: ' + ex.message + '. Fix the details, save, and try again.', 'bad'); }
     }, 'Sending…')),
-    h('button', { type: 'submit', class: 'btn primary' }, 'Save notifications')),
+    btn('Send the summary now', busy(async () => {
+      await post('/settings/report/send'); toast('Weekly summary sent. Check your inbox.', 'ok');
+    }, 'Sending…')),
+    h('button', { type: 'submit', class: 'btn primary' }, 'Save alert settings')),
   h('p', { class: 'hint' }, 'Save before sending a test.'));
-  return card('Alerts by email or chat', form);
+  return card('Alerts', form);
 }
 
 function tsaCard(t) {

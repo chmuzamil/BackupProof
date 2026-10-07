@@ -106,6 +106,7 @@ func (s *Server) tick(now time.Time) {
 		}
 	}
 	s.watchdog(now, sources)
+	s.maybeSendWeeklyReport(now)
 	s.heartbeat()
 }
 
