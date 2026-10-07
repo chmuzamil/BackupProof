@@ -33,8 +33,12 @@ func TestDockerBackupAndRestore(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker is not installed")
 	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
+	osType, err := exec.Command("docker", "info", "--format", "{{.OSType}}").Output()
+	if err != nil {
 		t.Skip("docker is not running")
+	}
+	if strings.TrimSpace(string(osType)) != "linux" {
+		t.Skip("docker runs Windows containers here; the test needs Linux containers")
 	}
 	ctx := context.Background()
 	id := fmt.Sprintf("bptest%06d", rand.IntN(1e6))

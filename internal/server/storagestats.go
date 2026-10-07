@@ -60,8 +60,26 @@ func (s *Store) RepoStats(limit int) (map[int64][]RepoStat, error) {
 	return out, rows.Err()
 }
 
+// checkParams says which storage a check job is for: the item's own, or
+// its second storage.
+type checkParams struct {
+	RepoID int64 `json:"repoId"`
+}
+
+// checkRepo is the storage a check job checks.
+func (s *Server) checkRepo(jobID int64, src *Source) int64 {
+	var p checkParams
+	if raw, err := s.store.JobParams(jobID); err == nil && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &p)
+	}
+	if p.RepoID != 0 && src.CopyRepoID != nil && *src.CopyRepoID == p.RepoID {
+		return p.RepoID
+	}
+	return src.RepoID
+}
+
 // recordCheck stores the outcome of a finished storage check.
-func (s *Server) recordCheck(sourceID int64, ok bool, result any) {
+func (s *Server) recordCheck(jobID, sourceID int64, ok bool, result any) {
 	src, err := s.store.Source(sourceID)
 	if err != nil {
 		return
@@ -70,15 +88,21 @@ func (s *Server) recordCheck(sourceID int64, ok bool, result any) {
 	if b, err := json.Marshal(result); err == nil {
 		_ = json.Unmarshal(b, &r)
 	}
-	if err := s.store.AddRepoStat(src.RepoID, ok, r); err != nil {
+	if err := s.store.AddRepoStat(s.checkRepo(jobID, src), ok, r); err != nil {
 		s.log.Printf("storage check: recording result: %v", err)
 	}
 }
 
-// checkSource picks an enabled item that uses repoID to run its check.
+// checkSource picks an enabled item that uses repoID, as its own storage or
+// else as its second storage, to run its check.
 func (s *Server) checkSource(repoID int64, sources []Source) *Source {
 	for i := range sources {
 		if sources[i].RepoID == repoID && sources[i].Enabled {
+			return &sources[i]
+		}
+	}
+	for i := range sources {
+		if c := sources[i].CopyRepoID; c != nil && *c == repoID && sources[i].Enabled {
 			return &sources[i]
 		}
 	}
@@ -105,10 +129,11 @@ func (s *Server) scheduleChecks(now time.Time, sources []Source) {
 		if src == nil {
 			continue
 		}
-		if _, err := s.store.EnqueueJob("check", src.ID, src.DrillAgent(), "schedule"); err == nil {
-			s.log.Printf("scheduled storage health check for %s (via %s)", repo.Name, src.Name)
-			s.wake(src.DrillAgent())
+		if _, err := s.store.EnqueueJobParams("check", src.ID, src.DrillAgent(), "schedule", checkParams{repo.ID}); err != nil {
+			continue // another check through the same item is waiting; try again next time
 		}
+		s.log.Printf("scheduled storage health check for %s (via %s)", repo.Name, src.Name)
+		s.wake(src.DrillAgent())
 		_ = s.store.SetSetting(key, now.UTC().Format(time.RFC3339Nano))
 	}
 }
@@ -134,7 +159,7 @@ func (s *Server) handleCheckRepo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, errors.New("no item uses this storage yet, so there is nothing to check"))
 		return
 	}
-	jobID, err := s.store.EnqueueJob("check", src.ID, src.DrillAgent(), "manual")
+	jobID, err := s.store.EnqueueJobParams("check", src.ID, src.DrillAgent(), "manual", checkParams{id})
 	if err != nil {
 		writeErr(w, 409, err)
 		return

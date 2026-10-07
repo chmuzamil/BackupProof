@@ -51,8 +51,8 @@ func TestStorageChecksAreScheduledAndRecorded(t *testing.T) {
 	if queued() != 1 {
 		t.Fatal("a second check was queued while one was waiting")
 	}
-	srv.recordCheck(srcID, true, engine.CheckResult{StoredBytes: 1 << 20, StoredBlobs: 3, Snapshots: 2, ReadBlobs: 1})
-	srv.recordCheck(srcID, false, map[string]any{"storedBytes": 2 << 20, "missingBlobs": 1})
+	srv.recordCheck(0, srcID, true, engine.CheckResult{StoredBytes: 1 << 20, StoredBlobs: 3, Snapshots: 2, ReadBlobs: 1})
+	srv.recordCheck(0, srcID, false, map[string]any{"storedBytes": 2 << 20, "missingBlobs": 1})
 	stats, err := st.RepoStats(26)
 	if err != nil {
 		t.Fatal(err)

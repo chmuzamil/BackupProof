@@ -164,6 +164,15 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 			return nil, err
 		}
 	}
+	if job.Kind == "check" {
+		if rid := s.checkRepo(job.ID, src); rid != src.RepoID {
+			repo, sec, err := s.store.Repository(rid)
+			if err != nil {
+				return nil, err
+			}
+			lease.Repository, lease.RepoID, lease.Password, lease.Creds = repo.Backend, repo.ID, sec.Password, sec.Credentials
+		}
+	}
 	return lease, nil
 }
 
@@ -368,7 +377,7 @@ func (s *Server) handleFinish(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if job.Kind == "check" {
-		s.recordCheck(sid, req.OK, req.Result)
+		s.recordCheck(id, sid, req.OK, req.Result)
 		digest := fmt.Sprintf("%x", jsonDigest(req.Result))
 		if _, err := s.store.AppendLedger("check", fmt.Sprintf("source#%d job#%d ok=%v", sid, id, req.OK), digest, "", nil); err != nil {
 			s.log.Printf("job #%d: could not append check to ledger: %v", id, err)

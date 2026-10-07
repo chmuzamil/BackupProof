@@ -47,7 +47,10 @@ func (s *Store) EnqueueJobParams(kind string, sourceID, agentID int64, trigger s
 		return 0, err
 	}
 	if n > 0 {
-		return 0, errors.New("a restore of this item is already waiting or running; wait for it to finish")
+		if restoreKind(kind) {
+			return 0, errors.New("a restore of this item is already waiting or running; wait for it to finish")
+		}
+		return 0, errors.New("a " + kind + " job for this source is already queued or running")
 	}
 	b, err := json.Marshal(params)
 	if err != nil {

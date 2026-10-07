@@ -56,7 +56,7 @@ func TestSecondCopy(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(docs, "a.txt"), []byte("hello"), 0o644)
 	var src struct{ ID int64 }
 	a.do("POST", "/api/sources", map[string]any{"name": "docs", "agentId": agents[0].ID, "repoId": main,
-		"spec": map[string]any{"kind": "files", "paths": []string{docs}}, "backupCron": "@daily", "drillCron": "0 4 * * 0"}, &src)
+		"spec": map[string]any{"kind": "files", "paths": []string{docs}}, "backupCron": "@daily", "drillCron": "0 4 * * 0", "enabled": true}, &src)
 	if code := a.do("PUT", fmt.Sprintf("/api/sources/%d/copy", src.ID), map[string]any{"repoId": main}, nil); code != http.StatusBadRequest {
 		t.Errorf("second copy in the same storage: HTTP %d, want 400", code)
 	}
@@ -85,6 +85,23 @@ func TestSecondCopy(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(dir, "offsite", "snapshots")); len(entries) != 1 {
 		t.Errorf("second storage has %d backups, want 1", len(entries))
+	}
+	// A storage used only for second copies still gets health checks.
+	var chk struct{ JobID int64 }
+	if code := a.do("POST", fmt.Sprintf("/api/repositories/%d/check", second), nil, &chk); code != 200 {
+		t.Fatalf("checking the second storage: HTTP %d", code)
+	}
+	if ran, err := ag.PollOnce(ctx); err != nil || !ran {
+		t.Fatalf("check did not run: %v", err)
+	}
+	var stats map[string][]struct {
+		OK        bool
+		Bytes     int64
+		Snapshots int
+	}
+	a.do("GET", "/api/repositories/stats", nil, &stats)
+	if st := stats[fmt.Sprint(second)]; len(st) != 1 || !st[0].OK || st[0].Bytes == 0 || st[0].Snapshots != 1 {
+		t.Errorf("second storage check: %+v", stats)
 	}
 	// The second storage is in use now, so it can't be removed.
 	if code := a.do("DELETE", fmt.Sprintf("/api/repositories/%d", second), nil, nil); code != http.StatusConflict {

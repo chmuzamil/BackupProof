@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-08
+
+### Fixed
+
+- Storage used only for second copies now gets its weekly health check and size chart too (before, Check now said no item uses it).
+- A scheduled health check that couldn't be queued is tried again at the next tick instead of a week later.
+
 ## [0.2.0] - 2026-10-08
 
 ### Added
