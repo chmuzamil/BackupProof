@@ -1,0 +1,21 @@
+[Unit]
+Description=BackupProof control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=backupproof
+Group=backupproof
+Environment=BP_DATA=/var/lib/backupproof-server
+Environment=BP_LISTEN=127.0.0.1:8420
+Environment=BP_PUBLIC_URL=https://backup.example.com
+ExecStart=/usr/local/bin/backupproof server
+Restart=on-failure
+StateDirectory=backupproof-server
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+/bin/
+/dist/
+/backupproof-data/
+/proofvault-data/
+*.bundle.json
+.claude/

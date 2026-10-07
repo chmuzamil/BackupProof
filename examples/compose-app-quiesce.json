@@ -1,0 +1,8 @@
+{
+  "name": "gitea-data",
+  "kind": "files",
+  "paths": ["/srv/gitea"],
+  "preHook": "docker compose -f /srv/gitea/compose.yml stop gitea",
+  "postHook": "docker compose -f /srv/gitea/compose.yml start gitea",
+  "drill": { "expectPaths": ["/srv/gitea/gitea/conf/app.ini"] }
+}

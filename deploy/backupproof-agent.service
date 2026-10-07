@@ -1,0 +1,19 @@
+[Unit]
+Description=BackupProof agent (outbound-only; backups, restore drills, checks)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+# Runs as root so it can read every protected path. To restrict it, run as a
+# dedicated user with read access (e.g. CAP_DAC_READ_SEARCH) and add it to
+# the docker group only on verifier hosts.
+Environment=BP_STATE=/var/lib/backupproof
+ExecStart=/usr/local/bin/backupproof agent run
+Restart=always
+RestartSec=10
+StateDirectory=backupproof
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

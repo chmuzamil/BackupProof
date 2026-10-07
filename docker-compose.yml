@@ -1,0 +1,15 @@
+# Control plane. Put it behind a TLS reverse proxy (Caddy, Traefik, nginx)
+# and set BP_PUBLIC_URL to the https:// URL agents will use.
+services:
+  backupproof:
+    build: { context: ., target: server }
+    restart: unless-stopped
+    ports: ["127.0.0.1:8420:8420"]
+    environment:
+      BP_PUBLIC_URL: https://backup.example.com
+      # Optional: provide the secrets key from your secret manager instead of
+      # letting the server generate /data/secret.key (64 hex chars).
+      # BP_SECRET_KEY: ...
+    volumes: ["backupproof-data:/data"]
+volumes:
+  backupproof-data:

@@ -1,0 +1,10 @@
+{
+  "name": "wordpress-files",
+  "kind": "files",
+  "paths": ["/var/www/wordpress"],
+  "excludes": ["*.log", "cache", "*.tmp"],
+  "drill": {
+    "expectPaths": ["/var/www/wordpress/wp-config.php", "/var/www/wordpress/wp-content/uploads"],
+    "minFiles": 500
+  }
+}
