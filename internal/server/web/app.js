@@ -825,6 +825,30 @@ function renderAuth(errMsg) {
   if (window.matchMedia('(pointer: fine)').matches) user.focus();
 }
 
+// Theme: "auto" follows the device; "light" and "dark" are fixed. Saved in
+// this browser only.
+const THEMES = [['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']];
+function savedTheme() { try { return localStorage.getItem('bp-theme') || 'auto'; } catch { return 'auto'; } }
+function applyTheme(t) {
+  if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  const dark = t === 'dark' || (t !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => { m.content = dark ? '#08112a' : '#0e1a33'; m.removeAttribute('media'); });
+}
+applyTheme(savedTheme());
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(savedTheme()));
+
+function themeSwitch() {
+  const wrap = h('div', { class: 'theme-switch', role: 'group', 'aria-label': 'Colour theme' });
+  const paint = () => wrap.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.t === savedTheme())));
+  for (const [t, label] of THEMES) {
+    wrap.append(h('button', { type: 'button', 'data-t': t, title: t === 'auto' ? 'Follow this device’s light or dark setting' : label + ' theme',
+      onclick: () => { try { localStorage.setItem('bp-theme', t); } catch { /* private mode: applies until reload */ } applyTheme(t); paint(); } }, label));
+  }
+  paint();
+  return wrap;
+}
+
 function verLabel() { const v = String(S.status.version).replace(/^backupproof\//, ''); return /^\d/.test(v) ? 'v' + v : v; }
 
 // markSvg is the BackupProof mark, the same shield and check as backupproof.dev.
@@ -892,6 +916,7 @@ function renderShell() {
   const sidebar = h('aside', { class: 'sidebar', id: 'sidebar' },
     brand('#/dashboard'),
     nav,
+    themeSwitch(),
     h('div', { class: 'userbox' },
       h('span', { class: 'avatar', 'aria-hidden': 'true' }, (S.user.username || '?').slice(0, 1).toUpperCase()),
       h('div', { class: 'who-wrap' },

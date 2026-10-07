@@ -57,8 +57,46 @@
   --z-sticky: 10; --z-scrim: 20; --z-drawer: 30; --z-modal: 50; --z-toast: 100;
   color-scheme: light;
 }
+/* Dark: chosen in the sidebar, or "Automatic" on a dark device. */
+:root[data-theme="dark"] {
+  --bg: #0b1428;
+  --surface: #111d38;
+  --surface-2: #16244a;
+  --surface-3: #1e2f5a;
+  --border: #22325a;
+  --border-strong: #31467a;
+  --text: #e6ecfa;
+  --muted: #a3b0cc;
+  --accent: #8fb0ff;
+  --accent-hover: #b3c9ff;
+  --accent-ink: #b3c9ff;
+  --accent-soft: #1a2c57;
+  --accent-text: #0b1428;
+  --ok: #3cc58f;
+  --ok-text: #3cc58f;
+  --ok-bg: #0f3326;
+  --warn: #e2b350;
+  --warn-bg: #33290f;
+  --bad: #f0807a;
+  --bad-hover: #f59d98;
+  --bad-bg: #3a1a22;
+  --info: #b8c3dc;
+  --info-bg: #1a2748;
+  --code-bg: #08112a;
+  --focus: #8fb0ff;
+  --scrim: rgba(0, 0, 0, .6);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, .55);
+  --ink: #08112a;
+  --ink-2: #13224a;
+  --ink-line: #1c2c55;
+  --verdict-bg: #13234a;
+  --mark: #8fb0ff;
+  --mark-check: #0e1a33;
+  color-scheme: dark;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0b1428;
     --surface: #111d38;
     --surface-2: #16244a;
@@ -259,11 +297,6 @@ a.brand:hover { text-decoration: none; }
   background: var(--verdict-bg); color: #fff; border: 1px solid var(--ink-line); border-radius: 16px;
   padding: 26px 28px; margin-bottom: 20px;
 }
-.verdict::after { /* faint ruled lines, like the ledger behind every proof */
-  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
-  background: repeating-linear-gradient(0deg, transparent 0 27px, rgba(143, 176, 255, .07) 27px 28px);
-}
-.verdict > * { position: relative; z-index: 1; }
 .verdict-seal {
   flex: 0 0 auto; width: 58px; height: 58px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
   background: #1f9d6b; color: #fff; box-shadow: 0 0 0 6px rgba(31, 157, 107, .18);
@@ -294,7 +327,8 @@ a.brand:hover { text-decoration: none; }
 .btn.danger:hover { background: var(--bad-bg); border-color: var(--bad); }
 .btn.danger.solid { background: var(--bad); border-color: var(--bad); color: #fff; }
 .btn.danger.solid:hover { background: var(--bad-hover); border-color: var(--bad-hover); }
-@media (prefers-color-scheme: dark) { .btn.danger.solid, .nav .count { color: #1a0b0a; } }
+:root[data-theme="dark"] .btn.danger.solid { color: #1a0b0a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.danger.solid { color: #1a0b0a; } }
 .btn.sm { padding: 4px 10px; font-size: 12.5px; }
 .btn.icon { padding: 7px 9px; }
 .btn.icon .ico-svg { width: 20px; height: 20px; }
@@ -698,3 +732,13 @@ code.pw { font-size: 16px; letter-spacing: .5px; word-break: break-all; flex: 1 
 .item-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
 .used-by { margin: 10px 0 0; color: var(--text); }
 @media (max-width: 980px) { .item-actions { justify-content: flex-start; } }
+
+/* theme switch (sidebar) */
+.theme-switch { display: flex; gap: 2px; margin: 0 16px 12px 18px; padding: 3px; border: 1px solid var(--ink-line); border-radius: 9px; }
+.theme-switch button {
+  flex: 1; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-muted); background: transparent; border: 0; border-radius: 6px;
+  padding: 5px 4px; cursor: pointer; transition: background-color .15s var(--ease), color .15s var(--ease);
+}
+.theme-switch button:hover { color: #fff; }
+.theme-switch button[aria-pressed="true"] { background: var(--ink-2); color: #fff; }
+.theme-switch button:focus-visible { outline: 2px solid var(--ink-accent); outline-offset: 1px; }
