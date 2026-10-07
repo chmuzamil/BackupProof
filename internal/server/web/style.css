@@ -788,3 +788,13 @@ details.more.channel[open] > summary { margin-bottom: 6px; }
 .user-item:hover { background: var(--surface-2); text-decoration: none; }
 .btn.user-item { justify-content: flex-start; border: 0; background: transparent; font-size: inherit; font-weight: 400; padding: 9px 12px; white-space: normal; }
 .btn.user-item:hover { background: var(--surface-2); }
+
+/* storage health and size */
+.storage-health { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.storage-health > p { margin: 6px 0 8px; }
+.size-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.size-now { font: 700 22px/1.1 var(--display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.size-chart { width: 160px; height: 44px; flex: 0 1 160px; }
+.size-chart .bar { fill: color-mix(in srgb, var(--accent) 55%, transparent); }
+.size-chart .bar:last-of-type { fill: var(--accent); }
+.size-chart .bar.bad { fill: var(--bad); }

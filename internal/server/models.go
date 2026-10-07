@@ -81,6 +81,8 @@ func (s *Store) DeleteRepository(id int64) error {
 	if err != nil {
 		return err
 	}
+	_, _ = s.db.Exec("DELETE FROM repo_stats WHERE repo_id=?", id)
+	_, _ = s.db.Exec("DELETE FROM settings WHERE key=?", fmt.Sprintf("repo_check_at:%d", id))
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("repository %d not found", id)
 	}

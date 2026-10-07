@@ -27,6 +27,7 @@ type CheckResult struct {
 	Snapshots       int      `json:"snapshots"`
 	ReferencedBlobs int      `json:"referencedBlobs"`
 	StoredBlobs     int      `json:"storedBlobs"`
+	StoredBytes     int64    `json:"storedBytes"` // size of all stored data
 	MissingBlobs    int      `json:"missingBlobs"`
 	UnusedBlobs     int      `json:"unusedBlobs"`
 	ReadBlobs       int      `json:"readBlobs"`
@@ -96,6 +97,9 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 		return res, err
 	}
 	res.StoredBlobs = len(stored)
+	for _, o := range stored {
+		res.StoredBytes += o.Size
+	}
 	for id := range refs {
 		if _, ok := stored[id]; !ok {
 			res.MissingBlobs++

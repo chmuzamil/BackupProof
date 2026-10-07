@@ -1979,8 +1979,45 @@ async function pageStorageNew() {
     h('section', { class: 'card' }, storageChooser({ agent, onSaved: () => { S.dirty = false; location.hash = '#/repositories'; }, onCancel: () => { location.hash = '#/repositories'; } }))));
 }
 
+// sizeChart draws storage size over time (one bar per health check).
+function sizeChart(stats) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const W = 160, H = 44, n = stats.length, gap = 3;
+  const max = Math.max(...stats.map((x) => x.bytes), 1);
+  const bw = Math.max(3, Math.min(14, (W - gap * (n - 1)) / Math.max(n, 1)));
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'size-chart');
+  svg.setAttribute('role', 'img');
+  const first = stats[0], last = stats[n - 1];
+  svg.setAttribute('aria-label', n > 1 ? `Size grew from ${bytes(first.bytes)} on ${day(first.time)} to ${bytes(last.bytes)} on ${day(last.time)}` : `Size ${bytes(last.bytes)} on ${day(last.time)}`);
+  stats.forEach((x, i) => {
+    const h = Math.max(2, Math.round((x.bytes / max) * (H - 2)));
+    const rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('x', W - (n - i) * (bw + gap) + gap);
+    rect.setAttribute('y', H - h);
+    rect.setAttribute('width', bw);
+    rect.setAttribute('height', h);
+    rect.setAttribute('rx', 2);
+    rect.setAttribute('class', x.ok ? 'bar' : 'bar bad');
+    const t = document.createElementNS(NS, 'title');
+    t.textContent = `${day(x.time)}: ${bytes(x.bytes)}${x.ok ? '' : ' (problems found)'}`;
+    rect.append(t);
+    svg.append(rect);
+  });
+  return svg;
+}
+
+function healthLine(stats) {
+  const last = stats && stats[stats.length - 1];
+  if (!last) return h('p', { class: 'small muted' }, 'No health check yet. One runs every week, or click “Check now”.');
+  if (last.ok) return h('p', { class: 'small' }, h('span', { class: 'fact-ok' }, 'Health check passed '), timeEl(last.time), last.readBlobs ? ` · re-read ${plural(last.readBlobs, 'sample')}` : '');
+  return h('p', { class: 'small' }, h('span', { class: 'fact-bad' }, 'Health check found problems '), timeEl(last.time),
+    ` · ${plural(last.missing, 'missing piece')}, ${plural(last.corrupt, 'damaged piece')}. Run a restore test and check the storage provider.`);
+}
+
 async function pageRepositories() {
-  const [repos0, sources] = await Promise.all([api('/repositories'), api('/sources').catch(() => [])]);
+  const [repos0, sources, stats] = await Promise.all([api('/repositories'), api('/sources').catch(() => []), api('/repositories/stats').catch(() => ({}))]);
   const repos = repos0 || [];
   const usedBy = (id) => (sources || []).filter((x) => x.repoId === id);
   const removeRepo = async (r) => {
@@ -2007,6 +2044,21 @@ async function pageRepositories() {
           return h('p', { class: 'small used-by' }, users.length
             ? ['Used by ', joinWords(users.map((x) => x.name))]
             : h('span', { class: 'muted' }, 'Not used by any item'));
+        })(),
+        (() => {
+          const st = (stats && stats[String(r.id)]) || [];
+          const last = st[st.length - 1];
+          const monthAgo = st.filter((x) => toDate(x.time) < Date.now() - 30 * 864e5).pop();
+          return h('div', { class: 'storage-health' },
+            last ? h('div', { class: 'size-row' },
+              h('div', null, h('div', { class: 'size-now' }, bytes(last.bytes)),
+                h('div', { class: 'small muted' }, monthAgo ? `${last.bytes >= monthAgo.bytes ? '+' : '−'}${bytes(Math.abs(last.bytes - monthAgo.bytes))} in 30 days` : `${plural(last.snapshots, 'backup copy')}`.replace('copys', 'copies'))),
+              st.length > 1 ? sizeChart(st) : null) : null,
+            healthLine(st),
+            canOperate() && usedBy(r.id).length ? btn('Check now', busy(async () => {
+              await post(`/repositories/${r.id}/check`);
+              toast('Health check started. It reads back a sample of the stored data.', 'ok');
+            }, 'Starting…'), 'sm') : null);
         })(),
         isAdmin() ? h('div', { class: 'form-actions start' }, usedBy(r.id).length
           ? h('p', { class: 'hint' }, 'To remove this storage, first remove the items that use it.')

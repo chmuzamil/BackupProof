@@ -114,6 +114,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/repositories", s.auth("auditor", s.handleListRepos))
 	mux.HandleFunc("POST /api/repositories", s.auth("operator", s.handleCreateRepo))
 	mux.HandleFunc("DELETE /api/repositories/{id}", s.auth("admin", s.handleDeleteRepo))
+	mux.HandleFunc("POST /api/repositories/{id}/check", s.auth("operator", s.handleCheckRepo))
+	mux.HandleFunc("GET /api/repositories/stats", s.auth("auditor", s.handleRepoStats))
 
 	mux.HandleFunc("GET /api/proofs", s.auth("auditor", s.handleListProofs))
 	mux.HandleFunc("GET /api/proofs/{id}", s.auth("auditor", s.handleGetProof))
