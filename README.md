@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.1.5-0a7bbb" alt="version v0.1.5"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.0-0a7bbb" alt="version v0.2.0"></a>
   <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>
@@ -173,15 +173,69 @@ S3 with Object Lock: `--repo 's3://bucket/vault?endpoint=https://s3.eu-central-0
 
 | | |
 |---|---|
-| **Backs up** | File trees, PostgreSQL, MySQL/MariaDB, MongoDB, SQLite, or any command's output. Pre/post hooks quiesce applications. Database logins are read from Docker containers and WordPress `wp-config.php` on the server itself. |
-| **Stores** | An encrypted, deduplicating, content-addressed repository on a local disk, any S3-compatible service (with optional **S3 Object Lock**), or SFTP with a pinned host key. |
+| **Backs up** | File trees, PostgreSQL, MySQL/MariaDB, MongoDB, SQLite, **Docker apps and volumes** (a Compose project's volumes, container settings and Compose files, optionally stopping the containers while copying), or any command's output. Database logins are read from Docker containers and WordPress `wp-config.php` on the server itself. |
+| **Restores** | From the dashboard: pick a signed backup, browse its files, **download a selection as a zip**, or restore on a server: back where it came from (owners and permissions kept), into a new folder, or onto another server. Databases restore into a new database or replace the original. Docker volumes are put back exactly. |
+| **Stores** | An encrypted, deduplicating, content-addressed repository on a local disk, any S3-compatible service (with optional **S3 Object Lock**), or SFTP with a pinned host key. A **second copy** of every backup can go to another storage (3-2-1), with its own signed proof. Weekly **health checks** re-read a sample of the stored data and chart each storage's size. |
 | **Proves** | Scheduled **restore tests** restore a backup into an empty folder or a `--network none` database container. Checks per data type:<br>• All data: the restored bytes must reproduce the snapshot's Merkle root.<br>• PostgreSQL: `amcheck` with `heapallindexed`.<br>• MySQL/MariaDB: `CHECK TABLE`.<br>• MongoDB: `validate(full)`.<br>• SQLite: `integrity_check`.<br>• Databases: row counts reconciled against counts captured at backup time.<br>• PostgreSQL dumps found inside file backups are loaded into a test database.<br>• Your own SQL assertions and commands. |
 | **Attests** | Each backup and restore test, pass *or fail*, becomes an [in-toto](https://in-toto.io) statement in a DSSE envelope, signed with the agent's Ed25519 key. It is optionally timestamped by an RFC 3161 TSA and appended to a hash-chained ledger with signed checkpoints. |
-| **Watches** | A dead-man's-switch watchdog alerts on what *didn't* happen: overdue backups, stale proofs and silent servers. Alerts go to a webhook (Slack, Discord, Mattermost) or email, and the server can ping an external heartbeat URL. |
+| **Watches** | A dead-man's-switch watchdog alerts on what *didn't* happen: overdue backups, stale proofs and silent servers, and again when it's fixed. Alerts go to email, Slack, Discord, Mattermost, **Microsoft Teams, Telegram, ntfy, Gotify, Pushover and PagerDuty** (incidents resolve automatically), plus a **weekly summary email**. The server can ping an external heartbeat URL. |
+| **Controls** | Per-server **upload and download speed limits** and a **time window** for scheduled jobs. **Two-factor sign-in** (authenticator app, recovery codes), **API tokens** for scripts, and an **Activity** page listing who did what. |
 | **Imports** | Existing backups are fetched, decrypted and converted into restore-tested copies that keep their original dates: **GPG / OpenSSL / age** encrypted files in a bucket or folder (archives can be unpacked), **restic** (reusing `/etc/restic/env`), **Kopia**, **BorgBackup**, and files on **Google Drive, Dropbox, OneDrive** and 70+ services via rclone. |
 | **Exports** | Per-proof bundles and a period **evidence pack** mapped to SOC 2 A1.2/A1.3, ISO 27001 A.8.13, NIST CSF, DORA Art. 12, NIS2 Art. 21 and HIPAA, plus a printable report. |
 
-The dashboard uses plain language ("Restore tested ✓", "Needs attention"), works on phones, supports dark mode and the keyboard, and follows the [Web Interface Guidelines](https://github.com/vercel-labs/web-interface-guidelines).
+The dashboard uses plain language ("Restore tested ✓", "Needs attention"), shows each item's last 14 days of proof at a glance, works on phones, has light, dark and automatic themes, supports the keyboard, and follows the [Web Interface Guidelines](https://github.com/vercel-labs/web-interface-guidelines).
+
+## Restore
+
+**From the dashboard** (administrators): open an item and choose **Restore…**
+
+1. Pick a backup. Ones that passed a restore test are marked.
+2. Tick files or folders, or leave everything unticked.
+3. **Download as zip**, or restore on a server:
+   - **Where it came from**: same-named files are replaced, other files are left alone, owners and permissions are kept.
+   - **A new folder**, on the same or another server. Files keep their full path inside it.
+
+Databases restore **into a new database** (or a new file for SQLite) next to the original, or **replace the original** after you type its name. Docker items put their **volumes back** exactly: the containers using them are stopped, the volume's contents replaced, and the containers started again.
+
+Only backups with a signed proof for that item can be restored, and every file is checked against its content hash as it's written or downloaded.
+
+**From the command line**, with the storage password from the recovery kit:
+
+```bash
+export BP_PASSWORD='password-from-the-recovery-kit'
+backupproof snapshots --repo 's3://bucket/folder?endpoint=https://s3.eu-central-003.backblazeb2.com'
+backupproof restore --repo 's3://bucket/folder?endpoint=…' --target /root/restored SNAPSHOT-ID
+```
+
+## Docker apps and volumes
+
+Choose **Protect something → Docker app or volumes**. BackupProof lists your Compose apps and named volumes. A backup holds:
+
+- `docker/volumes/<name>/…`: each volume's files, with owners
+- `docker/containers/<name>.json`: each container's settings
+- `docker/compose/<project>/…`: the Compose files and `.env`
+
+Tick **Stop the containers during each backup** for apps with a database, so files are copied while nothing writes to them; the containers start again straight after. Volumes are read from Docker's folder where possible, or through a small `busybox` helper container (Docker Desktop).
+
+## API
+
+Create a token under **Settings → API tokens** and send it as `Authorization: Bearer bpt_…`. A token acts with its own role (never more than its owner's) and can't manage people, tokens or two-factor sign-in.
+
+```bash
+curl -H "Authorization: Bearer $BP_TOKEN" https://backup.example.com/api/dashboard
+curl -X POST -H "Authorization: Bearer $BP_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"kind":"backup"}' https://backup.example.com/api/sources/3/run
+```
+
+### Locked out?
+
+On the dashboard's server, with access to its data folder:
+
+```bash
+sudo backupproof admin users
+sudo backupproof admin reset-password admin     # asks for the new password
+sudo backupproof admin reset-2fa admin          # when the phone and recovery codes are lost
+```
 
 ## How the proof works
 
@@ -242,7 +296,10 @@ Deduplication works across files and snapshots. Unchanged files (same size and m
 
 - **Secrets at rest.** Repository passwords, storage and database credentials are encrypted in the dashboard database with a 256-bit key (`secret.key` or `BP_SECRET_KEY`). They are sent only to the agent holding the job lease.
 - **Agents.** Each agent has its own Ed25519 attestation key and a bearer token, stored hashed. The server checks every attestation's signature against the enrolled key, and that it describes the leased job's item, before ledgering it.
-- **Accounts.** Argon2id password hashes, HttpOnly `SameSite=Strict` session cookies and CSRF tokens. Roles are admin, operator and auditor (read-only plus evidence). Anything that could give control of a server is admin-only: commands and hooks, custom restore-test commands, moving an item to another server, connecting servers, on-the-fly rclone remotes and previewing old backups. Every operator action is written to the same ledger as the proofs.
+- **Accounts.** Argon2id password hashes, HttpOnly `SameSite=Strict` session cookies and CSRF tokens, optional two-factor sign-in (TOTP, with one-time recovery codes; a code can't be used twice). Changing a password needs the current one. Roles are admin, operator and auditor (read-only plus evidence). Anything that could give control of a server or show the contents of backed-up files is admin-only: restores, browsing and downloading backups, adding storage and choosing second copies, commands and hooks, custom restore-test commands, moving an item to another server, connecting servers, on-the-fly rclone remotes and previewing old backups. Every action, including sign-ins, is written to the same ledger as the proofs and shown on the Activity page.
+- **API tokens.** Stored hashed, shown once, optionally expiring; a token never has more rights than its owner and can't manage people, tokens or two-factor sign-in.
+- **Restores and copies.** Only backups with a signed proof for that item can be browsed, downloaded, restored or copied, and each is checked against the content root in that proof. A second copy is accepted only if its content root equals the original's. Restores never write into the dashboard's own data folder, and an in-place restore never follows a folder that is a symbolic link on disk (except root's own), so a link planted after the backup can't redirect it.
+- **Alert secrets.** Bot tokens, routing keys and passwords for alert channels are never sent back to the browser.
 - **Built-in agent.** It never backs up, imports from, or stores into the server's own data folder, even when asked to protect `/` or `C:\`.
 - **Restores.** All writes go through an `os.Root` confined to the restore folder, and symlinks are created last, so a crafted snapshot can't write outside it.
 - **Web.** Strict CSP (`default-src 'self'`), `X-Frame-Options: DENY`, no third-party assets.
@@ -262,8 +319,8 @@ Deduplication works across files and snapshots. Unchanged files (same size and m
 - PostgreSQL physical/PITR (pg_basebackup + WAL, `pg_verifybackup`) and MySQL physical (XtraBackup/mariabackup `--prepare`)
 - MSSQL (`RESTORE` + `DBCC CHECKDB`) and Redis (`redis-check-rdb` + key digests)
 - mTLS agent identities with short-lived certificates; transparency-log (C2SP tlog-tiles) checkpoints with witness co-signing
-- Object Lock retention extension during maintenance; repository-to-repository copy for 3-2-1
-- Docker volume and Kubernetes PVC sources; Windows VSS snapshots
+- Object Lock retention extension during maintenance; restore tests of second copies
+- Kubernetes PVC sources; Windows VSS snapshots; single sign-on (OIDC/LDAP)
 
 ## Contributing
 

@@ -825,3 +825,4 @@ input[type=time] {
 .file-name { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
 .file-name .ico-svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted); }
 .picked { margin: 8px 0 0; overflow-wrap: anywhere; }
+.form-actions.start select { max-width: 320px; }

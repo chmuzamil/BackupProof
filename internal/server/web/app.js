@@ -1621,7 +1621,8 @@ async function pageSource(id) {
   const copyCard = h('section', { class: 'card' }, cardHead('Second copy'),
     h('p', { class: 'muted small' }, 'Keep a copy of every backup in another storage, ideally somewhere else entirely, such as a different cloud. Each copy gets its own signed proof.'),
     copyRepo ? h('p', null, 'Copies go to ', h('strong', null, copyRepo.name), '. ', lastCopy ? ['Last copied ', timeEl(lastCopy.created), '.'] : h('span', { class: 'muted' }, 'Not copied yet.')) : null,
-    canOperate() ? h('div', { class: 'form-actions start' }, copySel, btn('Save', busy(async () => {
+    isAdmin() && !(repos || []).some((r) => r.id !== src.repoId) ? h('p', { class: 'hint' }, 'To keep a second copy, first ', h('a', { href: '#/storage/new' }, 'add another storage'), ', for example a different cloud provider.') : null,
+    isAdmin() && (repos || []).some((r) => r.id !== src.repoId) ? h('div', { class: 'form-actions start' }, copySel, btn('Save', busy(async () => {
       await put(`/sources/${id}/copy`, { repoId: copySel.value ? Number(copySel.value) : null });
       toast(copySel.value ? 'Second copy turned on. The newest backup is being copied now.' : 'Second copy turned off', 'ok');
       reload();
@@ -2216,7 +2217,7 @@ async function pageRepositories() {
     reload();
   };
   return h('div', null,
-    pageHead('Storage', 'Where your encrypted backup copies are kept.', canOperate() ? h('a', { class: 'btn primary', href: '#/storage/new' }, '+ Add storage') : null),
+    pageHead('Storage', 'Where your encrypted backup copies are kept.', isAdmin() ? h('a', { class: 'btn primary', href: '#/storage/new' }, '+ Add storage') : null),
     repos.length ? h('div', { class: 'cards' }, repos.map((r) => {
       const k = repoKind(r.backend);
       const lw = lockWords(r.backend);
@@ -2253,7 +2254,7 @@ async function pageRepositories() {
           h('dt', null, 'Storage ID'), h('dd', null, h('code', { class: 'break' }, r.repoId || 'created on first backup')),
           h('dt', null, 'Added'), h('dd', null, absTime(r.created)))));
     })) : h('section', { class: 'card' }, empty('No backup storage yet. Add a disk, a cloud bucket or another server to keep your backups in.',
-      canOperate() ? h('a', { class: 'btn primary', href: '#/storage/new' }, 'Add storage') : null)));
+      isAdmin() ? h('a', { class: 'btn primary', href: '#/storage/new' }, 'Add storage') : h('p', { class: 'hint' }, 'Ask an administrator to add storage.'))));
 }
 
 // ------------------------------------------------------ protect wizard
@@ -2289,7 +2290,9 @@ function storageStep({ repos, value, adding, agent, onPick, onAdded, label = 'Ba
     const k = repoKind(r.backend);
     return { value: r.id, title: r.name, desc: `${k.label} · ${repoLocation(r.backend)}`, icon: k.icon, badge: r.backend && r.backend.objectLockMode ? 'Ransomware protection' : null, badgeCls: 'ok' };
   });
-  opts.push({ value: 'new', title: 'Add new storage', desc: 'A disk, a cloud bucket (Backblaze B2, S3…) or another server.', icon: 'plus' });
+  if (isAdmin()) opts.push({ value: 'new', title: 'Add new storage', desc: 'A disk, a cloud bucket (Backblaze B2, S3…) or another server.', icon: 'plus' });
+  if (!isAdmin() && !repos.length) return h('div', { class: 'banner warn' }, 'There’s no backup storage yet. Ask an administrator to add one.');
+  if (!isAdmin()) adding = false;
   return h('div', null,
     choices(opts, { value: adding ? 'new' : value, onPick, label }),
     adding ? h('div', { class: 'card inset' }, storageChooser({ agent, title: 'New storage', onSaved: onAdded, onCancel: repos.length ? () => onPick(value || repos[0].id) : null })) : null);
@@ -3358,7 +3361,7 @@ async function pageSourceForm(id) {
     h('div', { class: 'row' }, field('Server', f.agent, 'The server that has the data.'), field('Backup storage', f.repo, 'Where encrypted copies are kept.')),
     field('Test restores on a different server', f.verifier, 'Optional. Stronger proof: restore tests run on another server that only has access to the storage.'),
     !liveAgents.length ? h('p', { class: 'hint' }, 'No servers connected yet. ', h('a', { href: '#/agents' }, 'Connect one')) : null,
-    !(repos || []).length ? h('p', { class: 'hint' }, 'No storage yet. ', h('a', { href: '#/storage/new' }, 'Add storage')) : null),
+    !(repos || []).length ? h('p', { class: 'hint' }, 'No storage yet. ', isAdmin() ? h('a', { href: '#/storage/new' }, 'Add storage') : 'Ask an administrator to add one.') : null),
   h('fieldset', null, h('legend', null, 'How often'),
     h('div', { class: 'row' },
       h('div', null, field('Back up', f.backupCron, 'A cron expression, “@every 6h”, or “manual”.'), cronHint(f.backupCron), presets(f.backupCron, BACKUP_PRESETS)),

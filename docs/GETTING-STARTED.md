@@ -89,6 +89,23 @@ Good to know:
 - **Database dumps inside are tested.** PostgreSQL dumps found in the backups are loaded into a temporary test database (this needs Docker on the computer doing the restore tests).
 - **You can keep your current backup job.** Set the import to run every night after it; each new backup is converted and restore-tested automatically.
 
+## Getting files back
+
+Open the item and click **Restore…** (administrators only).
+
+1. **Choose a backup.** The newest is selected. Ones marked *Restore tested ✓* are known to work.
+2. **Choose files.** Tick what you need, or leave everything unticked.
+3. **Get them back:**
+   - **Download as zip** to your computer, or
+   - **Where it came from**: puts the files back on the server. Files with the same names are replaced; everything else is left alone.
+   - **A new folder**: restores next to the original, or onto another server, so you can compare first.
+
+For a **database**, choose *Restore into a new database* to check the data first, or *Replace the original* (you'll type its name to confirm). For a **Docker app**, *Put the volumes back* stops the app, restores its volumes exactly and starts it again.
+
+## Keep a second copy
+
+On an item's page, under **Second copy**, choose another storage, ideally with a different provider. Every backup is then copied there too, and each copy gets its own signed proof. If one provider has an outage, or an account is lost, your backups are still safe.
+
 ## What the colours mean
 
 | Status | Meaning | What to do |

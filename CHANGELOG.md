@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-08
+
+### Added
+
+- **Restore from the dashboard.** Pick a signed backup, browse its files, download a selection as a zip, or restore on a server: back where it came from (owners and permissions kept), into a new folder, or onto another server. Database items restore into a new database (or SQLite file) or replace the original after confirmation. Every file is checked against its content hash.
+- **Docker apps and volumes.** Back up a Compose app (all its volumes, container settings and Compose files) or single volumes, optionally stopping the containers while copying, and put volumes back exactly. Volumes are read directly, or through a small helper container on Docker Desktop.
+- **Second copy (3-2-1).** Every backup can also go to a second storage, re-encrypted with its keys, sending only what changed. Each copy has a signed proof whose content root must equal the original's.
+- **Storage health checks** run weekly (or on demand), re-read a sample of the data, and chart each storage's size.
+- **Alerts** to Microsoft Teams, Telegram, ntfy, Gotify, Pushover and PagerDuty (incidents resolve when fixed), "resolved" messages that name the item, and a **weekly summary email**.
+- **Two-factor sign-in** with an authenticator app and one-time recovery codes; administrators can reset someone's two-factor.
+- **API tokens** for scripts (role-limited, can't manage people or tokens) and an **Activity** page listing every recorded action, including sign-ins.
+- **Speed limits and time windows** per server for scheduled jobs.
+- **Light, dark or automatic theme**, a top bar with the account menu, and `backupproof admin` commands to recover a locked-out account.
+
+### Changed
+
+- Changing your password needs your current password.
+- Backups record file owners on Unix (outside the content root) so in-place restores are exact.
+- The Home status box no longer has decorative lines.
+- **Only administrators add storage** and choose an item's second copy. An operator could otherwise send backups to storage whose password they know and read files they aren't allowed to see.
+
+### Security
+
+- Restoring to the original location opens each folder on the way one level at a time and refuses any that is a symbolic link on disk (except root's own, such as `/var/run`), so a link planted after the backup can't redirect the restore into another folder such as `/etc`.
+- A saved email password or ntfy/Gotify token is dropped when its server address changes, so it can't be sent to a server someone else picked.
+- Saving an item no longer changes or clears its second copy.
+
 ## [0.1.5] - 2026-10-07
 
 ### Changed
@@ -78,7 +105,8 @@ First release.
 - Anything that could give control of a server is admin-only: commands and hooks, custom restore-test commands, moving items between servers, connecting servers, on-the-fly rclone remotes and the old-backup preview.
 - The built-in agent never backs up, imports from or stores into the server's own data folder.
 
-[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/chmuzamil/BackupProof/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/chmuzamil/BackupProof/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/chmuzamil/BackupProof/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/chmuzamil/BackupProof/compare/v0.1.2...v0.1.3
