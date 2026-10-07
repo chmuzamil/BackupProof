@@ -93,6 +93,13 @@ func (s *filesSource) List(ctx context.Context) ([]Point, error) {
 	if err != nil {
 		return nil, err
 	}
+	keys := make([]string, len(objs))
+	for i, o := range objs {
+		keys[i] = o.Key
+	}
+	if repo := DetectKeys(keys); repo != nil {
+		return nil, errRepository(repo)
+	}
 	mode := s.spec.Grouping
 	if mode == "" || mode == "auto" {
 		dated := 0

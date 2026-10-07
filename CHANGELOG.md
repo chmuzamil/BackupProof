@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-07
+
+### Added
+
+- **Import recognises restic, Kopia and Borg backups.** Choosing "Backup files in a bucket or folder" for a location that holds a restic or Kopia repository (also inside a folder, such as `server1/`) now switches the import wizard to the right tool, points it at the repository folder and checks again with the same password. Borg repositories get a hint to use the BorgBackup import.
+
+### Fixed
+
+- Converting a restic, Kopia or Borg repository as "backup files" failed with "cannot decrypt (wrong password or key)" for every file. It now stops with a plain explanation of what the backups are and which import to choose.
+
 ## [0.1.2] - 2026-10-07
 
 ### Added
@@ -45,7 +55,8 @@ First release.
 - Anything that could give control of a server is admin-only: commands and hooks, custom restore-test commands, moving items between servers, connecting servers, on-the-fly rclone remotes and the old-backup preview.
 - The built-in agent never backs up, imports from or stores into the server's own data folder.
 
-[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/chmuzamil/BackupProof/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/chmuzamil/BackupProof/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/chmuzamil/BackupProof/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/chmuzamil/BackupProof/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/chmuzamil/BackupProof/releases/tag/v0.1.0

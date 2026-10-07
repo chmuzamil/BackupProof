@@ -207,37 +207,14 @@ func testStorage(ctx context.Context, cfg backend.Config, creds backend.Credenti
 	return res
 }
 
-// detectOldBackups recognises repositories of other backup tools from the
-// first objects in the storage, so the dashboard can offer to convert them.
+// detectOldBackups recognises repositories of other backup tools in the
+// storage, so the dashboard can offer to convert them.
 func detectOldBackups(ctx context.Context, be backend.Backend) string {
-	found, n := "", 0
-	hasConfig, hasKeys := false, false
-	errStop := errors.New("stop")
-	// errStop ends the scan early; any other listing error just means nothing
-	// (more) was recognised, which is fine for what is only a UI hint.
-	_ = be.List(ctx, "", func(o backend.ObjectInfo) error {
-		n++
-		switch {
-		case strings.HasPrefix(o.Key, "kopia.repository"):
-			found = "Kopia"
-		case o.Key == "config":
-			hasConfig = true
-		case strings.HasPrefix(o.Key, "keys/"):
-			hasKeys = true
-		case o.Key == "README" && o.Size < 200:
-			if b, err := be.Get(ctx, o.Key); err == nil && strings.Contains(string(b), "Borg Backup repository") {
-				found = "BorgBackup"
-			}
-		}
-		if hasConfig && hasKeys {
-			found = "restic"
-		}
-		if found != "" || n > 2000 {
-			return errStop
-		}
-		return nil
-	})
-	return found
+	repo, err := importer.DetectRepository(ctx, be)
+	if err != nil || repo == nil {
+		return ""
+	}
+	return repo.Tool
 }
 
 func friendlyStorageError(err error) string {
@@ -268,6 +245,26 @@ func (s *Server) handleImportScan(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
+	// People pick "backup files" for any bucket of backups. If the location is
+	// really a restic, Kopia or Borg repository, say so and where, so the
+	// dashboard can switch to the right import.
+	if spec.Format == "files" {
+		be, err := backend.Open(ctx, spec.Storage, spec.Credentials)
+		if err != nil {
+			writeErr(w, 400, errors.New(friendlyStorageError(err)))
+			return
+		}
+		repo, derr := importer.DetectRepository(ctx, be)
+		_ = be.Close()
+		if derr != nil {
+			writeErr(w, 400, errors.New(friendlyStorageError(derr)))
+			return
+		}
+		if repo != nil {
+			writeJSON(w, 200, map[string]any{"found": 0, "groups": []any{}, "repository": repo, "storage": repo.WithPrefix(spec.Storage)})
+			return
+		}
+	}
 	src, err := importer.Open(ctx, spec)
 	if err != nil {
 		writeErr(w, 400, errors.New(friendlyStorageError(err)))

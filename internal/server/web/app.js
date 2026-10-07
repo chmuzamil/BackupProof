@@ -1591,7 +1591,13 @@ function storageFields({ mode, agent, initial }) {
   };
 
   const el = h('div', { class: 'storage-fields' }, typePicker, box);
-  return { el, collect, kind: () => type, onChange: (fn) => listeners.push(fn) };
+  // setLocation points the form at another folder of the same storage.
+  const setLocation = (b) => {
+    if (b.type === 'local') f.path.value = b.path || '';
+    else if (b.type === 'sftp') f.sftpPath.value = b.path || '';
+    else if (b.type === 's3') f.prefix.value = b.prefix || '';
+  };
+  return { el, collect, setLocation, kind: () => type, onChange: (fn) => listeners.push(fn) };
 }
 
 const PW_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
@@ -2166,7 +2172,7 @@ async function pageProtect() {
 // -------------------------------------------------------- import wizard
 
 const IMPORT_FORMATS = [
-  { value: 'files', title: 'Backup files in a bucket or folder', desc: 'Database dumps, .zip/.tar.gz archives, or encrypted files (.gpg, .enc, .age) made by any tool or script.', icon: 'file' },
+  { value: 'files', title: 'Backup files in a bucket or folder', desc: 'Database dumps, .zip/.tar.gz archives, or encrypted files (.gpg, .enc, .age) made by any tool or script. Not sure what made your backups? Choose this: BackupProof recognises restic, Kopia and Borg backups and switches for you.', icon: 'file' },
   { value: 'restic', title: 'restic', notranslate: true, desc: 'A restic repository. The restic program must be installed on the server that converts.', icon: 'box' },
   { value: 'kopia', title: 'Kopia', notranslate: true, desc: 'A Kopia repository (on S3, B2, a disk or SFTP). The kopia program must be installed on the server that converts.', icon: 'box' },
   { value: 'borg', title: 'BorgBackup', notranslate: true, desc: 'A Borg repository, e.g. on another server over SSH, BorgBase or a Hetzner Storage Box. Needs the borg program.', icon: 'box' },
@@ -2270,6 +2276,11 @@ async function pageImport() {
   const showScan = () => {
     const r = I.scan;
     clear(scanOut);
+    if (I.switched) {
+      scanOut.append(h('div', { class: 'banner info' }, h('strong', null, `These are ${I.switched.tool} backups.`), ' ',
+        `They’re stored as a ${I.switched.tool} repository`, I.switched.folder ? ` in the “${I.switched.folder}” folder` : '',
+        `, not as separate backup files, so BackupProof switched to the ${I.switched.tool} import for you.`));
+    }
     if (!r) return;
     if (!r.found) {
       scanOut.append(h('div', { class: 'banner warn' }, sf.kind() === 'local'
@@ -2282,6 +2293,27 @@ async function pageImport() {
     if (I.format === 'files') scanOut.append(h('p', { class: 'hint' }, 'So far the files have only been listed. If a password is wrong, you’ll see it when the conversion runs.'));
   };
 
+  // switchTo moves to the import for the repository found where the person
+  // looked for backup files: they don't need to know which tool made them.
+  const switchTo = async (res) => {
+    const repo = res.repository;
+    if (repo.format === 'borg') {
+      // Borg is read with the borg program over SSH or from a folder, not from a bucket.
+      I.scan = null;
+      fill(scanOut, h('div', { class: 'banner warn' }, h('strong', null, 'These are BorgBackup backups.'), ' Go back, choose BorgBackup, and enter the repository address you use with borg.'));
+      return;
+    }
+    I.switched = { tool: repo.tool, folder: repo.prefix };
+    I.format = repo.format;
+    if (repo.format === 'restic') I.resticMode = 'manual';
+    if (repo.format === 'kopia') I.kopiaMode = 'manual';
+    sf.setLocation(res.storage);
+    I.scan = null;
+    render();
+    if (I.password) await scan();
+    else scanOut.append(h('p', null, `Enter the ${repo.tool} repository password above, then click “Look for backups”.`));
+  };
+
   const scan = async () => {
     err.textContent = '';
     let spec;
@@ -2289,7 +2321,9 @@ async function pageImport() {
     if (repoTool() && !I.password) { showErr(err, `Enter the ${I.format === 'restic' ? 'restic' : 'Kopia'} repository password.`); return; }
     fill(scanOut, h('div', { class: 'running' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Looking for backups… this can take a minute for big buckets.'));
     try {
-      I.scan = await post('/import/scan', spec);
+      const res = await post('/import/scan', spec);
+      if (res && res.repository) { await switchTo(res); return; }
+      I.scan = res;
       showScan();
       autoName();
     } catch (e) {
@@ -2299,7 +2333,8 @@ async function pageImport() {
         fill(scanOut, h('div', { class: 'banner info' }, 'Only an administrator can preview old backups. You can still continue — they are listed when the conversion starts.'));
         return;
       }
-      fill(scanOut, h('div', { class: 'banner bad' }, glyph(false), e.message));
+      showScan(); // keeps the "switched" note, if any
+      scanOut.append(h('div', { class: 'banner bad' }, glyph(false), e.message));
     }
   };
 
@@ -2322,7 +2357,7 @@ async function pageImport() {
 
   const stepFormat = () => h('div', null,
     h('h2', { tabindex: '-1' }, 'What made your old backups?'),
-    choices(IMPORT_FORMATS, { value: I.format, label: 'What made your old backups', onPick: (v) => { I.format = v; I.scan = null; } }));
+    choices(IMPORT_FORMATS, { value: I.format, label: 'What made your old backups', onPick: (v) => { I.format = v; I.scan = null; I.switched = null; } }));
 
   const pwField = (label, help) => field(label, bind(input({ name: 'import-password', type: 'password', autocomplete: 'off' }), I, 'password', () => { I.scan = null; }), help);
   const pwFileField = (label, placeholder, help) => field(label, bind(input({ name: 'password-file', code: true, placeholder }), I, 'passwordFile'), help);
