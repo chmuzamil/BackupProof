@@ -398,6 +398,7 @@ type Agent struct {
 	LastSeen  *time.Time `json:"lastSeen,omitempty"`
 	Created   string     `json:"created"`
 	Revoked   bool       `json:"revoked"`
+	Removed   bool       `json:"-"`
 	Docker    bool       `json:"docker"`
 	Online    bool       `json:"online"`
 	// Builtin is the agent embedded in the server ("This server").
@@ -448,14 +449,14 @@ func (s *Store) Enroll(token string, a Agent) (int64, string, error) {
 	return id, agentToken, tx.Commit()
 }
 
-const agentCols = "id,name,IFNULL(hostname,''),IFNULL(os,''),IFNULL(version,''),public_key,last_seen,created,revoked,docker,IFNULL(inventory,''),upload_kbps,download_kbps,window_start,window_end"
+const agentCols = "id,name,IFNULL(hostname,''),IFNULL(os,''),IFNULL(version,''),public_key,last_seen,created,revoked,docker,IFNULL(inventory,''),upload_kbps,download_kbps,window_start,window_end,concurrency,max_inflight_mb,removed"
 
 func scanAgent(row interface{ Scan(...any) error }) (*Agent, error) {
 	var a Agent
 	var seen sql.NullString
 	var inv string
 	if err := row.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Version, &a.PublicKey, &seen, &a.Created, &a.Revoked, &a.Docker, &inv,
-		&a.Limits.UploadKBps, &a.Limits.DownloadKBps, &a.Limits.WindowStart, &a.Limits.WindowEnd); err != nil {
+		&a.Limits.UploadKBps, &a.Limits.DownloadKBps, &a.Limits.WindowStart, &a.Limits.WindowEnd, &a.Limits.Concurrency, &a.Limits.MaxInflightMB, &a.Removed); err != nil {
 		return nil, err
 	}
 	a.LastSeen = parseTime(seen)
@@ -501,6 +502,47 @@ func (s *Store) Agents() ([]Agent, error) {
 func (s *Store) TouchAgent(id int64, version string, docker bool) error {
 	_, err := s.db.Exec("UPDATE agents SET last_seen=?, version=?, docker=? WHERE id=?", now(), version, docker, id)
 	return err
+}
+
+// ErrAgentInUse means items still run on, or are restore-tested on, a server.
+var ErrAgentInUse = errors.New("server in use")
+
+// ErrAgentConnected means a server must be disconnected before it is removed.
+var ErrAgentConnected = errors.New("disconnect the server first")
+
+// RemoveAgent hides a disconnected server from the dashboard. Items that
+// run on it or are restore-tested on it must be moved or removed first. Its
+// public key stays, so the proofs it signed remain verifiable.
+func (s *Store) RemoveAgent(id int64) ([]string, error) {
+	a, err := s.Agent(id)
+	if err != nil {
+		return nil, err
+	}
+	if !a.Revoked {
+		return nil, ErrAgentConnected
+	}
+	rows, err := s.db.Query("SELECT name FROM sources WHERE agent_id=? OR verifier_id=? ORDER BY name", id, id)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			names = append(names, n)
+		}
+	}
+	rows.Close()
+	if len(names) > 0 {
+		return names, ErrAgentInUse
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if _, err := s.db.Exec("UPDATE agents SET removed=1, inventory=NULL WHERE id=?", id); err != nil {
+		return nil, err
+	}
+	_, err = s.db.Exec("DELETE FROM jobs WHERE agent_id=? AND state='queued'", id)
+	return nil, err
 }
 
 func (s *Store) RevokeAgent(id int64) error {

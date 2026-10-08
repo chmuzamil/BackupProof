@@ -30,6 +30,7 @@ import (
 	"github.com/chmuzamil/backupproof/internal/server"
 	"github.com/chmuzamil/backupproof/internal/snapshot"
 	"github.com/chmuzamil/backupproof/internal/source"
+	"github.com/chmuzamil/backupproof/internal/transfer"
 )
 
 const usage = `BackupProof — backups with cryptographic proof of recoverability.
@@ -345,8 +346,19 @@ func cmdInit(ctx context.Context, args []string) error {
 	return nil
 }
 
+// transferFlags adds --concurrency and --max-inflight to a command; call
+// the returned function after parsing to attach them to ctx.
+func transferFlags(fs *flag.FlagSet) func(context.Context) context.Context {
+	conc := fs.Int("concurrency", 0, "storage requests at once: 0 adapts (4-32), 1 is one chunk at a time")
+	mib := fs.Int("max-inflight", 0, "MiB of chunk data held in memory at once (default 64)")
+	return func(ctx context.Context) context.Context {
+		return transfer.WithSettings(ctx, transfer.Settings{Concurrency: *conc, MaxInflight: int64(*mib) << 20})
+	}
+}
+
 func cmdBackup(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
+	withTransfer := transferFlags(fs)
 	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
 	specPath := fs.String("spec", "", "source spec JSON")
 	name := fs.String("name", "", "source name (files)")
@@ -356,6 +368,7 @@ func cmdBackup(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	ctx = withTransfer(ctx)
 	spec, err := loadSpec(*specPath, *name, fs.Args())
 	if err != nil {
 		return err
@@ -379,6 +392,7 @@ func cmdBackup(ctx context.Context, args []string) error {
 
 func cmdDrill(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("drill", flag.ExitOnError)
+	withTransfer := transferFlags(fs)
 	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
 	specPath := fs.String("spec", "", "source spec JSON")
 	name := fs.String("name", "", "source name")
@@ -387,6 +401,7 @@ func cmdDrill(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	ctx = withTransfer(ctx)
 	spec, err := loadSpec(*specPath, *name, nil)
 	if err != nil {
 		return err
@@ -461,6 +476,7 @@ func human(n int64) string {
 
 func cmdRestore(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("restore", flag.ExitOnError)
+	withTransfer := transferFlags(fs)
 	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
 	target := fs.String("target", "", "target directory")
 	var include multi
@@ -471,6 +487,7 @@ func cmdRestore(ctx context.Context, args []string) error {
 	if *target == "" || fs.NArg() != 1 {
 		return errors.New("usage: backupproof restore --repo REPO --target DIR SNAPSHOT")
 	}
+	ctx = withTransfer(ctx)
 	r, _, err := openRepo(ctx, *repoURL)
 	if err != nil {
 		return err
@@ -499,11 +516,13 @@ func cmdRestore(ctx context.Context, args []string) error {
 
 func cmdCheck(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	withTransfer := transferFlags(fs)
 	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
 	pct := fs.Float64("read-data", 0, "percent of data to download and verify (0-100)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	ctx = withTransfer(ctx)
 	r, _, err := openRepo(ctx, *repoURL)
 	if err != nil {
 		return err

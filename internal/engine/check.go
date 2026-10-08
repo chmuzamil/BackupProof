@@ -11,6 +11,7 @@ import (
 	bpcrypto "github.com/chmuzamil/backupproof/internal/crypto"
 	"github.com/chmuzamil/backupproof/internal/repo"
 	"github.com/chmuzamil/backupproof/internal/snapshot"
+	"github.com/chmuzamil/backupproof/internal/transfer"
 )
 
 type CheckOptions struct {
@@ -114,12 +115,20 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 	opts.Log("structure: %d snapshots, %d referenced blobs, %d missing", res.Snapshots, res.ReferencedBlobs, res.MissingBlobs)
 
 	if opts.ReadDataPercent > 0 {
-		sample := SampleIDs(refs, opts.ReadDataPercent, opts.Seed)
-		for _, id := range sample {
-			if _, ok := stored[id]; !ok {
-				continue
+		var sample []bpcrypto.ID
+		var wants []Want
+		for _, id := range SampleIDs(refs, opts.ReadDataPercent, opts.Seed) {
+			if o, ok := stored[id]; ok {
+				sample = append(sample, id)
+				wants = append(wants, Want{ID: id, Hint: max(o.Size, defaultHint)})
 			}
-			data, err := r.GetBlob(ctx, id)
+		}
+		// Checks use less concurrency, so a weekly check doesn't saturate a
+		// small server, and keep going past bad chunks to count them all.
+		pf := NewFetcher(ctx, r, wants, FetchOptions{MaxConcurrency: transfer.CheckConcurrency, KeepGoing: true})
+		defer pf.Close()
+		for _, id := range sample {
+			data, err := pf.Get(ctx, id)
 			res.ReadBlobs++
 			if err != nil {
 				res.CorruptBlobs++

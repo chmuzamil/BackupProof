@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.3-0a7bbb" alt="version v0.2.3"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.4-0a7bbb" alt="version v0.2.4"></a>
   <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>
@@ -179,7 +179,7 @@ S3 with Object Lock: `--repo 's3://bucket/vault?endpoint=https://s3.eu-central-0
 | **Proves** | Scheduled **restore tests** restore a backup into an empty folder or a `--network none` database container. Checks per data type:<br>• All data: the restored bytes must reproduce the snapshot's Merkle root.<br>• PostgreSQL: `amcheck` with `heapallindexed`.<br>• MySQL/MariaDB: `CHECK TABLE`.<br>• MongoDB: `validate(full)`.<br>• SQLite: `integrity_check`.<br>• Databases: row counts reconciled against counts captured at backup time.<br>• PostgreSQL dumps found inside file backups are loaded into a test database.<br>• Your own SQL assertions and commands. |
 | **Attests** | Each backup and restore test, pass *or fail*, becomes an [in-toto](https://in-toto.io) statement in a DSSE envelope, signed with the agent's Ed25519 key. It is optionally timestamped by an RFC 3161 TSA and appended to a hash-chained ledger with signed checkpoints. |
 | **Watches** | A dead-man's-switch watchdog alerts on what *didn't* happen: overdue backups, stale proofs and silent servers, and again when it's fixed. Alerts go to email, Slack, Discord, Mattermost, **Microsoft Teams, Telegram, ntfy, Gotify, Pushover and PagerDuty** (incidents resolve automatically), plus a **weekly summary email**. The server can ping an external heartbeat URL. |
-| **Controls** | Per-server **upload and download speed limits** and a **time window** for scheduled jobs. **Two-factor sign-in** (authenticator app, recovery codes), **API tokens** for scripts, and an **Activity** page listing who did what. |
+| **Controls** | Per-server **upload and download speed limits**, a **time window** for scheduled jobs, and **parallel transfers** that adapt to the link (4–32 at once, within a memory cap). **Two-factor sign-in** (authenticator app, recovery codes), **API tokens** for scripts, and an **Activity** page listing who did what. |
 | **Imports** | Existing backups are fetched, decrypted and converted into restore-tested copies that keep their original dates: **GPG / OpenSSL / age** encrypted files in a bucket or folder (archives can be unpacked), **restic** (reusing `/etc/restic/env`), **Kopia**, **BorgBackup**, and files on **Google Drive, Dropbox, OneDrive** and 70+ services via rclone. |
 | **Exports** | Per-proof bundles and a period **evidence pack** mapped to SOC 2 A1.2/A1.3, ISO 27001 A.8.13, NIST CSF, DORA Art. 12, NIS2 Art. 21 and HIPAA, plus a printable report. |
 
@@ -292,6 +292,12 @@ Deduplication works across files and snapshots. Unchanged files (same size and m
 | `--no-local-agent` | off | Disable the built-in "This server" agent |
 | `BP_STATE` | `~/.backupproof` | Agent / CLI state folder |
 | `BP_PASSWORD`, `BP_PASSWORD_FILE` | | Repository password for the CLI |
+| `--concurrency` | `0` (adaptive) | `backup`, `restore`, `drill`, `check`: storage requests at once. `0` adapts between 4 and 32, `1` moves one chunk at a time |
+| `--max-inflight` | `64` | Same commands: MiB of chunk data held in memory at once |
+
+### Transfers
+
+Backups, restores, restore tests, second copies, zip downloads and health checks move chunks in parallel. The number of requests at once starts at 8 and adapts between 4 and 32: it grows while throughput rises and halves when the storage service throttles (429, 503, SlowDown) or latency doubles. Chunk data waiting in memory is capped (64 MiB by default). Failed requests are retried with jittered backoff, honouring `Retry-After`. Speed limits apply to all transfers of a server together. Health checks use at most 4 at once. Every chunk is still verified as before; only the speed changes. Per server, both settings are under **Servers → Change speed limits and time window → Advanced**.
 
 ## Security model
 

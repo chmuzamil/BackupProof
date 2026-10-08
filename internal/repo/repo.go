@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/chmuzamil/backupproof/internal/backend"
 	"github.com/chmuzamil/backupproof/internal/chunker"
 	bpcrypto "github.com/chmuzamil/backupproof/internal/crypto"
+	"github.com/chmuzamil/backupproof/internal/transfer"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -152,7 +154,7 @@ func Open(ctx context.Context, be backend.Backend, password []byte) (*Repo, erro
 }
 
 func newRepo(be backend.Backend, cfg Config, mk *bpcrypto.MasterKeys) (*Repo, error) {
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1))
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(runtime.GOMAXPROCS(0)))
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +263,7 @@ func (r *Repo) PutBlob(ctx context.Context, plain []byte) (bpcrypto.ID, int, err
 	r.mu.Unlock()
 	sealed, err := r.seal("data", id, plain)
 	if err == nil {
-		err = r.be.Put(ctx, DataKey(id), sealed)
+		err = r.put(ctx, DataKey(id), sealed)
 	}
 	if err != nil {
 		r.mu.Lock()
@@ -272,12 +274,43 @@ func (r *Repo) PutBlob(ctx context.Context, plain []byte) (bpcrypto.ID, int, err
 	return id, len(sealed), nil
 }
 
+// get and put read and write one object, retrying transient failures.
+func (r *Repo) get(ctx context.Context, key string) ([]byte, error) {
+	var raw []byte
+	err := transfer.Do(ctx, func(ctx context.Context) error {
+		var err error
+		raw, err = r.be.Get(ctx, key)
+		return err
+	})
+	return raw, err
+}
+
+func (r *Repo) put(ctx context.Context, key string, data []byte) error {
+	return transfer.Do(ctx, func(ctx context.Context) error { return r.be.Put(ctx, key, data) })
+}
+
 // GetBlob reads, decrypts and verifies a blob.
 func (r *Repo) GetBlob(ctx context.Context, id bpcrypto.ID) ([]byte, error) {
-	raw, err := r.be.Get(ctx, DataKey(id))
+	raw, err := r.FetchBlob(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("blob %s: %w", id.Short(), err)
+		return nil, err
 	}
+	return r.OpenBlob(id, raw)
+}
+
+// FetchBlob downloads a blob without opening it, so downloading and
+// decrypting can run in separate stages.
+func (r *Repo) FetchBlob(ctx context.Context, id bpcrypto.ID) ([]byte, error) {
+	raw, err := r.get(ctx, DataKey(id))
+	if err != nil {
+		return nil, fmt.Errorf("blob %s: %w", id, err)
+	}
+	return raw, nil
+}
+
+// OpenBlob decrypts and verifies a blob from FetchBlob: the authentication
+// tag must hold and the content must hash to its ID.
+func (r *Repo) OpenBlob(id bpcrypto.ID, raw []byte) ([]byte, error) {
 	plain, err := r.open("data", id, raw)
 	if err != nil {
 		return nil, err
@@ -299,11 +332,11 @@ func (r *Repo) PutJSON(ctx context.Context, kind string, v any) (bpcrypto.ID, er
 	if err != nil {
 		return id, err
 	}
-	return id, r.be.Put(ctx, kind+"/"+id.String(), sealed)
+	return id, r.put(ctx, kind+"/"+id.String(), sealed)
 }
 
 func (r *Repo) GetJSON(ctx context.Context, kind string, id bpcrypto.ID, v any) error {
-	raw, err := r.be.Get(ctx, kind+"/"+id.String())
+	raw, err := r.get(ctx, kind+"/"+id.String())
 	if err != nil {
 		return err
 	}

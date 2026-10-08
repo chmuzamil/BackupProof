@@ -143,6 +143,7 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 	}
 	if lim, err := s.store.AgentLimits(job.AgentID); err == nil {
 		lease.UploadBps, lease.DownloadBps = int64(lim.UploadKBps)*1024, int64(lim.DownloadKBps)*1024
+		lease.Concurrency, lease.MaxInflight = lim.Concurrency, int64(lim.MaxInflightMB)<<20
 	}
 	if head, _ := s.store.LedgerHead(); head != nil {
 		lease.SampleSeed = head.Hash

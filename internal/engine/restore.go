@@ -93,6 +93,20 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		return d, filepath.Base(name), err
 	}
 
+	// Download file contents ahead, in the order the loop below writes them.
+	var wants []Want
+	for _, e := range entries {
+		if (e.Type != snapshot.TypeFile && e.Type != snapshot.TypeStream) || !matchInclude(e.Path, opts.Include) {
+			continue
+		}
+		if opts.StripPrefix != "" && !strings.HasPrefix(e.Path, opts.StripPrefix+"/") {
+			continue
+		}
+		wants = appendWants(wants, e)
+	}
+	pf := NewFetcher(ctx, r, wants, FetchOptions{})
+	defer pf.Close()
+
 	type dirTime struct {
 		root  *os.Root
 		path  string
@@ -160,7 +174,7 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		case snapshot.TypeFile, snapshot.TypeStream:
 			parent, base, err := at(name)
 			if err == nil {
-				err = restoreFile(ctx, r, parent, e, base, opts.Original)
+				err = restoreFile(ctx, pf, parent, e, base, opts.Original)
 			}
 			if err != nil {
 				return res, fmt.Errorf("%s: %w", e.Path, err)
@@ -199,7 +213,7 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 	return res, nil
 }
 
-func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.Entry, name string, original bool) error {
+func restoreFile(ctx context.Context, pf *Fetcher, root *os.Root, e *snapshot.Entry, name string, original bool) error {
 	if dir := filepath.Dir(name); dir != "." {
 		if err := root.MkdirAll(dir, 0o700); err != nil {
 			return err
@@ -228,7 +242,7 @@ func restoreFile(ctx context.Context, r *repo.Repo, root *os.Root, e *snapshot.E
 			root.Remove(tmp)
 			return err
 		}
-		data, err := r.GetBlob(ctx, id)
+		data, err := pf.Get(ctx, id)
 		if err != nil {
 			f.Close()
 			root.Remove(tmp)

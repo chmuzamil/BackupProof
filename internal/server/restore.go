@@ -18,6 +18,7 @@ import (
 
 	"github.com/chmuzamil/backupproof/internal/backend"
 	bpcrypto "github.com/chmuzamil/backupproof/internal/crypto"
+	"github.com/chmuzamil/backupproof/internal/engine"
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/protocol"
 	"github.com/chmuzamil/backupproof/internal/repo"
@@ -365,6 +366,12 @@ func (s *Server) handleDownloadFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	s.audit(s.actor(r), "download-files", fmt.Sprintf("item %q, backup %s: %d files (%s)", src.Name, short(q.Get("snapshot")), len(files), strings.Join(picks, ", ")))
+	var wants []engine.Want
+	for _, e := range files {
+		wants = engine.AppendWants(wants, e)
+	}
+	pf := engine.NewFetcher(r.Context(), rp, wants, engine.FetchOptions{})
+	defer pf.Close()
 	zw := zip.NewWriter(w)
 	for _, e := range files {
 		hdr := &zip.FileHeader{Name: e.Path, Method: zip.Deflate}
@@ -385,7 +392,7 @@ func (s *Server) handleDownloadFiles(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				panic(http.ErrAbortHandler)
 			}
-			data, err := rp.GetBlob(r.Context(), id)
+			data, err := pf.Get(r.Context(), id)
 			if err != nil {
 				s.log.Printf("download %s: %v", e.Path, err)
 				panic(http.ErrAbortHandler)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	bpcrypto "github.com/chmuzamil/backupproof/internal/crypto"
@@ -65,6 +66,35 @@ func CopySnapshot(ctx context.Context, src, dst *repo.Repo, id bpcrypto.ID, expe
 			}
 		}
 	}
+	// Download ahead the chunks the destination doesn't have yet, in loop
+	// order, and upload them in parallel.
+	var need []Want
+	listed := map[string]bool{}
+	for _, e := range entries {
+		hint := int64(0)
+		if len(e.Chunks) > 0 {
+			hint = e.Size / int64(len(e.Chunks))
+		}
+		for _, cs := range e.Chunks {
+			if listed[cs] {
+				continue
+			}
+			listed[cs] = true
+			if d, ok := known[cs]; ok {
+				if did, err := bpcrypto.ParseID(d); err == nil && dst.HasBlob(did) {
+					continue
+				}
+			}
+			if sid, err := bpcrypto.ParseID(cs); err == nil {
+				need = append(need, Want{ID: sid, Hint: hint})
+			}
+		}
+	}
+	pf := NewFetcher(ctx, src, need, FetchOptions{})
+	defer pf.Close()
+	up := NewUploader(ctx)
+	defer up.Close()
+	var newChunks, uploaded atomic.Int64
 	added := map[string]string{}
 	out := make([]*snapshot.Entry, len(entries))
 	for i, e := range entries {
@@ -86,17 +116,24 @@ func CopySnapshot(ctx context.Context, src, dst *repo.Repo, id bpcrypto.ID, expe
 				if err != nil {
 					return snapshot.WithID{}, st, err
 				}
-				data, err := src.GetBlob(ctx, sid)
+				data, err := pf.Get(ctx, sid)
 				if err != nil {
 					return snapshot.WithID{}, st, fmt.Errorf("%s: %w", e.Path, err)
 				}
-				did, n, err := dst.PutBlob(ctx, data)
-				if err != nil {
-					return snapshot.WithID{}, st, fmt.Errorf("%s: %w", e.Path, err)
-				}
-				if n > 0 {
-					st.NewChunks++
-					st.Uploaded += int64(n)
+				did := dst.ContentID(data)
+				path := e.Path
+				if err := up.Go(int64(len(data)), func(ctx context.Context) (int64, error) {
+					_, n, err := dst.PutBlob(ctx, data)
+					if err != nil {
+						return 0, fmt.Errorf("%s: %w", path, err)
+					}
+					if n > 0 {
+						newChunks.Add(1)
+						uploaded.Add(int64(n))
+					}
+					return int64(n), nil
+				}); err != nil {
+					return snapshot.WithID{}, st, err
 				}
 				c.Chunks[j] = did.String()
 				known[cs], added[cs] = did.String(), did.String()
@@ -104,6 +141,12 @@ func CopySnapshot(ctx context.Context, src, dst *repo.Repo, id bpcrypto.ID, expe
 		}
 		out[i] = &c
 	}
+	// Every chunk must be stored before the copy's snapshot is written.
+	if err := up.Wait(); err != nil {
+		return snapshot.WithID{}, st, err
+	}
+	st.NewChunks += int(newChunks.Load())
+	st.Uploaded += uploaded.Load()
 	if root := snapshot.Root(out).String(); root != s.Root {
 		return snapshot.WithID{}, st, errors.New("the copy's content root doesn't match the original; nothing was recorded")
 	}

@@ -56,6 +56,10 @@ type Lease struct {
 	// Speed limits for this server's storage traffic, bytes per second (0 = none).
 	UploadBps   int64 `json:"uploadBps,omitempty"`
 	DownloadBps int64 `json:"downloadBps,omitempty"`
+	// Transfer tuning (0 = defaults): storage requests at once and bytes of
+	// chunk data held in memory. Agents older than 0.2.4 ignore them.
+	Concurrency int   `json:"concurrency,omitempty"`
+	MaxInflight int64 `json:"maxInflight,omitempty"`
 	// Restore is set for "restore" and "restore-db" jobs.
 	Restore *Restore `json:"restore,omitempty"`
 	// Copy is the second storage for "copy" jobs (SnapshotID is the backup to copy).

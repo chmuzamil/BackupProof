@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-08
+
+### Changed
+
+- **Much faster restores, restore tests, second copies, zip downloads, health checks and backups.** Chunks used to move one at a time, so every 1 MB piece waited a full round trip to the storage service. Now one shared transfer layer runs requests in parallel: 8 at first, adapting between 4 and 32 (more while throughput rises, half when the service throttles or latency doubles), with downloaded data waiting in memory capped at 64 MiB and released in order. Decrypting and checking run on separate workers alongside the downloads, chunks repeated close together are downloaded once, and compression for uploads now uses every core.
+  - Benchmark (64 MiB in 4 MiB chunks, 80 ms round trip): 1.39 s one at a time, 0.30 s adaptive (4.6×).
+  - rasikh-recovery (one 4.1 GB file on Backblaze B2), before: restore test 30 min 15 s, backup 11 min 18 s.
+- Failed storage requests are retried up to 6 times with jittered exponential backoff, honouring `Retry-After`; the S3 connection pool is shared per endpoint and sized for the highest concurrency.
+- Per-server **Advanced** settings for transfers at once and memory, and `--concurrency` / `--max-inflight` on `backup`, `restore`, `drill` and `check`. `--concurrency 1` reads exactly as before.
+- Speed limits still apply to all of a server's transfers together.
+
+### Added
+
+- **Remove disconnected servers** from the Servers page (administrators). Items that run or are tested on the server must be moved or removed first. Its key is kept, so the proofs it signed stay verifiable.
+
+### Compatibility
+
+- No change to the repository format (v1): older agents read repositories written by this version and the other way round. Upgrade the dashboard first (its built-in agent runs the restore tests), then the agents on your other servers. Older agents ignore the new transfer settings.
+
 ## [0.2.3] - 2026-10-08
 
 ### Added

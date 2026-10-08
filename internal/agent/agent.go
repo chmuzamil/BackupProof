@@ -30,6 +30,7 @@ import (
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/protocol"
 	"github.com/chmuzamil/backupproof/internal/repo"
+	"github.com/chmuzamil/backupproof/internal/transfer"
 )
 
 type State struct {
@@ -322,6 +323,7 @@ func (a *Agent) execute(parent context.Context, lease *protocol.Lease) {
 }
 
 func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any, error) {
+	ctx = transfer.WithSettings(ctx, transfer.Settings{Concurrency: lease.Concurrency, MaxInflight: lease.MaxInflight})
 	if lease.Repository.Type == "local" {
 		if err := ops.StorageDenied(lease.Repository.Path, a.deny); err != nil {
 			return nil, err

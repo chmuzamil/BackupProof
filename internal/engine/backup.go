@@ -18,6 +18,7 @@ import (
 	"github.com/chmuzamil/backupproof/internal/chunker"
 	"github.com/chmuzamil/backupproof/internal/repo"
 	"github.com/chmuzamil/backupproof/internal/snapshot"
+	"github.com/chmuzamil/backupproof/internal/transfer"
 	"lukechampine.com/blake3"
 )
 
@@ -43,8 +44,7 @@ type Builder struct {
 	excludes []string
 	deny     []string
 
-	sem      chan struct{}
-	wg       sync.WaitGroup
+	up       *Uploader
 	errMu    sync.Mutex
 	err      error
 	newBytes atomic.Int64
@@ -55,7 +55,7 @@ type Options struct {
 	Parent    *snapshot.WithID // previous snapshot of the same source, for fast incrementals
 	Excludes  []string         // glob patterns matched against base names and manifest paths
 	DenyPaths []string         // never read these (and anything below them)
-	Workers   int
+	Workers   int              // a fixed number of parallel uploads; 0 uses the transfer settings in ctx
 	Log       Logger
 }
 
@@ -63,15 +63,15 @@ func NewBuilder(ctx context.Context, r *repo.Repo, opts Options) (*Builder, erro
 	if err := r.LoadIndex(ctx); err != nil {
 		return nil, fmt.Errorf("load index: %w", err)
 	}
-	if opts.Workers <= 0 {
-		opts.Workers = 4
+	if opts.Workers > 0 {
+		ctx = transfer.WithSettings(ctx, transfer.Settings{Concurrency: opts.Workers, MaxInflight: transfer.SettingsFrom(ctx).MaxInflight})
 	}
 	if opts.Log == nil {
 		opts.Log = nopLog
 	}
 	b := &Builder{
 		r: r, log: opts.Log, seen: map[string]bool{}, parent: map[string]*snapshot.Entry{},
-		started: time.Now(), excludes: opts.Excludes, deny: opts.DenyPaths, sem: make(chan struct{}, opts.Workers),
+		started: time.Now(), excludes: opts.Excludes, deny: opts.DenyPaths, up: NewUploader(ctx),
 	}
 	if opts.Parent != nil {
 		entries, err := snapshot.ReadManifest(ctx, r, opts.Parent.Snapshot)
@@ -289,20 +289,19 @@ func (b *Builder) chunkInto(ctx context.Context, r io.Reader, e *snapshot.Entry)
 		e.Chunks = append(e.Chunks, id.String())
 		e.Size += int64(len(data))
 		b.stats.Chunks++
-		b.sem <- struct{}{}
-		b.wg.Add(1)
-		go func() {
-			defer func() { <-b.sem; b.wg.Done() }()
+		if err := b.up.Go(int64(len(data)), func(ctx context.Context) (int64, error) {
 			_, n, err := b.r.PutBlob(ctx, data)
 			if err != nil {
-				b.setErr(err)
-				return
+				return 0, fmt.Errorf("chunk %s: %w", id, err)
 			}
 			if n > 0 {
 				b.newBytes.Add(int64(n))
 				b.newChunk.Add(1)
 			}
-		}()
+			return int64(n), nil
+		}); err != nil {
+			return err
+		}
 		if err := b.failed(); err != nil {
 			return err
 		}
@@ -312,8 +311,12 @@ func (b *Builder) chunkInto(ctx context.Context, r io.Reader, e *snapshot.Entry)
 }
 
 // Commit waits for uploads, writes the manifest and the snapshot record.
+// Nothing is written unless every chunk upload succeeded.
 func (b *Builder) Commit(ctx context.Context, snap *snapshot.Snapshot) (snapshot.WithID, error) {
-	b.wg.Wait()
+	if err := b.up.Wait(); err != nil {
+		b.setErr(err)
+	}
+	defer b.up.Close()
 	if err := b.failed(); err != nil {
 		return snapshot.WithID{}, err
 	}

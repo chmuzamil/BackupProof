@@ -3072,6 +3072,7 @@ function limitsWords(l) {
   if (l.uploadKBps) parts.push(`upload up to ${kbToMbit(l.uploadKBps)} Mbit/s`);
   if (l.downloadKBps) parts.push(`download up to ${kbToMbit(l.downloadKBps)} Mbit/s`);
   if (l.windowStart) parts.push(`scheduled jobs between ${l.windowStart} and ${l.windowEnd}`);
+  if (l.concurrency) parts.push(l.concurrency === 1 ? 'one transfer at a time' : `${l.concurrency} transfers at once`);
   return parts.length ? parts.join(' · ') : 'No limits: full speed, any time';
 }
 
@@ -3081,6 +3082,8 @@ function limitsBox(a) {
   const down = input({ name: 'download-mbit', type: 'number', inputmode: 'decimal', min: 0, step: 'any', value: kbToMbit(l.downloadKBps) || '', placeholder: 'No limit…' });
   const from = h('input', { type: 'time', name: 'window-start', value: l.windowStart || '' });
   const to = h('input', { type: 'time', name: 'window-end', value: l.windowEnd || '' });
+  const conc = input({ name: 'concurrency', type: 'number', inputmode: 'numeric', min: 0, max: 64, step: 1, value: l.concurrency || '', placeholder: 'Automatic…' });
+  const mem = input({ name: 'max-inflight', type: 'number', inputmode: 'numeric', min: 16, max: 4096, step: 1, value: l.maxInflightMB || '', placeholder: '64…' });
   const form = h('form', {
     novalidate: true,
     onsubmit: busy(async (e) => {
@@ -3088,7 +3091,10 @@ function limitsBox(a) {
       clearErrors(form);
       if (!!from.value !== !!to.value) return fieldError(from.value ? to : from, 'Give both a start and an end time, or leave both empty.');
       if (from.value && from.value === to.value) return fieldError(to, 'The end time must be different from the start time.');
-      await put(`/agents/${a.id}/limits`, { uploadKBps: mbitToKB(up.value), downloadKBps: mbitToKB(down.value), windowStart: from.value, windowEnd: to.value });
+      const c = Number(conc.value) || 0, m = Number(mem.value) || 0;
+      if (c < 0 || c > 64 || !Number.isInteger(c)) return fieldError(conc, 'Enter a whole number from 1 to 64, or leave it empty.');
+      if (m && (m < 16 || m > 4096)) return fieldError(mem, 'Enter 16 to 4096 MB, or leave it empty.');
+      await put(`/agents/${a.id}/limits`, { uploadKBps: mbitToKB(up.value), downloadKBps: mbitToKB(down.value), windowStart: from.value, windowEnd: to.value, concurrency: c, maxInflightMB: m });
       S.dirty = false;
       toast('Limits saved for ' + agentTitle(a), 'ok');
       reload();
@@ -3097,6 +3103,8 @@ function limitsBox(a) {
   h('div', { class: 'row' }, field('Upload limit (Mbit/s)', up, 'For backups. Empty means no limit.'), field('Download limit (Mbit/s)', down, 'For restore tests and restores.')),
   h('div', { class: 'row' }, field('Run scheduled jobs from', from), field('until', to, 'In the dashboard server’s time zone. Crossing midnight is fine, for example 22:00 to 06:00.')),
   h('p', { class: 'hint' }, 'Outside the window, scheduled backups and restore tests wait for it to open. Jobs you start yourself always run straight away.'),
+  details('Advanced: parallel transfers',
+    h('div', { class: 'row' }, field('Transfers at once', conc, 'Empty adapts between 4 and 32 to what the link and the storage can take. 1 moves one piece at a time.'), field('Memory for transfers (MB)', mem, 'Most backup data held in memory at once. Empty means 64 MB.'))),
   h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary sm' }, 'Save limits')));
   return h('div', { class: 'limits' }, h('p', { class: 'small' }, h('span', { class: 'muted' }, 'Speed and timing: '), limitsWords(l)),
     canOperate() ? details('Change speed limits and time window', form) : null);
@@ -3126,7 +3134,11 @@ async function pageAgents() {
       isAdmin() && !a.revoked && !a.builtin ? h('div', { class: 'form-actions' }, btn('Disconnect', busy(async () => {
         if (!(await confirmDlg(`Disconnect “${a.name}”? It immediately loses access and must be connected again with a new code. Its past proofs stay valid.`, 'Disconnect'))) return;
         await post(`/agents/${a.id}/revoke`); toast('Server disconnected', 'ok'); reload();
-      }), 'sm danger', { 'aria-label': 'Disconnect ' + a.name })) : null)))
+      }), 'sm danger', { 'aria-label': 'Disconnect ' + a.name })) : null,
+      isAdmin() && a.revoked ? h('div', { class: 'form-actions' }, btn('Remove', busy(async () => {
+        if (!(await confirmDlg(`Remove “${a.name}” from this list? Its signed proofs stay valid: its key is kept for checking them.`, 'Remove'))) return;
+        await del(`/agents/${a.id}`); toast(`Removed “${a.name}”`, 'ok'); reload();
+      }), 'sm danger quiet', { 'aria-label': 'Remove ' + a.name })) : null)))
       : h('section', { class: 'card' }, empty('No servers connected yet.', isAdmin() ? btn('Connect your first server', busy(connectModal, 'Preparing…'), 'primary') : h('p', { class: 'hint' }, 'Ask an administrator to connect a server.'))));
 }
 

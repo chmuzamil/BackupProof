@@ -116,6 +116,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", s.auth("auditor", s.handleListAgents))
 	mux.HandleFunc("POST /api/agents/enroll-token", s.auth("admin", s.handleEnrollToken))
 	mux.HandleFunc("POST /api/agents/{id}/revoke", s.auth("admin", s.handleRevokeAgent))
+	mux.HandleFunc("DELETE /api/agents/{id}", s.auth("admin", s.handleRemoveAgent))
 	mux.HandleFunc("PUT /api/agents/{id}/limits", s.auth("operator", s.handlePutLimits))
 
 	mux.HandleFunc("GET /api/repositories", s.auth("auditor", s.handleListRepos))
@@ -534,12 +535,46 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 // --- agents ----------------------------------------------------------------
 
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
-	a, err := s.store.Agents()
+	all, err := s.store.Agents()
 	if err != nil {
 		writeErr(w, 500, err)
 		return
 	}
-	writeJSON(w, 200, s.markBuiltin(nonNil(a)))
+	a := []Agent{}
+	for _, x := range all {
+		if !x.Removed {
+			a = append(a, x)
+		}
+	}
+	writeJSON(w, 200, s.markBuiltin(a))
+}
+
+func (s *Server) handleRemoveAgent(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	a, err := s.store.Agent(id)
+	if err != nil {
+		writeErr(w, 404, errors.New("no such server"))
+		return
+	}
+	names, err := s.store.RemoveAgent(id)
+	switch {
+	case errors.Is(err, ErrAgentInUse):
+		writeErr(w, http.StatusConflict, fmt.Errorf("%s still runs or tests %s; move or remove them first", a.Name, strings.Join(names, ", ")))
+		return
+	case errors.Is(err, ErrAgentConnected):
+		writeErr(w, http.StatusConflict, err)
+		return
+	case err != nil:
+		writeErr(w, 500, err)
+		return
+	}
+	s.resolve("agent-offline", nil, &id)
+	s.audit(s.actor(r), "remove-agent", fmt.Sprintf("server %q (#%d); its key is kept for verifying its proofs", a.Name, id))
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleEnrollToken(w http.ResponseWriter, r *http.Request) {

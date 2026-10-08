@@ -16,6 +16,11 @@ var limitMigrations = []string{
 	"ALTER TABLE agents ADD COLUMN download_kbps INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE agents ADD COLUMN window_start TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE agents ADD COLUMN window_end TEXT NOT NULL DEFAULT ''",
+	"ALTER TABLE agents ADD COLUMN concurrency INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE agents ADD COLUMN max_inflight_mb INTEGER NOT NULL DEFAULT 0",
+	// A removed server is hidden from the dashboard; its key is kept so the
+	// proofs it signed can still be verified.
+	"ALTER TABLE agents ADD COLUMN removed INTEGER NOT NULL DEFAULT 0",
 }
 
 // Limits are kilobytes per second (0 = no limit) and "HH:MM" times in the
@@ -25,6 +30,10 @@ type Limits struct {
 	DownloadKBps int    `json:"downloadKBps"`
 	WindowStart  string `json:"windowStart"`
 	WindowEnd    string `json:"windowEnd"`
+	// Advanced: storage requests at once (0 adapts, 1 is one at a time) and
+	// MiB of chunk data held in memory per transfer (0 is 64).
+	Concurrency   int `json:"concurrency"`
+	MaxInflightMB int `json:"maxInflightMB"`
 }
 
 var hhmm = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
@@ -32,6 +41,12 @@ var hhmm = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 func (l Limits) validate() error {
 	if l.UploadKBps < 0 || l.DownloadKBps < 0 || l.UploadKBps > 10_000_000 || l.DownloadKBps > 10_000_000 {
 		return errors.New("speed limits must be between 0 (no limit) and 10,000,000 KB/s")
+	}
+	if l.Concurrency < 0 || l.Concurrency > 64 {
+		return errors.New("parallel transfers must be between 0 (automatic) and 64")
+	}
+	if l.MaxInflightMB != 0 && (l.MaxInflightMB < 16 || l.MaxInflightMB > 4096) {
+		return errors.New("memory for transfers must be between 16 and 4096 MB, or 0 for the default")
 	}
 	if (l.WindowStart == "") != (l.WindowEnd == "") {
 		return errors.New("give both a start and an end time for the window, or neither")
@@ -60,14 +75,14 @@ func (l Limits) open(t time.Time) bool {
 
 func (s *Store) AgentLimits(id int64) (Limits, error) {
 	var l Limits
-	err := s.db.QueryRow("SELECT upload_kbps,download_kbps,window_start,window_end FROM agents WHERE id=?", id).
-		Scan(&l.UploadKBps, &l.DownloadKBps, &l.WindowStart, &l.WindowEnd)
+	err := s.db.QueryRow("SELECT upload_kbps,download_kbps,window_start,window_end,concurrency,max_inflight_mb FROM agents WHERE id=?", id).
+		Scan(&l.UploadKBps, &l.DownloadKBps, &l.WindowStart, &l.WindowEnd, &l.Concurrency, &l.MaxInflightMB)
 	return l, err
 }
 
 func (s *Store) SetAgentLimits(id int64, l Limits) error {
-	res, err := s.db.Exec("UPDATE agents SET upload_kbps=?,download_kbps=?,window_start=?,window_end=? WHERE id=?",
-		l.UploadKBps, l.DownloadKBps, l.WindowStart, l.WindowEnd, id)
+	res, err := s.db.Exec("UPDATE agents SET upload_kbps=?,download_kbps=?,window_start=?,window_end=?,concurrency=?,max_inflight_mb=? WHERE id=?",
+		l.UploadKBps, l.DownloadKBps, l.WindowStart, l.WindowEnd, l.Concurrency, l.MaxInflightMB, id)
 	if err != nil {
 		return err
 	}
