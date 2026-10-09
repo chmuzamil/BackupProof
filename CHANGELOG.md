@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Item cards no longer repeat the last restore test ("Restore tested 26 hours ago" above "Last restore test passed 26 hours ago"). When the newest backup hasn't been restore-tested yet, the card says so and when its test runs: "Newest backup not restore-tested yet. Next test: Sunday 06:00."
 - The explanation of the status labels on the Protected page is folded away under **What the labels mean**, with small coloured dots instead of full labels.
 
+### Security
+
+- Built with Go 1.27.2, which fixes HTTP/2 and net/http vulnerabilities in the Go standard library (GO-2026-6612, GO-2026-6613, GO-2026-6617).
+
 ### Measured
 
 - rasikh-recovery backup with 0.2.4: 5 min 52 s (was 11 min 18 s). A 452 MB restore test from Backblaze B2 on the dashboard server: 6.4 s.
