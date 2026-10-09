@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.4-0a7bbb" alt="version v0.2.4"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.5-0a7bbb" alt="version v0.2.5"></a>
   <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>

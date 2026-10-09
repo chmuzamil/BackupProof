@@ -408,6 +408,30 @@ function statusPill(status, reason) {
   return [b, note];
 }
 
+// whenWords names an upcoming time plainly: "today 06:00", "Sunday 06:00",
+// or a date further out.
+function whenWords(t) {
+  const d = toDate(t);
+  if (!d) return '';
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const days = Math.round((dayStart(d) - dayStart(new Date())) / 86400000);
+  if (days <= 0) return 'today ' + time;
+  if (days === 1) return 'tomorrow ' + time;
+  if (days < 7) return d.toLocaleDateString(undefined, { weekday: 'long' }) + ' ' + time;
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ', ' + time;
+}
+
+// statusLine adds what the facts below a status don't already say. For a
+// restore-tested item that is whether the newest backup has been tested
+// yet, and when it will be; otherwise the reason for the status.
+function statusLine(s) {
+  if (s.status !== 'proven') return s.reason || '';
+  const lb = s.lastBackup, ld = s.lastPassingDrill || s.lastDrill;
+  if (!lb || !ld || toDate(lb.created) <= toDate(ld.created)) return '';
+  const next = s.source && s.source.nextDrill && s.source.drillCron !== 'manual' ? whenWords(s.source.nextDrill) : '';
+  return 'Newest backup not restore-tested yet. ' + (next ? `Next test: ${next}.` : 'Run a restore test to check it.');
+}
+
 function statePill(state) {
   const cls = { succeeded: 'ok', failed: 'bad', running: 'warn', queued: '' }[state] ?? '';
   return h('span', { class: 'pill ' + cls }, glyphLabel(STATE_WORDS[state] || state || '—'));
@@ -1260,7 +1284,7 @@ function itemCard(s, days, removable) {
     h('div', { class: 'item-main' },
       h('div', { class: 'item-title' }, h('a', { href: `#/sources/${src.id}` }, src.name), statusPill(s.status, s.reason)),
       h('div', { class: 'item-sub' }, [k.label, s.agentName ? 'on ' + s.agentName : '', s.repoName ? 'stored in ' + s.repoName : '', src.enabled === false ? 'paused' : ''].filter(Boolean).join(' · ')),
-      s.reason ? h('p', { class: 'item-reason' }, s.reason) : null,
+      statusLine(s) ? h('p', { class: 'item-reason' }, statusLine(s)) : null,
       h('div', { class: 'item-facts' },
         h('span', null, h('span', { class: 'fact-l' }, isImp ? 'Last conversion ' : 'Last backup '), lb ? [timeEl(lb.created), lb.passed === false ? h('span', { class: 'fact-bad' }, ' (failed)') : ''] : h('span', { class: 'muted' }, 'not yet')),
         h('span', null, h('span', { class: 'fact-l' }, 'Last restore test '), ld ? [h('span', { class: ld.passed ? 'fact-ok' : 'fact-bad' }, ld.passed ? 'passed ' : 'failed '), timeEl(ld.created)] : h('span', { class: 'muted' }, 'not yet'))),
@@ -1268,6 +1292,15 @@ function itemCard(s, days, removable) {
     h('div', { class: 'item-tape' }, proofTape(days), h('span', { class: 'tape-cap' }, `Last ${TAPE_DAYS} days`)),
     h('div', { class: 'item-actions' }, runButtons(src.id, s.running, null, false, isImp, src.name),
       removable && isAdmin() ? btn('Remove', busy(() => removeItem(src.id, src.name, reload)), 'sm danger quiet', { 'aria-label': `Remove ${src.name}` }) : null));
+}
+
+// statusLegend explains the status labels, folded away until asked for.
+function statusLegend() {
+  return h('details', { class: 'legend' },
+    h('summary', null, icon('info', 'legend-i'), 'What the labels mean'),
+    h('dl', { class: 'legend-list' }, Object.values(STATUS).map((x) => [
+      h('dt', null, h('span', { class: 'legend-dot ' + (x.cls || 'none'), 'aria-hidden': 'true' }), x.label.replace(/\s*✓$/, '')),
+      h('dd', null, x.help)])));
 }
 
 function itemList(sources, tapes, removable) {
@@ -1335,7 +1368,7 @@ async function pageProtected() {
   return h('div', null,
     pageHead('Protected', 'Everything BackupProof backs up and restore-tests.', actions),
     sources.length ? h('section', { class: 'card ledger' }, cardHead(plural(sources.length, 'item'), tapeLegend()), itemList(sources, proofTapes(proofs), true),
-      h('div', { class: 'legend' }, h('h2', { class: 'sr-only' }, 'What the labels mean'), Object.values(STATUS).map((x) => h('span', null, h('span', { class: 'pill ' + x.cls }, glyphLabel(x.label)), ' ', x.help))))
+      statusLegend())
       : welcomeCard());
 }
 
@@ -1543,7 +1576,7 @@ async function pageSource(id) {
 
   const rto = drill ? (drill.rtoMs ?? dp.rtoMs) : null;
   const hero = h('section', { class: 'card hero ' + statusInfo.cls },
-    h('div', { class: 'hero-status' }, h('h2', { class: 'hero-label' }, glyphLabel(statusInfo.label)), h('p', { class: 'hero-reason' }, st.reason || statusInfo.help || '')),
+    h('div', { class: 'hero-status' }, h('h2', { class: 'hero-label' }, glyphLabel(statusInfo.label)), h('p', { class: 'hero-reason' }, statusLine(st) || statusInfo.help || st.reason || '')),
     runningLine(st.running, isImp),
     h('dl', { class: 'kv' },
       h('dt', null, isImp ? 'Last conversion' : 'Last backup'),

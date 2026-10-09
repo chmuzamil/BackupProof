@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-09
+
+### Changed
+
+- Item cards no longer repeat the last restore test ("Restore tested 26 hours ago" above "Last restore test passed 26 hours ago"). When the newest backup hasn't been restore-tested yet, the card says so and when its test runs: "Newest backup not restore-tested yet. Next test: Sunday 06:00."
+- The explanation of the status labels on the Protected page is folded away under **What the labels mean**, with small coloured dots instead of full labels.
+
+### Measured
+
+- rasikh-recovery backup with 0.2.4: 5 min 52 s (was 11 min 18 s). A 452 MB restore test from Backblaze B2 on the dashboard server: 6.4 s.
+
 ## [0.2.4] - 2026-10-08
 
 ### Changed
