@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	bpcrypto "github.com/chmuzamil/backupproof/internal/crypto"
@@ -106,6 +107,7 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 	}
 	pf := NewFetcher(ctx, r, wants, FetchOptions{})
 	defer pf.Close()
+	var waited atomic.Int64 // time spent waiting for chunks from storage
 
 	type dirTime struct {
 		root  *os.Root
@@ -174,7 +176,7 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		case snapshot.TypeFile, snapshot.TypeStream:
 			parent, base, err := at(name)
 			if err == nil {
-				err = restoreFile(ctx, pf, parent, e, base, opts.Original)
+				err = restoreFile(ctx, pf, &waited, parent, e, base, opts.Original)
 			}
 			if err != nil {
 				return res, fmt.Errorf("%s: %w", e.Path, err)
@@ -210,10 +212,21 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 	}
 	res.DurationMs = time.Since(start).Milliseconds()
 	opts.Log("restored %d files (%d bytes) to %s", res.Files, res.Bytes, target)
+	if total := time.Since(start); total >= time.Second {
+		down := pf.Stats()
+		w := time.Duration(waited.Load())
+		opts.Log("timing: %s in total; waiting for storage %s; downloaded %s in %s (%s, up to %d at once)",
+			roundDur(total), roundDur(w), humanBytes(down.Bytes), roundDur(down.Busy), rateWords(down.Bytes, down.Busy), down.Peak)
+		if w > total/2 {
+			opts.Log("timing: downloading from storage was the slowest part")
+		} else {
+			opts.Log("timing: writing and checking the files was the slowest part")
+		}
+	}
 	return res, nil
 }
 
-func restoreFile(ctx context.Context, pf *Fetcher, root *os.Root, e *snapshot.Entry, name string, original bool) error {
+func restoreFile(ctx context.Context, pf *Fetcher, waited *atomic.Int64, root *os.Root, e *snapshot.Entry, name string, original bool) error {
 	if dir := filepath.Dir(name); dir != "." {
 		if err := root.MkdirAll(dir, 0o700); err != nil {
 			return err
@@ -242,7 +255,9 @@ func restoreFile(ctx context.Context, pf *Fetcher, root *os.Root, e *snapshot.En
 			root.Remove(tmp)
 			return err
 		}
+		getStart := time.Now()
 		data, err := pf.Get(ctx, id)
+		waited.Add(int64(time.Since(getStart)))
 		if err != nil {
 			f.Close()
 			root.Remove(tmp)

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-23
+
+### Added
+
+- **Where the time went**, at the end of every backup and restore (including restore tests) that takes more than a second. For a backup: the total time, time spent reading the source (for a command, waiting for its output), time spent waiting for uploads, and how much was uploaded, how fast, with how many requests at once, then which part was the slowest. For a restore: time spent waiting for storage, and how much was downloaded, how fast, with how many requests at once.
+
+### Measured
+
+- Two weeks of scheduled jobs on rasikh-recovery (one 4.1 GB file on Backblaze B2) since 0.2.4:
+  - **restore test:** 5 min 17 s and 7 min 27 s (was 30 min 15 s), about 4–6× faster;
+  - **nightly backup:** 5 min 37 s – 8 min 5 s (was 11 min 18 s), about twice as fast. The new timing lines will show how much of that is the backup command producing its output.
+
 ## [0.2.5] - 2026-10-09
 
 ### Changed

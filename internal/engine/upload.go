@@ -48,7 +48,13 @@ func NewUploader(ctx context.Context) *Uploader {
 // already).
 func (u *Uploader) Go(size int64, fn func(ctx context.Context) (int64, error)) error {
 	if u.seq {
-		if _, err := fn(u.ctx); err != nil {
+		if err := u.ctrl.Acquire(u.ctx); err != nil {
+			return u.failed()
+		}
+		start := time.Now()
+		n, err := fn(u.ctx)
+		u.ctrl.Release(n, time.Since(start), err == nil)
+		if err != nil {
 			u.fail(err)
 		}
 		return u.failed()
@@ -115,6 +121,9 @@ func (u *Uploader) Wait() error {
 	defer u.mu.Unlock()
 	return u.err
 }
+
+// Stats summarise the uploads for the job log.
+func (u *Uploader) Stats() transfer.Stats { return u.ctrl.Stats() }
 
 // Peak is the most chunk data waiting at once, for tests.
 func (u *Uploader) Peak() int64 {

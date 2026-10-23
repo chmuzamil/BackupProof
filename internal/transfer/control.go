@@ -19,6 +19,12 @@ type Controller struct {
 	fixed  bool
 	active int
 
+	// For the job log: bytes moved, when the first request started and the
+	// last one ended, and the most requests that ran at once.
+	moved       int64
+	first, last time.Time
+	peak        int
+
 	roundStart time.Time
 	roundBytes int64
 	roundDone  int
@@ -74,8 +80,38 @@ func (c *Controller) Acquire(ctx context.Context) error {
 	if c.roundStart.IsZero() {
 		c.roundStart = time.Now()
 	}
+	if c.first.IsZero() {
+		c.first = time.Now()
+	}
 	c.active++
+	c.peak = max(c.peak, c.active)
 	return nil
+}
+
+// Stats summarise a transfer for the job log.
+type Stats struct {
+	Bytes int64         // moved to or from storage
+	Busy  time.Duration // from the first request starting to the last ending
+	Peak  int           // most requests at once
+}
+
+// Rate is bytes per second while busy.
+func (s Stats) Rate() float64 {
+	if s.Busy <= 0 {
+		return 0
+	}
+	return float64(s.Bytes) / s.Busy.Seconds()
+}
+
+// Stats reports what moved through c so far.
+func (c *Controller) Stats() Stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := Stats{Bytes: c.moved, Peak: c.peak}
+	if !c.first.IsZero() && c.last.After(c.first) {
+		st.Busy = c.last.Sub(c.first)
+	}
+	return st
 }
 
 // Release frees a slot after a request that moved n bytes in d.
@@ -84,6 +120,10 @@ func (c *Controller) Release(n int64, d time.Duration, ok bool) {
 	defer c.mu.Unlock()
 	c.active--
 	defer c.cond.Broadcast()
+	c.last = time.Now()
+	if ok {
+		c.moved += n
+	}
 	if c.fixed {
 		return
 	}

@@ -107,10 +107,10 @@ func NewFetcher(ctx context.Context, r *repo.Repo, wants []Want, opts FetchOptio
 	f := &Fetcher{r: r, wants: wants, seq: s.Sequential(), keep: opts.KeepGoing, ctx: ctx, cancel: cancel,
 		cap: s.Inflight(), items: make([]*fetched, len(wants)), pending: map[bpcrypto.ID]*fetched{}}
 	f.cond = sync.NewCond(&f.mu)
+	f.ctrl = transfer.NewController(s, opts.MaxConcurrency)
 	if f.seq {
 		return f
 	}
-	f.ctrl = transfer.NewController(s, opts.MaxConcurrency)
 	f.cpu = make(chan struct{}, runtime.GOMAXPROCS(0))
 	// Wake anything waiting for room or for a chunk when the work stops.
 	context.AfterFunc(ctx, func() {
@@ -225,7 +225,16 @@ func (f *Fetcher) add(n int64) {
 // after all are dropped); otherwise it is read directly.
 func (f *Fetcher) Get(ctx context.Context, id bpcrypto.ID) ([]byte, error) {
 	if f.seq {
-		data, err := f.r.GetBlob(ctx, id)
+		if err := f.ctrl.Acquire(ctx); err != nil {
+			return nil, err
+		}
+		start := time.Now()
+		raw, err := f.r.FetchBlob(ctx, id)
+		f.ctrl.Release(int64(len(raw)), time.Since(start), err == nil)
+		var data []byte
+		if err == nil {
+			data, err = f.r.OpenBlob(id, raw)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("chunk %s: %w", id, err)
 		}
@@ -306,6 +315,9 @@ func (f *Fetcher) take(ctx context.Context) (data []byte, err error, at int, fat
 	f.mu.Unlock()
 	return it.data, it.err, at, nil
 }
+
+// Stats summarise the downloads for the job log.
+func (f *Fetcher) Stats() transfer.Stats { return f.ctrl.Stats() }
 
 // Peak is the most chunk data held at once, for tests.
 func (f *Fetcher) Peak() int64 {

@@ -49,6 +49,9 @@ type Builder struct {
 	err      error
 	newBytes atomic.Int64
 	newChunk atomic.Int64
+	// Where the time went, for the job log: reading the source (for a
+	// command, waiting for its output) and waiting for uploads to make room.
+	readTime, readBytes, upWait atomic.Int64
 }
 
 type Options struct {
@@ -272,7 +275,7 @@ func (b *Builder) AddStream(ctx context.Context, name string, r io.Reader) (*sna
 
 func (b *Builder) chunkInto(ctx context.Context, r io.Reader, e *snapshot.Entry) error {
 	h := blake3.New(32, nil)
-	ch := chunker.New(io.TeeReader(r, h), b.r.Gear(), b.r.ChunkerParams())
+	ch := chunker.New(io.TeeReader(&timedReader{r: r, b: b}, h), b.r.Gear(), b.r.ChunkerParams())
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -289,7 +292,8 @@ func (b *Builder) chunkInto(ctx context.Context, r io.Reader, e *snapshot.Entry)
 		e.Chunks = append(e.Chunks, id.String())
 		e.Size += int64(len(data))
 		b.stats.Chunks++
-		if err := b.up.Go(int64(len(data)), func(ctx context.Context) (int64, error) {
+		waitStart := time.Now()
+		err = b.up.Go(int64(len(data)), func(ctx context.Context) (int64, error) {
 			_, n, err := b.r.PutBlob(ctx, data)
 			if err != nil {
 				return 0, fmt.Errorf("chunk %s: %w", id, err)
@@ -299,7 +303,9 @@ func (b *Builder) chunkInto(ctx context.Context, r io.Reader, e *snapshot.Entry)
 				b.newChunk.Add(1)
 			}
 			return int64(n), nil
-		}); err != nil {
+		})
+		b.upWait.Add(int64(time.Since(waitStart)))
+		if err != nil {
 			return err
 		}
 		if err := b.failed(); err != nil {
@@ -328,6 +334,7 @@ func (b *Builder) Commit(ctx context.Context, snap *snapshot.Snapshot) (snapshot
 	if err != nil {
 		return snapshot.WithID{}, err
 	}
+	b.logTiming()
 	b.stats.NewChunks = int(b.newChunk.Load())
 	b.stats.Uploaded = b.newBytes.Load()
 	b.stats.DurationMs = time.Since(b.started).Milliseconds()
@@ -348,6 +355,38 @@ func (b *Builder) Commit(ctx context.Context, snap *snapshot.Snapshot) (snapshot
 		return snapshot.WithID{}, err
 	}
 	return snapshot.WithID{ID: id, Snapshot: snap}, nil
+}
+
+// timedReader counts the time spent waiting for the source.
+type timedReader struct {
+	r io.Reader
+	b *Builder
+}
+
+func (t *timedReader) Read(p []byte) (int, error) {
+	start := time.Now()
+	n, err := t.r.Read(p)
+	t.b.readTime.Add(int64(time.Since(start)))
+	t.b.readBytes.Add(int64(n))
+	return n, err
+}
+
+// logTiming says where a backup's time went, so a slow backup shows whether
+// the source or the upload held it back.
+func (b *Builder) logTiming() {
+	total := time.Since(b.started)
+	read, wait := time.Duration(b.readTime.Load()), time.Duration(b.upWait.Load())
+	up := b.up.Stats()
+	b.log("timing: %s in total; reading the source %s (%s, %s); waiting for uploads %s; uploaded %s in %s (%s, up to %d at once)",
+		roundDur(total), roundDur(read), humanBytes(b.readBytes.Load()), rateWords(b.readBytes.Load(), read),
+		roundDur(wait), humanBytes(up.Bytes), roundDur(up.Busy), rateWords(up.Bytes, up.Busy), up.Peak)
+	switch {
+	case total < 5*time.Second:
+	case wait > total/5:
+		b.log("timing: the upload to storage was the slowest part")
+	case read > total/2:
+		b.log("timing: reading the source was the slowest part (for a command, producing its output)")
+	}
 }
 
 // Entries exposes the collected entries (sorted after Commit).

@@ -4,3 +4,5 @@
 /proofvault-data/
 *.bundle.json
 .claude/
+.code-review-graph/
+.serena/
