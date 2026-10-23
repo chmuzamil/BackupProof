@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.2.6] - 2026-10-23
 
+### Security
+
+- Built with Go 1.27.3, which fixes a certificate-verification vulnerability in the Go standard library (GO-2026-6809). BackupProof uses it when checking timestamp-authority certificates.
+
 ### Added
 
 - **Where the time went**, at the end of every backup and restore (including restore tests) that takes more than a second. For a backup: the total time, time spent reading the source (for a command, waiting for its output), time spent waiting for uploads, and how much was uploaded, how fast, with how many requests at once, then which part was the slowest. For a restore: time spent waiting for storage, and how much was downloaded, how fast, with how many requests at once.
