@@ -283,8 +283,8 @@ func TestFetcherStreamOrderAndDedup(t *testing.T) {
 	}
 	fs.latency = func() time.Duration { return 20 * time.Millisecond }
 	ctx := withSettings(transfer.Settings{Concurrency: 8, MaxInflight: 4 << 20})
+	before := fs.gets.Load() // counted before any download starts
 	pf := NewFetcher(ctx, r, dup, FetchOptions{})
-	before := fs.gets.Load()
 	for _, w := range dup {
 		if _, err := pf.Get(ctx, w.ID); err != nil {
 			t.Fatal(err)
