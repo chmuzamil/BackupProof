@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A dashboard address that isn't valid UTF-8 (such as `/%c0`, sent by scanners) now gets "400 Bad Request" instead of a server error (500).
+
 ## [0.2.6] - 2026-10-23
 
 ### Security

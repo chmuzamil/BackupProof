@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chmuzamil/backupproof/internal/agent"
 	"github.com/chmuzamil/backupproof/internal/engine"
@@ -114,8 +115,20 @@ func (s *Server) Handler() http.Handler {
 	s.onboardingRoutes(mux)
 	static, _ := fs.Sub(webFS, "web")
 	files := http.FileServer(http.FS(static))
-	mux.Handle("GET /", files)
+	mux.Handle("GET /", validPath(files))
 	return securityHeaders(mux)
+}
+
+// validPath answers 400 for a path that isn't valid UTF-8 (such as /%c0):
+// the file server can't open it and would otherwise report a server error.
+func validPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !utf8.ValidString(r.URL.Path) {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func securityHeaders(next http.Handler) http.Handler {
