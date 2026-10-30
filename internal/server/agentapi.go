@@ -105,7 +105,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 					s.log.Printf("job #%d: could not record failure: %v", job.ID, ferr)
 				}
 				sid := job.SourceID
-				s.alert("job-failed", &sid, nil, fmt.Sprintf("A %s couldn't start: %v", plainKind(job.Kind), err))
+				s.alert(failKind(job.Kind), &sid, nil, fmt.Sprintf("A %s couldn't start: %v", plainKind(job.Kind), err))
 				continue
 			}
 			writeJSON(w, 200, lease)
@@ -354,16 +354,7 @@ func (s *Server) handleFinish(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
-	kind := "job-failed"
-	if req.OK {
-		s.resolve(kind, &sid, nil)
-	} else {
-		name := ""
-		if src, err := s.store.Source(sid); err == nil {
-			name = src.Name + ": "
-		}
-		s.alert(kind, &sid, nil, fmt.Sprintf("%sthe %s failed: %s", name, plainKind(job.Kind), req.Error))
-	}
+	s.jobOutcome(job.Kind, sid, req.OK, req.Error)
 	// Every successful backup of an item with a second storage is copied there.
 	if job.Kind == "backup" && req.OK {
 		s.queueCopy(sid, req.Result)

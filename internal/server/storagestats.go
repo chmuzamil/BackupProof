@@ -21,7 +21,8 @@ var storageMigrations = []string{`CREATE TABLE IF NOT EXISTS repo_stats (
   id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL, time TEXT NOT NULL, ok INTEGER NOT NULL,
   bytes INTEGER NOT NULL DEFAULT 0, blobs INTEGER NOT NULL DEFAULT 0, snapshots INTEGER NOT NULL DEFAULT 0,
   read_blobs INTEGER NOT NULL DEFAULT 0, corrupt INTEGER NOT NULL DEFAULT 0, missing INTEGER NOT NULL DEFAULT 0)`,
-	`CREATE INDEX IF NOT EXISTS repo_stats_repo ON repo_stats(repo_id, id)`}
+	`CREATE INDEX IF NOT EXISTS repo_stats_repo ON repo_stats(repo_id, id)`,
+	`ALTER TABLE repo_stats ADD COLUMN unreadable INTEGER NOT NULL DEFAULT 0`}
 
 type RepoStat struct {
 	Time      string `json:"time"`
@@ -32,17 +33,19 @@ type RepoStat struct {
 	ReadBlobs int    `json:"readBlobs"`
 	Corrupt   int    `json:"corrupt"`
 	Missing   int    `json:"missing"`
+	// Unreadable samples couldn't be read (storage errors); not damage.
+	Unreadable int `json:"unreadable"`
 }
 
 func (s *Store) AddRepoStat(repoID int64, ok bool, r engine.CheckResult) error {
-	_, err := s.db.Exec("INSERT INTO repo_stats(repo_id,time,ok,bytes,blobs,snapshots,read_blobs,corrupt,missing) VALUES(?,?,?,?,?,?,?,?,?)",
-		repoID, now(), ok, r.StoredBytes, r.StoredBlobs, r.Snapshots, r.ReadBlobs, r.CorruptBlobs, r.MissingBlobs)
+	_, err := s.db.Exec("INSERT INTO repo_stats(repo_id,time,ok,bytes,blobs,snapshots,read_blobs,corrupt,missing,unreadable) VALUES(?,?,?,?,?,?,?,?,?,?)",
+		repoID, now(), ok, r.StoredBytes, r.StoredBlobs, r.Snapshots, r.ReadBlobs, r.CorruptBlobs, r.MissingBlobs, r.UnreadableBlobs)
 	return err
 }
 
 // RepoStats returns up to limit results per storage, oldest first.
 func (s *Store) RepoStats(limit int) (map[int64][]RepoStat, error) {
-	rows, err := s.db.Query(`SELECT repo_id,time,ok,bytes,blobs,snapshots,read_blobs,corrupt,missing FROM (
+	rows, err := s.db.Query(`SELECT repo_id,time,ok,bytes,blobs,snapshots,read_blobs,corrupt,missing,unreadable FROM (
   SELECT *, ROW_NUMBER() OVER (PARTITION BY repo_id ORDER BY id DESC) AS n FROM repo_stats) WHERE n <= ? ORDER BY repo_id, id`, limit)
 	if err != nil {
 		return nil, err
@@ -52,7 +55,7 @@ func (s *Store) RepoStats(limit int) (map[int64][]RepoStat, error) {
 	for rows.Next() {
 		var id int64
 		var st RepoStat
-		if err := rows.Scan(&id, &st.Time, &st.OK, &st.Bytes, &st.Blobs, &st.Snapshots, &st.ReadBlobs, &st.Corrupt, &st.Missing); err != nil {
+		if err := rows.Scan(&id, &st.Time, &st.OK, &st.Bytes, &st.Blobs, &st.Snapshots, &st.ReadBlobs, &st.Corrupt, &st.Missing, &st.Unreadable); err != nil {
 			return nil, err
 		}
 		out[id] = append(out[id], st)
@@ -88,8 +91,15 @@ func (s *Server) recordCheck(jobID, sourceID int64, ok bool, result any) {
 	if b, err := json.Marshal(result); err == nil {
 		_ = json.Unmarshal(b, &r)
 	}
-	if err := s.store.AddRepoStat(s.checkRepo(jobID, src), ok, r); err != nil {
+	repoID := s.checkRepo(jobID, src)
+	if err := s.store.AddRepoStat(repoID, ok, r); err != nil {
 		s.log.Printf("storage check: recording result: %v", err)
+	}
+	// Storage that only failed to hand some samples over is checked again
+	// within the hour rather than in a week: the samples are unknown, not bad.
+	if !ok && r.OnlyUnreadable() {
+		again := time.Now().Add(-checkEvery + time.Hour).UTC().Format(time.RFC3339Nano)
+		_ = s.store.SetSetting("repo_check_at:"+strconv.FormatInt(repoID, 10), again)
 	}
 }
 

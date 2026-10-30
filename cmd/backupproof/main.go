@@ -352,7 +352,8 @@ func transferFlags(fs *flag.FlagSet) func(context.Context) context.Context {
 	conc := fs.Int("concurrency", 0, "storage requests at once: 0 adapts (4-32), 1 is one chunk at a time")
 	mib := fs.Int("max-inflight", 0, "MiB of chunk data held in memory at once (default 64)")
 	return func(ctx context.Context) context.Context {
-		return transfer.WithSettings(ctx, transfer.Settings{Concurrency: *conc, MaxInflight: int64(*mib) << 20})
+		ctx = transfer.WithSettings(ctx, transfer.Settings{Concurrency: *conc, MaxInflight: int64(*mib) << 20})
+		return transfer.WithLogger(ctx, logf)
 	}
 }
 

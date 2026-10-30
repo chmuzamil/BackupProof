@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chmuzamil/backupproof/internal/backend"
 	bpcrypto "github.com/chmuzamil/backupproof/internal/crypto"
 	"github.com/chmuzamil/backupproof/internal/repo"
 	"github.com/chmuzamil/backupproof/internal/snapshot"
@@ -47,6 +48,46 @@ func appendWants(wants []Want, e *snapshot.Entry) []Want {
 
 // AppendWants is appendWants for other packages (the dashboard's zip download).
 func AppendWants(wants []Want, e *snapshot.Entry) []Want { return appendWants(wants, e) }
+
+// What went wrong reading a chunk. Only a failed integrity check means the
+// data is damaged: a storage error or timeout says nothing about the data.
+var (
+	// ErrUnreadable: storage didn't hand the chunk over (errors, timeouts),
+	// even after retrying.
+	ErrUnreadable = errors.New("couldn't be read from storage")
+	// ErrChunkMissing: storage says the chunk doesn't exist.
+	ErrChunkMissing = errors.New("is missing from storage")
+	// ErrCorrupt: the chunk was read but failed its authentication or
+	// content-hash check, so it is damaged or was tampered with.
+	ErrCorrupt = errors.New("failed its integrity check (damaged or tampered with)")
+)
+
+// chunkError labels a failure reading chunk id: fetchErr from downloading
+// it, or openErr from decrypting and verifying it. A failure because the
+// job itself was stopped (ctx done) is returned as it is.
+func chunkError(ctx context.Context, id bpcrypto.ID, fetchErr, openErr error) error {
+	switch {
+	case fetchErr != nil && ctx.Err() != nil:
+		return fetchErr
+	case fetchErr != nil && errors.Is(fetchErr, backend.ErrNotFound):
+		return fmt.Errorf("chunk %s %w: %w", id, ErrChunkMissing, fetchErr)
+	case fetchErr != nil:
+		return fmt.Errorf("chunk %s %w: %w", id, ErrUnreadable, fetchErr)
+	case openErr != nil:
+		return fmt.Errorf("chunk %s %w: %w", id, ErrCorrupt, openErr)
+	}
+	return nil
+}
+
+// ReadChunk reads and verifies one chunk, labelling any failure.
+func ReadChunk(ctx context.Context, r *repo.Repo, id bpcrypto.ID) ([]byte, error) {
+	raw, err := r.FetchBlob(ctx, id)
+	if err != nil {
+		return nil, chunkError(ctx, id, err, nil)
+	}
+	data, err := r.OpenBlob(id, raw)
+	return data, chunkError(ctx, id, nil, err)
+}
 
 // defaultHint is the guessed size of a chunk whose size isn't known.
 const defaultHint = 1 << 20
@@ -171,18 +212,18 @@ func (f *Fetcher) fetch(id bpcrypto.ID, it *fetched) {
 	start := time.Now()
 	raw, err := f.r.FetchBlob(transfer.WithController(f.ctx, f.ctrl), id)
 	f.ctrl.Release(int64(len(raw)), time.Since(start), err == nil)
-	var data []byte
-	if err == nil {
-		select {
-		case f.cpu <- struct{}{}:
-			data, err = f.r.OpenBlob(id, raw)
-			<-f.cpu
-		case <-f.ctx.Done():
-			err = f.ctx.Err()
-		}
-	}
 	if err != nil {
-		err = fmt.Errorf("chunk %s: %w", id, err)
+		f.finish(it, nil, chunkError(f.ctx, id, err, nil))
+		return
+	}
+	var data []byte
+	select {
+	case f.cpu <- struct{}{}:
+		data, err = f.r.OpenBlob(id, raw)
+		<-f.cpu
+		err = chunkError(f.ctx, id, nil, err)
+	case <-f.ctx.Done():
+		err = f.ctx.Err()
 	}
 	f.finish(it, data, err)
 }
@@ -231,14 +272,11 @@ func (f *Fetcher) Get(ctx context.Context, id bpcrypto.ID) ([]byte, error) {
 		start := time.Now()
 		raw, err := f.r.FetchBlob(ctx, id)
 		f.ctrl.Release(int64(len(raw)), time.Since(start), err == nil)
-		var data []byte
-		if err == nil {
-			data, err = f.r.OpenBlob(id, raw)
-		}
 		if err != nil {
-			return nil, fmt.Errorf("chunk %s: %w", id, err)
+			return nil, chunkError(ctx, id, err, nil)
 		}
-		return data, nil
+		data, err := f.r.OpenBlob(id, raw)
+		return data, chunkError(ctx, id, nil, err)
 	}
 	f.mu.Lock()
 	k := -1
@@ -250,11 +288,7 @@ func (f *Fetcher) Get(ctx context.Context, id bpcrypto.ID) ([]byte, error) {
 	}
 	f.mu.Unlock()
 	if k < 0 {
-		data, err := f.r.GetBlob(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("chunk %s: %w", id, err)
-		}
-		return data, nil
+		return ReadChunk(ctx, f.r, id)
 	}
 	for {
 		data, err, at, ferr := f.take(ctx)

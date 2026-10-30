@@ -66,7 +66,7 @@ func (s *Server) tick(now time.Time) {
 	}
 	for _, j := range expired {
 		sid := j.SourceID
-		s.alert("job-failed", &sid, nil, fmt.Sprintf("A %s stopped because the server running it stopped responding.", plainKind(j.Kind)))
+		s.alert(failKind(j.Kind), &sid, nil, fmt.Sprintf("A %s stopped because the server running it stopped responding.", plainKind(j.Kind)))
 	}
 	sources, err := s.store.Sources()
 	if err != nil {
@@ -176,4 +176,33 @@ func since(last, created, now time.Time) string {
 
 func plainKind(k string) string {
 	return map[string]string{"backup": "backup", "drill": "restore test", "check": "storage check", "copy": "copy to the second storage"}[k]
+}
+
+// failKind is the alert a failed job of this kind raises. Each kind has its
+// own, closed only when the same kind of job succeeds again: a successful
+// backup says nothing about a failed storage check or copy.
+func failKind(jobKind string) string {
+	switch jobKind {
+	case "check":
+		return "check-failed"
+	case "copy":
+		return "copy-failed"
+	case "drill":
+		return "drill-failed"
+	}
+	return "job-failed"
+}
+
+// jobOutcome raises or closes the alert for a finished job.
+func (s *Server) jobOutcome(jobKind string, sourceID int64, ok bool, errMsg string) {
+	kind := failKind(jobKind)
+	if ok {
+		s.resolve(kind, &sourceID, nil)
+		return
+	}
+	name := ""
+	if src, err := s.store.Source(sourceID); err == nil {
+		name = src.Name + ": "
+	}
+	s.alert(kind, &sourceID, nil, fmt.Sprintf("%sthe %s failed: %s", name, plainKind(jobKind), errMsg))
 }

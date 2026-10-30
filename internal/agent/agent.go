@@ -324,6 +324,7 @@ func (a *Agent) execute(parent context.Context, lease *protocol.Lease) {
 
 func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any, error) {
 	ctx = transfer.WithSettings(ctx, transfer.Settings{Concurrency: lease.Concurrency, MaxInflight: lease.MaxInflight})
+	ctx = transfer.WithLogger(ctx, jl.Logf) // storage retries show in the job log
 	if lease.Repository.Type == "local" {
 		if err := ops.StorageDenied(lease.Repository.Path, a.deny); err != nil {
 			return nil, err
@@ -393,8 +394,11 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 		if err != nil {
 			return nil, err
 		}
+		if res.OnlyUnreadable() {
+			return res, fmt.Errorf("storage couldn't hand over %d of the sampled blobs, even after retrying; nothing was found missing or damaged, and the check will run again within the hour", res.UnreadableBlobs)
+		}
 		if !res.OK() {
-			return res, fmt.Errorf("repository check found %d missing and %d corrupt blobs", res.MissingBlobs, res.CorruptBlobs)
+			return res, fmt.Errorf("repository check found %d missing and %d damaged blobs", res.MissingBlobs, res.CorruptBlobs)
 		}
 		return res, nil
 	}

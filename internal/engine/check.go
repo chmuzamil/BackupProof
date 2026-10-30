@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/chmuzamil/backupproof/internal/backend"
 	bpcrypto "github.com/chmuzamil/backupproof/internal/crypto"
@@ -25,20 +27,102 @@ type CheckOptions struct {
 }
 
 type CheckResult struct {
-	Snapshots       int      `json:"snapshots"`
-	ReferencedBlobs int      `json:"referencedBlobs"`
-	StoredBlobs     int      `json:"storedBlobs"`
-	StoredBytes     int64    `json:"storedBytes"` // size of all stored data
-	MissingBlobs    int      `json:"missingBlobs"`
-	UnusedBlobs     int      `json:"unusedBlobs"`
-	ReadBlobs       int      `json:"readBlobs"`
-	ReadBytes       int64    `json:"readBytes"`
-	CorruptBlobs    int      `json:"corruptBlobs"`
+	Snapshots       int   `json:"snapshots"`
+	ReferencedBlobs int   `json:"referencedBlobs"`
+	StoredBlobs     int   `json:"storedBlobs"`
+	StoredBytes     int64 `json:"storedBytes"` // size of all stored data
+	MissingBlobs    int   `json:"missingBlobs"`
+	UnusedBlobs     int   `json:"unusedBlobs"`
+	ReadBlobs       int   `json:"readBlobs"`
+	ReadBytes       int64 `json:"readBytes"`
+	CorruptBlobs    int   `json:"corruptBlobs"` // read, but failed the integrity check
+	// UnreadableBlobs couldn't be read at all (storage errors, timeouts),
+	// even when tried again at the end: their data is unknown, not damaged.
+	UnreadableBlobs int      `json:"unreadableBlobs,omitempty"`
 	Errors          []string `json:"errors,omitempty"`
+}
+
+// UnreadablePause is how long a check waits before reading again the
+// chunks storage failed to hand over.
+var UnreadablePause = 30 * time.Second
+
+// OnlyUnreadable reports a failed check whose only problem is chunks that
+// couldn't be read: nothing was found missing or damaged.
+func (c CheckResult) OnlyUnreadable() bool {
+	return c.UnreadableBlobs > 0 && c.MissingBlobs == 0 && c.CorruptBlobs == 0
 }
 
 func (c CheckResult) OK() bool {
 	return c.MissingBlobs == 0 && c.CorruptBlobs == 0 && len(c.Errors) == 0
+}
+
+// checkReferences is References for a check: a snapshot whose file list
+// storage won't hand over (errors, timeouts) is tried again after a pause,
+// and if it still can't be read it counts as unreadable, not as damage.
+func checkReferences(ctx context.Context, r *repo.Repo, snaps []snapshot.WithID, res *CheckResult, log Logger) (map[bpcrypto.ID]struct{}, error) {
+	refs := map[bpcrypto.ID]struct{}{}
+	add := func(s snapshot.WithID) error {
+		for _, m := range s.Manifest {
+			if id, err := bpcrypto.ParseID(m); err == nil {
+				refs[id] = struct{}{}
+			}
+		}
+		entries, err := snapshot.ReadManifest(ctx, r, s.Snapshot)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			for _, c := range e.Chunks {
+				if id, err := bpcrypto.ParseID(c); err == nil {
+					refs[id] = struct{}{}
+				}
+			}
+		}
+		return nil
+	}
+	var again []snapshot.WithID
+	for _, s := range snaps {
+		if err := add(s); err != nil {
+			if retry, _, _ := transfer.Classify(err); !retry {
+				countManifestError(res, s, err)
+				continue
+			}
+			again = append(again, s)
+		}
+	}
+	if len(again) == 0 {
+		return refs, nil
+	}
+	log("structure: storage couldn't hand over the file lists of %d snapshots; trying them again in %s", len(again), UnreadablePause)
+	t := time.NewTimer(UnreadablePause)
+	select {
+	case <-ctx.Done():
+		t.Stop()
+		return refs, ctx.Err()
+	case <-t.C:
+	}
+	for _, s := range again {
+		if err := add(s); err != nil {
+			if retry, _, _ := transfer.Classify(err); retry {
+				res.UnreadableBlobs++
+				res.Errors = append(res.Errors, fmt.Sprintf("snapshot %s: file list %v: %v", s.ID.Short(), ErrUnreadable, err))
+				continue
+			}
+			countManifestError(res, s, err)
+		}
+	}
+	return refs, nil
+}
+
+// countManifestError records a snapshot file list that is missing or
+// damaged (not just unreadable).
+func countManifestError(res *CheckResult, s snapshot.WithID, err error) {
+	if errors.Is(err, backend.ErrNotFound) {
+		res.MissingBlobs++
+	} else {
+		res.CorruptBlobs++
+	}
+	res.Errors = append(res.Errors, fmt.Sprintf("snapshot %s: %v", s.ID.Short(), err))
 }
 
 // References returns every blob referenced by the given snapshots.
@@ -90,8 +174,10 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 		return res, err
 	}
 	res.Snapshots = len(snaps)
-	refs, errs := References(ctx, r, snaps)
-	res.Errors = append(res.Errors, errs...)
+	refs, err := checkReferences(ctx, r, snaps, &res, opts.Log)
+	if err != nil {
+		return res, err
+	}
 	res.ReferencedBlobs = len(refs)
 	stored, err := storedBlobs(ctx, r)
 	if err != nil {
@@ -127,17 +213,55 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 		// small server, and keep going past bad chunks to count them all.
 		pf := NewFetcher(ctx, r, wants, FetchOptions{MaxConcurrency: transfer.CheckConcurrency, KeepGoing: true})
 		defer pf.Close()
+		var unread []bpcrypto.ID
 		for _, id := range sample {
 			data, err := pf.Get(ctx, id)
 			res.ReadBlobs++
-			if err != nil {
+			switch {
+			case err == nil:
+				res.ReadBytes += int64(len(data))
+			case errors.Is(err, ErrUnreadable):
+				unread = append(unread, id)
+			case errors.Is(err, ErrChunkMissing):
+				res.MissingBlobs++
+				res.Errors = append(res.Errors, err.Error())
+			case ctx.Err() != nil:
+				return res, ctx.Err()
+			default:
 				res.CorruptBlobs++
 				res.Errors = append(res.Errors, err.Error())
-				continue
 			}
-			res.ReadBytes += int64(len(data))
 		}
-		opts.Log("read-data: verified %d blobs (%d bytes), %d corrupt", res.ReadBlobs, res.ReadBytes, res.CorruptBlobs)
+		pf.Close()
+		// Storage errors say nothing about the data: give those chunks
+		// another chance once the service has had time to recover.
+		if len(unread) > 0 {
+			opts.Log("read-data: %d blobs couldn't be read (storage errors, not damage); trying them again in %s", len(unread), UnreadablePause)
+			t := time.NewTimer(UnreadablePause)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return res, ctx.Err()
+			case <-t.C:
+			}
+			for _, id := range unread {
+				data, err := ReadChunk(ctx, r, id)
+				switch {
+				case err == nil:
+					res.ReadBytes += int64(len(data))
+				case errors.Is(err, ErrUnreadable):
+					res.UnreadableBlobs++
+					res.Errors = append(res.Errors, err.Error())
+				case errors.Is(err, ErrChunkMissing):
+					res.MissingBlobs++
+					res.Errors = append(res.Errors, err.Error())
+				default:
+					res.CorruptBlobs++
+					res.Errors = append(res.Errors, err.Error())
+				}
+			}
+		}
+		opts.Log("read-data: verified %d blobs (%d bytes), %d damaged, %d couldn't be read", res.ReadBlobs, res.ReadBytes, res.CorruptBlobs, res.UnreadableBlobs)
 	}
 	return res, nil
 }

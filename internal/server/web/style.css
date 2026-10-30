@@ -639,6 +639,7 @@ h2.big { font-size: 23px; margin: 8px 0; letter-spacing: -.015em; }
 .fact-l { color: var(--muted); }
 .fact-ok { color: var(--ok-text); font-weight: 600; }
 .fact-bad { color: var(--bad); font-weight: 600; }
+.fact-warn { color: var(--warn); font-weight: 600; }
 .item-actions { align-self: center; }
 /* the proof tape: one mark per day, newest on the right */
 .item-tape { align-self: center; display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }

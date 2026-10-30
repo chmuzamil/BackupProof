@@ -388,6 +388,7 @@ function checkWords(name) {
 const ALERT_WORDS = {
   'job-failed': 'Something failed', 'backup-overdue': 'Backup overdue', 'proof-stale': 'Restore test overdue',
   'agent-offline': 'Server offline', 'drill-failed': 'Restore test failed',
+  'check-failed': 'Storage check failed', 'copy-failed': 'Copy to second storage failed',
 };
 
 // --------------------------------------------------------------- widgets
@@ -2231,6 +2232,10 @@ function healthLine(stats) {
   const last = stats && stats[stats.length - 1];
   if (!last) return h('p', { class: 'small muted' }, 'No health check yet. One runs every week, or click “Check now”.');
   if (last.ok) return h('p', { class: 'small' }, h('span', { class: 'fact-ok' }, 'Health check passed '), timeEl(last.time), last.readBlobs ? ` · re-read ${plural(last.readBlobs, 'sample')}` : '');
+  if (last.unreadable && !last.missing && !last.corrupt) {
+    return h('p', { class: 'small' }, h('span', { class: 'fact-warn' }, 'Health check couldn’t finish '), timeEl(last.time),
+      ` · the storage service didn’t hand over ${plural(last.unreadable, 'sample')}, even after retrying. Nothing was found damaged; it checks again within the hour.`);
+  }
   return h('p', { class: 'small' }, h('span', { class: 'fact-bad' }, 'Health check found problems '), timeEl(last.time),
     ` · ${plural(last.missing, 'missing piece')}, ${plural(last.corrupt, 'damaged piece')}. Run a restore test and check the storage provider.`);
 }

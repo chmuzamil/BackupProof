@@ -377,7 +377,8 @@ func TestSpeedLimitIsGlobal(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, _ := testSnapshot(t, r0)
-	const rate = 2 << 20 // 2 MiB/s
+	// Low enough that the limit, not CPU time on a busy machine, sets the pace.
+	const rate = 512 << 10 // 512 KiB/s
 	r, err := repo.Open(context.Background(), backend.Throttle(fs, 0, rate), []byte("correct horse battery"))
 	if err != nil {
 		t.Fatal(err)
@@ -390,7 +391,7 @@ func TestSpeedLimitIsGlobal(t *testing.T) {
 	moved := float64(fs.bytes.Load() - before)
 	got := moved / time.Since(start).Seconds()
 	if got > rate*1.10 || got < rate*0.90 {
-		t.Errorf("moved %.0f bytes at %.2f MiB/s, limit 2 MiB/s", moved, got/(1<<20))
+		t.Errorf("moved %.0f bytes at %.0f KiB/s, limit 512 KiB/s", moved, got/(1<<10))
 	}
 }
 
@@ -472,5 +473,84 @@ func BenchmarkRestoreLatency(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// A storage check tells chunks storage couldn't hand over (a 503 that
+// outlasts the retries) apart from damaged ones, retries them at the end,
+// and doesn't count a brief storage error at all.
+func TestCheckSeparatesUnreadableFromDamaged(t *testing.T) {
+	fastRetries(t)
+	oldPause := UnreadablePause
+	UnreadablePause = time.Millisecond
+	t.Cleanup(func() { UnreadablePause = oldPause })
+	fs := newFakeStore(t)
+	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, _ := testSnapshot(t, r)
+	// File data chunks and the snapshot's file-list chunks, separately.
+	lists := map[string]bool{}
+	for _, m := range snap.Manifest {
+		id, _ := bpcrypto.ParseID(m)
+		lists[repo.DataKey(id)] = true
+	}
+	var keys, listKeys []string
+	for _, k := range fs.dataKeys(t) {
+		if lists[k] {
+			listKeys = append(listKeys, k)
+		} else {
+			keys = append(keys, k)
+		}
+	}
+	check := func() CheckResult {
+		t.Helper()
+		res, err := Check(context.Background(), r, CheckOptions{ReadDataPercent: 100, Seed: []byte("s")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	// A brief outage is retried away.
+	fs.mu.Lock()
+	fs.busy[keys[0]] = 2
+	fs.mu.Unlock()
+	if res := check(); !res.OK() {
+		t.Fatalf("brief 503s failed the check: %+v", res)
+	}
+	// A 503 that lasts past every retry is unreadable, not damaged.
+	fs.mu.Lock()
+	fs.busy[keys[1]] = 1000
+	fs.mu.Unlock()
+	res := check()
+	if res.UnreadableBlobs != 1 || res.CorruptBlobs != 0 || !res.OnlyUnreadable() || res.OK() {
+		t.Fatalf("lasting 503: %+v", res)
+	}
+	// One that recovers before the check tries again at the end passes.
+	fs.mu.Lock()
+	fs.busy[keys[1]] = transfer.Attempts
+	fs.mu.Unlock()
+	if res := check(); !res.OK() {
+		t.Fatalf("503 that recovered for the final retry: %+v", res)
+	}
+	// The same for a snapshot's file list.
+	fs.mu.Lock()
+	fs.busy[listKeys[0]] = 1000
+	fs.mu.Unlock()
+	if res := check(); res.UnreadableBlobs == 0 || res.CorruptBlobs != 0 || !res.OnlyUnreadable() {
+		t.Fatalf("lasting 503 on a file list: %+v", res)
+	}
+	fs.mu.Lock()
+	fs.busy[listKeys[0]] = 0
+	fs.mu.Unlock()
+	// Damage is still damage.
+	fs.mu.Lock()
+	fs.busy[keys[1]] = 0
+	fs.corrupt[keys[2]] = true
+	fs.mu.Unlock()
+	res = check()
+	if res.CorruptBlobs != 1 || res.UnreadableBlobs != 0 || res.OnlyUnreadable() {
+		t.Fatalf("damaged chunk: %+v", res)
 	}
 }

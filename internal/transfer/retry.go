@@ -15,11 +15,12 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-// Retry policy for one storage request: exponential backoff with full
-// jitter, so parallel workers don't retry in lockstep.
+// Retry policy for one storage request: exponential backoff with jitter, so
+// parallel workers don't retry in lockstep. Waits grow from about 0.5 s to
+// 16 s, giving a busy storage node 15-30 s to recover over six attempts.
 var (
 	Attempts       = 6
-	BackoffBase    = 250 * time.Millisecond
+	BackoffBase    = 500 * time.Millisecond
 	BackoffCap     = 30 * time.Second
 	AttemptTimeout = 5 * time.Minute // per request, not per job
 )
@@ -64,6 +65,9 @@ func Do(ctx context.Context, op func(ctx context.Context) error) error {
 		if after > wait {
 			wait = after + time.Duration(rand.Int64N(int64(250*time.Millisecond)))
 		}
+		if log := loggerFrom(ctx); log != nil {
+			log("storage %s, trying again in %s (attempt %d of %d)", failureWords(err), wait.Round(100*time.Millisecond), attempt+1, Attempts)
+		}
 		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -74,13 +78,47 @@ func Do(ctx context.Context, op func(ctx context.Context) error) error {
 	}
 }
 
-// backoff is "full jitter": a random wait up to base·2^(attempt-1), capped.
+// Logger receives a line for each retry, for the job log.
+type Logger func(format string, args ...any)
+
+type loggerKey struct{}
+
+// WithLogger makes Do report its retries to log.
+func WithLogger(ctx context.Context, log Logger) context.Context {
+	return context.WithValue(ctx, loggerKey{}, log)
+}
+
+func loggerFrom(ctx context.Context) Logger {
+	l, _ := ctx.Value(loggerKey{}).(Logger)
+	return l
+}
+
+// failureWords says briefly what went wrong with a request.
+func failureWords(err error) string {
+	var se *StatusError
+	if errors.As(err, &se) && se.Code != 0 {
+		return "returned HTTP " + strconv.Itoa(se.Code)
+	}
+	var re *smithyhttp.ResponseError
+	if errors.As(err, &re) && re.Response != nil {
+		return "returned HTTP " + strconv.Itoa(re.HTTPStatusCode())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "didn't answer in time"
+	}
+	return "connection failed"
+}
+
+// backoff is the wait before attempt+1: between half and all of
+// base·2^(attempt-1), capped.
 func backoff(attempt int) time.Duration {
 	d := BackoffBase << (attempt - 1)
 	if d <= 0 || d > BackoffCap {
 		d = BackoffCap
 	}
-	return time.Duration(rand.Int64N(int64(d)) + 1)
+	// "Equal jitter": at least half the step, so retries never come back
+	// within a moment, and random within it, so workers spread out.
+	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
 }
 
 // Classify reports whether err is worth retrying, how long the service

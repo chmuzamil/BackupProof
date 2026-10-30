@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Storage requests retry patiently.** The six attempts are now spaced between half and all of 0.5 s, 1 s, 2 s, 4 s and 8 s (and longer when the service sends Retry-After), instead of possibly all within a second, so a busy storage node has time to recover. Each retry is written to the job log.
+- **A blob storage couldn't hand over is no longer reported as damaged.** Only a failed authentication or content-hash check counts as damage. A storage check reads unreadable blobs (and snapshot file lists) again after a pause; if they still can't be read, the check says so, reports nothing as damaged, and runs again within the hour. Found on 29 October, when a single HTTP 503 from Backblaze B2 failed a weekly check as "1 corrupt blob".
+- **Alerts close only when the same kind of job succeeds.** A failed storage check, copy or restore test now has its own alert, which a later successful backup no longer closes.
+
 ## [0.2.7] - 2026-10-30
 
 ### Fixed
