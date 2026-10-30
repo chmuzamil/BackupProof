@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-30
+
 ### Fixed
 
 - **Storage requests retry patiently.** The six attempts are now spaced between half and all of 0.5 s, 1 s, 2 s, 4 s and 8 s (and longer when the service sends Retry-After), instead of possibly all within a second, so a busy storage node has time to recover. Each retry is written to the job log.
