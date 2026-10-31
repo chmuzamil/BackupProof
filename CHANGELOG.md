@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-10-31
+
 ### Changed
 
 - **Backups process data about 5× faster.** Finding chunk boundaries read the data one byte at a time; it now scans it in large blocks, about 10× faster on its own (2.9 GB/s against 280 MB/s), and each chunk is fingerprinted once instead of twice. An unchanged 512 MB stream now takes 0.4 s instead of 2 s. Chunk boundaries are exactly the same as before, so existing repositories keep deduplicating: a test compares every boundary with the old chunker, and a backup by this version of data stored by 0.2.8 uploads nothing new.
