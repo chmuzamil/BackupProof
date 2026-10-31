@@ -250,7 +250,12 @@ func (r *Repo) HasBlob(id bpcrypto.ID) bool {
 // PutBlob stores plain data and returns its ID and the number of bytes
 // uploaded (0 when the blob was already present).
 func (r *Repo) PutBlob(ctx context.Context, plain []byte) (bpcrypto.ID, int, error) {
-	id := r.keys.ContentID(plain)
+	return r.PutBlobID(ctx, r.keys.ContentID(plain), plain)
+}
+
+// PutBlobID is PutBlob for a caller that has already computed the blob's
+// ID with ContentID, so the data isn't hashed twice.
+func (r *Repo) PutBlobID(ctx context.Context, id bpcrypto.ID, plain []byte) (bpcrypto.ID, int, error) {
 	// Claim the ID before uploading so concurrent writers of identical
 	// content upload it once. A failed upload releases the claim and the
 	// error aborts the snapshot, so no snapshot can reference a missing blob.

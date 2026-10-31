@@ -5,7 +5,6 @@
 package chunker
 
 import (
-	"bufio"
 	"io"
 
 	"lukechampine.com/blake3"
@@ -51,13 +50,14 @@ func GearTable(seed []byte) *[256]uint64 {
 
 // Chunker splits a stream into content-defined chunks.
 type Chunker struct {
-	r     *bufio.Reader
-	gear  *[256]uint64
-	p     Params
-	buf   []byte
-	eof   bool
-	maskS uint64
-	maskL uint64
+	r          io.Reader
+	gear       *[256]uint64
+	p          Params
+	buf        []byte // read-ahead: unread data is buf[start:end]
+	start, end int
+	eof        bool
+	maskS      uint64
+	maskL      uint64
 }
 
 func New(r io.Reader, gear *[256]uint64, p Params) *Chunker {
@@ -72,10 +72,10 @@ func New(r io.Reader, gear *[256]uint64, p Params) *Chunker {
 		ml = spreadMask(bits - 2)
 	}
 	return &Chunker{
-		r:     bufio.NewReaderSize(r, 1<<20),
+		r:     r,
 		gear:  gear,
 		p:     p,
-		buf:   make([]byte, 0, p.Max),
+		buf:   make([]byte, 2*p.Max),
 		maskS: ms,
 		maskL: ml,
 	}
@@ -97,37 +97,60 @@ func spreadMask(bits int) uint64 {
 // Next returns the next chunk. The returned slice is only valid until the
 // next call. It returns io.EOF when the stream is exhausted.
 func (c *Chunker) Next() ([]byte, error) {
-	c.buf = c.buf[:0]
-	if c.eof {
+	if err := c.fill(); err != nil {
+		return nil, err
+	}
+	data := c.buf[c.start:c.end]
+	if len(data) == 0 {
 		return nil, io.EOF
 	}
-	var fp uint64
-	normal := c.p.Avg
-	for len(c.buf) < c.p.Max {
-		b, err := c.r.ReadByte()
+	n := c.cut(data)
+	c.start += n
+	return data[:n:n], nil
+}
+
+// fill makes at least Max bytes available, or everything left in the stream.
+func (c *Chunker) fill() error {
+	if c.end-c.start >= c.p.Max || c.eof {
+		return nil
+	}
+	c.end = copy(c.buf, c.buf[c.start:c.end])
+	c.start = 0
+	for c.end < c.p.Max && !c.eof {
+		n, err := c.r.Read(c.buf[c.end:])
+		c.end += n
 		if err == io.EOF {
 			c.eof = true
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		c.buf = append(c.buf, b)
-		n := len(c.buf)
-		if n < c.p.Min {
-			continue
-		}
-		fp = (fp << 1) + c.gear[b]
-		if n < normal {
-			if fp&c.maskS == 0 {
-				return c.buf, nil
-			}
-		} else if fp&c.maskL == 0 {
-			return c.buf, nil
+		} else if err != nil {
+			return err
 		}
 	}
-	if len(c.buf) == 0 {
-		return nil, io.EOF
+	return nil
+}
+
+// cut returns the length of the next chunk at the start of data: the first
+// position at or after Min where the gear fingerprint matches the mask (the
+// harder mask before Avg, the easier one after), or Max, or all of data at
+// the end of the stream. The fingerprint starts at Min, as in FastCDC.
+func (c *Chunker) cut(data []byte) int {
+	limit := min(len(data), c.p.Max)
+	if limit < c.p.Min {
+		return limit
 	}
-	return c.buf, nil
+	gear := c.gear
+	var fp uint64
+	i := max(c.p.Min-1, 0)
+	for end := min(c.p.Avg-1, limit); i < end; i++ {
+		fp = (fp << 1) + gear[data[i]]
+		if fp&c.maskS == 0 {
+			return i + 1
+		}
+	}
+	for ; i < limit; i++ {
+		fp = (fp << 1) + gear[data[i]]
+		if fp&c.maskL == 0 {
+			return i + 1
+		}
+	}
+	return limit
 }

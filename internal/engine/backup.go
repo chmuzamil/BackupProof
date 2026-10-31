@@ -294,7 +294,7 @@ func (b *Builder) chunkInto(ctx context.Context, r io.Reader, e *snapshot.Entry)
 		b.stats.Chunks++
 		waitStart := time.Now()
 		err = b.up.Go(int64(len(data)), func(ctx context.Context) (int64, error) {
-			_, n, err := b.r.PutBlob(ctx, data)
+			_, n, err := b.r.PutBlobID(ctx, id, data)
 			if err != nil {
 				return 0, fmt.Errorf("chunk %s: %w", id, err)
 			}
@@ -375,6 +375,9 @@ func (t *timedReader) Read(p []byte) (int, error) {
 // the source or the upload held it back.
 func (b *Builder) logTiming() {
 	total := time.Since(b.started)
+	if total < time.Second {
+		return // nothing worth explaining
+	}
 	read, wait := time.Duration(b.readTime.Load()), time.Duration(b.upWait.Load())
 	up := b.up.Stats()
 	b.log("timing: %s in total; reading the source %s (%s, %s); waiting for uploads %s; uploaded %s in %s (%s, up to %d at once)",
@@ -382,6 +385,7 @@ func (b *Builder) logTiming() {
 		roundDur(wait), humanBytes(up.Bytes), roundDur(up.Busy), rateWords(up.Bytes, up.Busy), up.Peak)
 	switch {
 	case total < 5*time.Second:
+		// too short for "the slowest part" to mean much
 	case wait > total/5:
 		b.log("timing: the upload to storage was the slowest part")
 	case read > total/2:
