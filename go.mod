@@ -12,7 +12,7 @@ require (
 	github.com/aws/smithy-go v1.28.1
 	github.com/digitorus/timestamp v0.0.0-20260914073129-b4b58b92aa51
 	github.com/getsentry/sentry-go v0.50.0
-	github.com/klauspost/compress v1.20.1
+	github.com/klauspost/compress v1.20.2
 	github.com/pkg/sftp v1.13.11
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.57.0
