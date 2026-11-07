@@ -3915,6 +3915,22 @@ async function boot() {
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user) refreshAlertCount(); });
 
+// Uncaught errors go to the server, which forwards them (scrubbed) to the
+// error tracker only if the operator turned error reporting on. API errors
+// are left out: the server reports its own failures.
+let errorsSent = 0;
+function reportError(err) {
+  if (!S.status || !S.status.errorReporting || err instanceof ApiError || errorsSent >= 5) return;
+  errorsSent++;
+  const e = err instanceof Error ? err : new Error(String(err));
+  const body = { type: e.name, message: e.message || String(err), stack: String(e.stack || ''),
+    page: location.hash.split('?')[0].replace(/\d+/g, 'id') };
+  fetch('/api/client-errors', { method: 'POST', credentials: 'omit', keepalive: true,
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+}
+window.addEventListener('error', (ev) => reportError(ev.error || ev.message));
+window.addEventListener('unhandledrejection', (ev) => reportError(ev.reason));
+
 const skip = document.querySelector('.skip-link');
 if (skip) {
   skip.addEventListener('click', (e) => {

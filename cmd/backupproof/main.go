@@ -22,6 +22,7 @@ import (
 	"github.com/chmuzamil/backupproof/internal/backend"
 	"github.com/chmuzamil/backupproof/internal/chunker"
 	"github.com/chmuzamil/backupproof/internal/engine"
+	"github.com/chmuzamil/backupproof/internal/errreport"
 	"github.com/chmuzamil/backupproof/internal/importer"
 	"github.com/chmuzamil/backupproof/internal/ops"
 	"github.com/chmuzamil/backupproof/internal/proof"
@@ -74,6 +75,12 @@ or sftp://user@host:22/path. Secrets come from the environment:
   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY S3 credentials
   BP_SFTP_PASSWORD / BP_SFTP_KEY_FILE / BP_SFTP_HOSTKEY
   BP_STATE                                 state dir (default ~/.backupproof)
+
+Error reporting is off unless you turn it on. To send crash reports from
+"server" and "agent run" to your own Sentry or GlitchTip project, set
+  BP_SENTRY_DSN                            project DSN
+  BP_SENTRY_ENVIRONMENT                    environment name (default production)
+Reports never include passwords, keys, file names, host names or addresses.
 `
 
 func main() {
@@ -85,6 +92,14 @@ func main() {
 	defer stop()
 	var err error
 	args := os.Args[2:]
+	// Long-running processes report crashes when BP_SENTRY_DSN is set.
+	flush := func() {}
+	if cmd := os.Args[1]; cmd == "server" || cmd == "agent" && len(args) > 0 && args[0] == "run" {
+		if flush, err = errreport.Init(cmd); err != nil {
+			fmt.Fprintln(os.Stderr, "warning:", err)
+		}
+		defer errreport.Recover()
+	}
 	switch os.Args[1] {
 	case "server":
 		err = cmdServer(ctx, args)
@@ -119,6 +134,7 @@ func main() {
 	default:
 		err = fmt.Errorf("unknown command %q (see `backupproof help`)", os.Args[1])
 	}
+	flush()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

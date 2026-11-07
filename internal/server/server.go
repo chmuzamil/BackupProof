@@ -27,6 +27,7 @@ import (
 
 	"github.com/chmuzamil/backupproof/internal/agent"
 	"github.com/chmuzamil/backupproof/internal/engine"
+	"github.com/chmuzamil/backupproof/internal/errreport"
 	"github.com/chmuzamil/backupproof/internal/proof"
 )
 
@@ -116,7 +117,7 @@ func (s *Server) Handler() http.Handler {
 	static, _ := fs.Sub(webFS, "web")
 	files := http.FileServer(http.FS(static))
 	mux.Handle("GET /", validPath(files))
-	return securityHeaders(mux)
+	return securityHeaders(errreport.RecoverHTTP(mux))
 }
 
 // validPath answers 400 for a path that isn't valid UTF-8 (such as /%c0):
@@ -211,6 +212,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, err error) {
+	if status >= 500 {
+		errreport.Error(err)
+	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
@@ -249,6 +253,7 @@ func (s *Server) loopbackURL() string {
 }
 
 func (s *Server) runBuiltinAgent(ctx context.Context) {
+	defer errreport.Recover()
 	url := s.loopbackURL()
 	for i := 0; i < 50; i++ { // wait for the listener
 		if resp, err := (&http.Client{Timeout: time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}).Get(url + "/api/status"); err == nil {

@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.0
 	github.com/aws/smithy-go v1.28.1
 	github.com/digitorus/timestamp v0.0.0-20260914073129-b4b58b92aa51
+	github.com/getsentry/sentry-go v0.50.0
 	github.com/klauspost/compress v1.20.1
 	github.com/pkg/sftp v1.13.11
 	github.com/robfig/cron/v3 v3.0.1
@@ -45,6 +46,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	golang.org/x/text v0.42.0 // indirect
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect

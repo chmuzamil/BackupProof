@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"github.com/chmuzamil/backupproof/internal/errreport"
 )
 
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
@@ -47,6 +49,7 @@ func nextRun(expr, name string, after time.Time) time.Time {
 // schedulerLoop enqueues due backups and drills, expires dead leases and
 // runs the watchdog.
 func (s *Server) schedulerLoop(ctx context.Context) {
+	defer errreport.Recover()
 	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
 	for {

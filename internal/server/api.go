@@ -12,6 +12,7 @@ import (
 
 	"github.com/chmuzamil/backupproof/internal/backend"
 	"github.com/chmuzamil/backupproof/internal/engine"
+	"github.com/chmuzamil/backupproof/internal/errreport"
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/source"
 )
@@ -94,6 +95,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/public/keys", s.handlePublicKeys)
+	mux.HandleFunc("POST /api/client-errors", s.handleClientError)
 
 	mux.HandleFunc("GET /api/dashboard", s.auth("auditor", s.handleDashboard))
 
@@ -160,7 +162,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	pub := s.publicURL()
 	resp := map[string]any{"version": engine.Version, "setupRequired": users == 0, "setupCodeRequired": users == 0 && !isLocalRequest(r), "user": nil, "csrf": "",
-		"publicUrl": pub, "publicUrlIsLocal": strings.Contains(pub, "localhost") || strings.Contains(pub, "127.0.0.1")}
+		"publicUrl": pub, "publicUrlIsLocal": strings.Contains(pub, "localhost") || strings.Contains(pub, "127.0.0.1"),
+		"errorReporting": errreport.Enabled()}
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		if u, csrf, err := s.store.Session(c.Value); err == nil {
 			resp["user"], resp["csrf"] = u, csrf

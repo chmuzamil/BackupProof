@@ -294,6 +294,12 @@ Deduplication works across files and snapshots. Unchanged files (same size and m
 | `BP_PASSWORD`, `BP_PASSWORD_FILE` | | Repository password for the CLI |
 | `--concurrency` | `0` (adaptive) | `backup`, `restore`, `drill`, `check`: storage requests at once. `0` adapts between 4 and 32, `1` moves one chunk at a time |
 | `--max-inflight` | `64` | Same commands: MiB of chunk data held in memory at once |
+| `BP_SENTRY_DSN` | off | Send crash reports from `server` and `agent run` (and dashboard errors) to your own Sentry or GlitchTip project; see below |
+| `BP_SENTRY_ENVIRONMENT` | `production` | Environment name on those reports |
+
+### Error reporting (optional)
+
+Off unless you set `BP_SENTRY_DSN`, and BackupProof contains no DSN of its own, so nothing is ever sent anywhere you didn't choose. When it is set, the server and agents report panics and internal (HTTP 500) errors, and the dashboard reports uncaught script errors through the server (the browser never contacts the tracker, so the CSP stays `'self'`). A report holds the error type, a scrubbed message, a code stack trace, the version and the OS. Request data, cookies, users, host names, IP addresses and local variables are never included, and the message has URLs, file paths, host names, addresses, e-mail addresses and anything that looks like a password, key or token replaced. There is no performance tracing or session replay. Dashboard reports are limited to 10 a minute.
 
 ### Transfers
 
@@ -310,6 +316,7 @@ Backups, restores, restore tests, second copies, zip downloads and health checks
 - **Built-in agent.** It never backs up, imports from, or stores into the server's own data folder, even when asked to protect `/` or `C:\`.
 - **Restores.** All writes go through an `os.Root` confined to the restore folder, and symlinks are created last, so a crafted snapshot can't write outside it.
 - **Web.** Strict CSP (`default-src 'self'`), `X-Frame-Options: DENY`, no third-party assets.
+- **Error reports.** Off by default; see [Error reporting](#error-reporting-optional) for what an opted-in report can contain.
 - **Restore-test sandboxes.** `--network none`, memory, CPU and PID limits, `no-new-privileges`, data on tmpfs, restored files mounted read-only, and the image recorded by digest.
 - **Ransomware.** Use S3 Object Lock in COMPLIANCE mode and storage credentials that cannot delete. Prune skips locked objects. Run restore tests on a different server.
 

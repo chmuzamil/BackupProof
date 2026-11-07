@@ -26,6 +26,7 @@ import (
 	"github.com/chmuzamil/backupproof/internal/discover"
 	"github.com/chmuzamil/backupproof/internal/drill"
 	"github.com/chmuzamil/backupproof/internal/engine"
+	"github.com/chmuzamil/backupproof/internal/errreport"
 	"github.com/chmuzamil/backupproof/internal/ops"
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/protocol"
@@ -280,6 +281,7 @@ func (a *Agent) execute(parent context.Context, lease *protocol.Lease) {
 	// the job is no longer ours.
 	done := make(chan struct{})
 	go func() {
+		defer errreport.Recover()
 		interval := time.Duration(lease.LeaseSecs) * time.Second / 3
 		if interval <= 0 {
 			interval = time.Minute
@@ -408,6 +410,7 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 // reportInventory tells the server what this machine could protect, at
 // start and every 15 minutes.
 func (a *Agent) reportInventory(ctx context.Context) {
+	defer errreport.Recover()
 	for {
 		inv := discover.Collect(ctx)
 		if _, err := a.c.post(ctx, "/api/agent/inventory", inv, nil); err != nil && ctx.Err() == nil {
