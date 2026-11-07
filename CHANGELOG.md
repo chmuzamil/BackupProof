@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-11-08
+
 ### Added
 
 - **Optional error reporting.** Set `BP_SENTRY_DSN` to send crash reports from the server, agents and dashboard to your own Sentry or GlitchTip project. It is off by default and BackupProof ships with no DSN. Reports are scrubbed before they leave the process: no request data, users, host names, addresses, file paths or anything that looks like a password, key or token, and no tracing or replay. Dashboard errors go through the server, so the page's CSP is unchanged.
