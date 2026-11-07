@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-11-08
+
+### Security
+
+- Updated `github.com/klauspost/compress` to 1.20.2 for GO-2026-6865 (a crafted two-block zstd frame could crash the process).
+
 ## [0.2.10] - 2026-11-08
 
 ### Added
