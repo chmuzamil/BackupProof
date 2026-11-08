@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.13-0a7bbb" alt="version v0.2.13"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.14-0a7bbb" alt="version v0.2.14"></a>
   <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>
@@ -206,6 +206,10 @@ export BP_PASSWORD='password-from-the-recovery-kit'
 backupproof snapshots --repo 's3://bucket/folder?endpoint=https://s3.eu-central-003.backblazeb2.com'
 backupproof restore --repo 's3://bucket/folder?endpoint=…' --target /root/restored SNAPSHOT-ID
 ```
+
+## Restore tests of second copies
+
+A second copy gets its own restore test every 30 days, with its own signed proof, so you know the copy works before you need it. It's less often than the main restore tests because each one downloads the whole backup from the second storage. To run one sooner, choose **Test this copy** on the item's page. A failed test raises its own alert and doesn't change the item's main status, recovery goals or which backups are kept.
 
 ## Recovery goals
 

@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-11-09
+
+### Security
+
+- **Docker put-back checks where files go.** The paths in a backup are now checked when it's restored, as well as when it's made. A tampered backup can no longer put files in system folders, or in places that control logins, scheduled tasks or services, such as `/etc/cron.d` or `.ssh`. Those files can still be restored to a folder.
+- **Restore-test containers run with only the capabilities the database images need,** instead of Docker's default set.
+
+### Fixed
+
+- **Database restores from the dashboard for WordPress and container items.** Items whose database name is worked out at backup time failed to restore, because the restore looked for a dump with no name. The name now comes from the backup, and the login is read on the server as during a backup. The confirmation no longer asks you to type "undefined".
+
+### Added
+
+- **Restore tests of second copies.** Each second copy is restore-tested every 30 days, or on demand with **Test this copy**, and gets its own signed proof and alert. Agents don't need upgrading. The first test runs soon after upgrading, and each test downloads the whole backup from the second storage.
+
 ## [0.2.13] - 2026-11-09
 
 ### Added
