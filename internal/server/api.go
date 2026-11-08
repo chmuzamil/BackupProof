@@ -121,6 +121,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs/{id}", s.auth("auditor", s.handleGetJob))
 
 	mux.HandleFunc("GET /api/agents", s.auth("auditor", s.handleListAgents))
+	mux.HandleFunc("GET /api/agents/{id}/recovery-plan", s.auth("operator", s.handleRecoveryPlan))
 	mux.HandleFunc("POST /api/agents/enroll-token", s.auth("admin", s.handleEnrollToken))
 	mux.HandleFunc("POST /api/agents/{id}/revoke", s.auth("admin", s.handleRevokeAgent))
 	mux.HandleFunc("DELETE /api/agents/{id}", s.auth("admin", s.handleRemoveAgent))

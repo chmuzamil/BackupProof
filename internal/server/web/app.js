@@ -1065,6 +1065,7 @@ const ROUTES = [
   [/^\/sources\/(\d+)$/, (m) => pageSource(Number(m[1]))],
   [/^\/sources\/(\d+)\/restore$/, (m) => pageRestore(Number(m[1]))],
   [/^\/agents$/, pageAgents],
+  [/^\/agents\/(\d+)\/recovery-plan$/, (m) => pageRecoveryPlan(Number(m[1]))],
   [/^\/repositories$/, pageRepositories],
   [/^\/storage\/new$/, pageStorageNew],
   [/^\/proofs$/, pageProofs],
@@ -3251,6 +3252,7 @@ async function pageAgents() {
         h('dt', null, 'Version'), h('dd', { translate: 'no' }, a.version || '—'),
         h('dt', null, 'Key ID'), h('dd', null, h('code', { class: 'break' }, a.keyId || short(a.publicKey, 16))),
         h('dt', null, 'Connected'), h('dd', null, absTime(a.created)))),
+      canOperate() && !a.revoked ? h('div', { class: 'form-actions start' }, h('a', { class: 'btn sm', href: `#/agents/${a.id}/recovery-plan`, 'aria-label': 'Recovery plan for ' + a.name }, 'Recovery plan')) : null,
       isAdmin() && !a.revoked && !a.builtin ? h('div', { class: 'form-actions' }, btn('Disconnect', busy(async () => {
         if (!(await confirmDlg(`Disconnect “${a.name}”? It immediately loses access and must be connected again with a new code. Its past proofs stay valid.`, 'Disconnect'))) return;
         await post(`/agents/${a.id}/revoke`); toast('Server disconnected', 'ok'); reload();
@@ -3341,6 +3343,44 @@ async function connectModal() {
       if (fresh.length && !connected.dataset.done) { connected.dataset.done = '1'; fill(connected, h('div', { class: 'banner ok' }, glyph(true), 'Connected: ', joinWords(fresh.map((a) => a.name)))); }
     } catch { /* ignore */ }
   }, 3000);
+}
+
+// ------------------------------------------------------- recovery plan
+
+async function pageRecoveryPlan(id) {
+  const { plan, text } = await api(`/agents/${id}/recovery-plan`);
+  const bullets = (list) => h('ul', null, list.map((x) => h('li', null, x)));
+  const steps = (list) => h('ol', null, list.map((x) => h('li', null, x)));
+  const toDo = (list) => h('ul', { class: 'plan-todo' }, list.map((x) => h('li', null, h('span', { 'aria-hidden': 'true' }, '☐ '), x)));
+  const item = (it) => h('section', { class: 'card' },
+    h('h2', null, `${it.order}. ${it.name}`),
+    h('p', { class: 'muted' }, `${it.kind}. ${it.stage}.`),
+    h('dl', { class: 'kv' },
+      h('dt', null, 'Stored in'), h('dd', null, `${it.storage} (${it.storageWhat})`),
+      h('dt', null, 'Restore from'), h('dd', null, it.tested ? h('code', { class: 'break' }, it.snapshotId) : h('span', { class: 'fact-bad' }, 'No backup has passed a restore test')),
+      it.backupTime ? [h('dt', null, 'Taken'), h('dd', null, absTime(it.backupTime))] : null,
+      it.testedAt ? [h('dt', null, 'Tested'), h('dd', null, absTime(it.testedAt))] : null,
+      it.restoreMs != null ? [h('dt', null, 'Time to restore'), h('dd', null, durWords(it.restoreMs))] : null,
+      it.lastRestore ? [h('dt', null, 'Last real restore'), h('dd', null, absTime(it.lastRestore))] : null),
+    it.appTestState ? h('p', { class: 'hint' }, it.appTestState) : null,
+    h('h3', null, 'In the dashboard'), steps(it.uiSteps),
+    h('h3', null, 'From the command line'), h('pre', { class: 'plan-cli' }, it.cliSteps.join('\n')),
+    it.autoChecks.length ? [h('h3', null, 'Checked automatically by that restore test'), bullets(it.autoChecks)] : null,
+    h('h3', null, 'You need to confirm'), toDo(it.confirm),
+    it.notCovered.length ? [h('h3', null, 'Not covered'), bullets(it.notCovered)] : null);
+  return h('div', { class: 'plan' },
+    backLink('#/agents', 'Servers'),
+    pageHead(`Recovery plan: ${plan.server}`, `Made ${day(plan.generated)}. Print it or download it, and keep it away from this server. It holds no passwords.`),
+    h('div', { class: 'btns no-print' }, btn('Print', () => window.print(), 'primary'), btn('Download', () => download(`backupproof-recovery-plan-${plan.server.replace(/[^\w.-]+/g, '-')}.md`, text))),
+    plan.warnings.length ? h('div', { class: 'banner warn' }, h('strong', null, 'Fix these first'), bullets(plan.warnings)) : null,
+    card('Before you start', bullets(plan.beforeYouStart)),
+    card('Storage you need', h('ul', null, plan.storages.map((s) => h('li', null, h('strong', null, s.name), `: ${s.what}. ${s.note}`)))),
+    card('What to restore, in order', h('p', null, plan.orderNote), plan.items.length ? null : empty('Nothing on this server is protected yet.')),
+    plan.items.map(item),
+    card('DNS and firewall (you do these)', toDo(plan.dnsAndFirewall)),
+    card('Moving to another server', bullets(plan.anotherServer)),
+    card('Known gaps', bullets(plan.knownGaps)),
+    card('If the dashboard is lost too', steps(plan.lostDashboard)));
 }
 
 // -------------------------------------------- advanced (technical) form
