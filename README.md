@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.12-0a7bbb" alt="version v0.2.12"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.13-0a7bbb" alt="version v0.2.13"></a>
   <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>
@@ -207,6 +207,15 @@ backupproof snapshots --repo 's3://bucket/folder?endpoint=https://s3.eu-central-
 backupproof restore --repo 's3://bucket/folder?endpoint=…' --target /root/restored SNAPSHOT-ID
 ```
 
+## Recovery goals
+
+Set two optional limits on an item under **Edit (advanced)**, and its page shows how it measures up, with the time of its last 30 restore tests:
+
+- **Most data you could lose (RPO):** compared with the age of the newest backup that *passed a restore test*. A backup that only finished doesn't count, so restore tests must run at least this often.
+- **Longest a restore may take (RTO):** compared with the last passed restore test, which includes its checks. It was measured on the server that ran the test, so a restore elsewhere can differ.
+
+Nearing a limit shows a warning. Passing one raises an alert, closed when it's back within the limit. The same numbers are at `GET /api/sources/{id}/recovery`.
+
 ## Docker apps and volumes
 
 Choose **Protect something → Docker app or volumes**. BackupProof lists your Compose apps, containers started on their own (`docker run`) and named volumes. A backup holds:
@@ -226,6 +235,18 @@ Create a token under **Settings → API tokens** and send it as `Authorization: 
 curl -H "Authorization: Bearer $BP_TOKEN" https://backup.example.com/api/dashboard
 curl -X POST -H "Authorization: Bearer $BP_TOKEN" -H 'Content-Type: application/json' \
      -d '{"kind":"backup"}' https://backup.example.com/api/sources/3/run
+```
+
+### Prometheus
+
+`GET /metrics` serves the Prometheus text format to any token or account that can read the dashboard. Use a token with the **auditor** role. It covers item status, last backup and restore test, the newest proven backup, restore time, restore tests passed and failed, server status, stored size and open alerts. Anything not measured yet has no sample, so it can't read as zero.
+
+```yaml
+scrape_configs:
+  - job_name: backupproof
+    scheme: https
+    authorization: { credentials: bpt_… }
+    static_configs: [{ targets: [backup.example.com] }]
 ```
 
 ### Locked out?

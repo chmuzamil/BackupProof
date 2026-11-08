@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-11-09
+
+### Added
+
+- **Recovery goals.** Optional per-item limits for data loss (RPO) and restore time (RTO), compared with the newest backup that passed a restore test and the last passed restore test's duration. The item's page shows both with a chart of its last 30 restore tests; passing a limit raises an alert. Also at `GET /api/sources/{id}/recovery`.
+- **Prometheus metrics** at `GET /metrics`, for any token or account that can read the dashboard.
+
+### Fixed
+
+- The storage size chart drew its bars as thin dashes; they now show the real sizes.
+
 ## [0.2.12] - 2026-11-08
 
 ### Fixed
