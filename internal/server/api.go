@@ -102,6 +102,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sources", s.auth("auditor", s.handleListSources))
 	mux.HandleFunc("POST /api/sources", s.auth("operator", s.handleSaveSource))
 	mux.HandleFunc("GET /api/sources/{id}", s.auth("auditor", s.handleGetSource))
+	mux.HandleFunc("GET /api/sources/{id}/recovery", s.auth("auditor", s.handleRecovery))
+	mux.HandleFunc("GET /metrics", s.auth("auditor", s.handleMetrics))
 	mux.HandleFunc("PUT /api/sources/{id}", s.auth("operator", s.handleSaveSource))
 	mux.HandleFunc("DELETE /api/sources/{id}", s.auth("admin", s.handleDeleteSource))
 	mux.HandleFunc("POST /api/sources/{id}/run", s.auth("operator", s.handleRunSource))
@@ -242,6 +244,7 @@ type SourceStatus struct {
 	LastDrill        *ProofRow `json:"lastDrill"`
 	LastPassingDrill *ProofRow `json:"lastPassingDrill"`
 	Running          *Job      `json:"running"`
+	Recovery         Recovery  `json:"recovery"`
 }
 
 func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int64]string) SourceStatus {
@@ -252,6 +255,7 @@ func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int
 	st.LastBackup = s.store.LastProof(src.ID, "backup", false)
 	st.LastDrill = s.store.LastProof(src.ID, "drill", false)
 	st.LastPassingDrill = s.store.LastProof(src.ID, "drill", true)
+	st.Recovery = s.sourceRecovery(src, time.Now())
 	for _, state := range []string{"running", "queued"} {
 		for _, kind := range []string{"backup", "drill", "check"} {
 			if j := s.store.LastJob(src.ID, kind, state); j != nil && st.Running == nil {

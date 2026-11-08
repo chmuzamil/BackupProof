@@ -389,6 +389,7 @@ const ALERT_WORDS = {
   'job-failed': 'Something failed', 'backup-overdue': 'Backup overdue', 'proof-stale': 'Restore test overdue',
   'agent-offline': 'Server offline', 'drill-failed': 'Restore test failed',
   'check-failed': 'Storage check failed', 'copy-failed': 'Copy to second storage failed',
+  'rpo-missed': 'Data-loss limit passed', 'rto-missed': 'Restore-time limit passed',
 };
 
 // --------------------------------------------------------------- widgets
@@ -1545,11 +1546,11 @@ async function pageRestore(id) {
 // ---------------------------------------------------------- item detail
 
 async function pageSource(id) {
-  let st, jobs, proofs, repos;
+  let st, jobs, proofs, repos, rec;
   try {
-    [st, jobs, proofs, repos] = await Promise.all([
+    [st, jobs, proofs, repos, rec] = await Promise.all([
       api(`/sources/${id}`), api(`/jobs?${qs({ source: id, limit: 50 })}`), api(`/proofs?${qs({ source: id, limit: 100 })}`),
-      api('/repositories').catch(() => []),
+      api('/repositories').catch(() => []), api(`/sources/${id}/recovery`).catch(() => null),
     ]);
   } catch (e) {
     if (e.status !== 404) throw e;
@@ -1661,7 +1662,7 @@ async function pageSource(id) {
       toast(copySel.value ? 'Second copy turned on. The newest backup is being copied now.' : 'Second copy turned off', 'ok');
       reload();
     }), 'sm')) : null);
-  return h('div', null, head, hero, h('div', { class: 'grid2' }, drillCard, backupCard), copyCard, jobsCard, proofsCard);
+  return h('div', null, head, hero, recoveryCard(id, st, rec), h('div', { class: 'grid2' }, drillCard, backupCard), copyCard, jobsCard, proofsCard);
 }
 
 async function showJobLog(box, sourceId, jobId, isImport) {
@@ -2219,13 +2220,74 @@ function sizeChart(stats) {
     rect.setAttribute('width', bw);
     rect.setAttribute('height', h);
     rect.setAttribute('rx', 2);
-    rect.setAttribute('class', x.ok ? 'bar' : 'bar bad');
+    rect.setAttribute('class', x.ok ? 'size' : 'size bad');
     const t = document.createElementNS(NS, 'title');
     t.textContent = `${day(x.time)}: ${bytes(x.bytes)}${x.ok ? '' : ' (problems found)'}`;
     rect.append(t);
     svg.append(rect);
   });
   return svg;
+}
+
+// restoreChart draws how long each restore test took, oldest first.
+function restoreChart(tests, limitMs) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const W = 640, H = 96, top = 6, n = tests.length;
+  const longest = Math.max(...tests.map((x) => x.restoreMs || 0), limitMs, 1);
+  const y = (ms) => H - Math.max(3, (ms / longest) * (H - top));
+  const slot = W / n, bw = Math.min(slot - 2, 36);
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'restore-chart');
+  svg.setAttribute('role', 'img');
+  const timed = tests.filter((x) => x.passed && x.restoreMs != null).map((x) => x.restoreMs);
+  svg.setAttribute('aria-label', `${plural(n, 'restore test')}${timed.length ? `, passed tests took from ${durWords(Math.min(...timed))} to ${durWords(Math.max(...timed))}` : ''}${tests.some((x) => !x.passed) ? `, ${plural(tests.filter((x) => !x.passed).length, 'failed test')}` : ''}`);
+  const el = (tag, attrs, parent) => {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    parent.append(e);
+    return e;
+  };
+  el('line', { x1: 0, x2: W, y1: H - 0.5, y2: H - 0.5, class: 'base' }, svg);
+  tests.forEach((x, i) => {
+    const g = el('g', {}, svg);
+    el('title', {}, g).textContent = `${absTime(x.time)}: ${x.passed ? 'passed' : 'failed'}${x.restoreMs != null ? `, took ${durWords(x.restoreMs)}` : ''}`;
+    const left = i * slot;
+    el('rect', { x: left, y: 0, width: slot, height: H, class: 'hit' }, g);
+    const top_ = y(x.restoreMs || 0);
+    el('rect', { x: left + (slot - bw) / 2, y: top_, width: bw, height: H - top_, rx: 3, class: x.passed ? 'test' : 'test bad' }, g);
+  });
+  if (limitMs) el('line', { x1: 0, x2: W, y1: y(limitMs), y2: y(limitMs), class: 'limit' }, svg);
+  return svg;
+}
+
+function goalPill(state, limit) {
+  if (state === 'unknown') return h('span', { class: 'pill' }, 'Unknown until a restore test passes');
+  const w = { met: ['ok', 'Within'], near: ['warn', 'Close to'], missed: ['bad', 'Over'] }[state];
+  return w ? h('span', { class: 'pill ' + w[0] }, `${w[1]} your limit of ${limit}`) : null;
+}
+
+// recoveryCard: how much could be lost and how long a restore takes, measured
+// from passed restore tests.
+function recoveryCard(id, st, rec) {
+  const src = st.source, backup = st.lastBackup, bp = pred(backup);
+  const r = rec || st.recovery || {};
+  const tests = [...(r.history || [])].reverse();
+  const limitMs = (src.rtoTargetMinutes || 0) * 60000;
+  const newer = backup && backup.passed !== false && bp.time && r.verifiedPoint && toDate(bp.time) > toDate(r.verifiedPoint);
+  const noLimits = !src.rpoTargetHours && !src.rtoTargetMinutes;
+  return card('Recovery goals',
+    h('dl', { class: 'kv' },
+      h('dt', null, 'Newest proven backup'),
+      h('dd', null, r.verifiedPoint ? [timeEl(r.verifiedPoint), ' '] : 'None yet: a backup counts once a restore test passes. ', goalPill(r.rpoState, plural(src.rpoTargetHours || 0, 'hour'))),
+      newer ? [h('dt', null, 'Newest backup'), h('dd', null, timeEl(bp.time), ' (not restore-tested yet)')] : null,
+      h('dt', null, 'Last restore took'),
+      h('dd', null, r.restoreMs != null ? [durWords(r.restoreMs), ' '] : 'Not measured yet ', goalPill(r.rtoState, plural(src.rtoTargetMinutes || 0, 'minute')))),
+    tests.length ? h('div', { class: 'restore-trend' },
+      restoreChart(tests, limitMs),
+      h('div', { class: 'restore-axis muted small' }, h('span', null, day(tests[0].time)), h('span', null, day(tests[tests.length - 1].time))),
+      h('p', { class: 'muted small' }, `How long each of the last ${plural(tests.length, 'restore test')} took, checks included.${tests.some((x) => !x.passed) ? ' Red bars failed.' : ''}${limitMs ? ' The dashed line is your limit.' : ''}`)) : null,
+    noLimits && canOperate() ? h('p', { class: 'hint' }, 'To be alerted when these slip, ', h('a', { href: `#/sources/${id}/edit` }, 'set your limits'), '.') : null);
 }
 
 function healthLine(stats) {
@@ -3304,6 +3366,8 @@ async function pageSourceForm(id) {
     backupCron: input({ name: 'backup-schedule', code: true, value: src.backupCron, required: true }),
     drillCron: input({ name: 'drill-schedule', code: true, value: src.drillCron, required: true }),
     maxAge: input({ name: 'max-age', type: 'number', inputmode: 'numeric', min: 1, value: src.proofMaxAgeHours || 192 }),
+    rpo: input({ name: 'rpo-hours', type: 'number', inputmode: 'numeric', min: 0, value: src.rpoTargetHours || '' }),
+    rto: input({ name: 'rto-minutes', type: 'number', inputmode: 'numeric', min: 0, value: src.rtoTargetMinutes || '' }),
     enabled: checkbox('Active (backups and restore tests run on schedule)', src.enabled !== false),
     keepLast: input({ type: 'number', min: 0, value: ret.keepLast || '' }),
     keepDaily: input({ type: 'number', min: 0, value: ret.keepDaily || '' }),
@@ -3402,6 +3466,8 @@ async function pageSourceForm(id) {
         backupCron: f.backupCron.value.trim(),
         drillCron: f.drillCron.value.trim(),
         proofMaxAgeHours: num(f.maxAge.value),
+        rpoTargetHours: num(f.rpo.value),
+        rtoTargetMinutes: num(f.rto.value),
         enabled: f.enabled.cb.checked,
         retention: {
           ...ret,
@@ -3430,6 +3496,9 @@ async function pageSourceForm(id) {
       h('div', null, field('Back up', f.backupCron, 'A cron expression, “@every 6h”, or “manual”.'), cronHint(f.backupCron), presets(f.backupCron, BACKUP_PRESETS)),
       h('div', null, field('Test a restore', f.drillCron, 'When to restore into a safe place and check it.'), cronHint(f.drillCron), presets(f.drillCron, DRILL_PRESETS))),
     h('div', { class: 'row' }, field('Warn if no passed restore test for (hours)', f.maxAge, 'After this long, the item shows “Needs attention”.')),
+    h('div', { class: 'row' },
+      field('Most data you could lose (hours)', f.rpo, 'Alerts when the newest backup that passed a restore test is older than this, so restore tests must run at least this often. Empty means no limit.'),
+      field('Longest a restore may take (minutes)', f.rto, 'Alerts when the last passed restore test took longer. Empty means no limit.')),
     f.enabled.el),
   h('fieldset', null, h('legend', null, 'Keep old copies'),
     h('div', { class: 'row' }, field('Last', f.keepLast), field('Daily', f.keepDaily), field('Weekly', f.keepWeekly),

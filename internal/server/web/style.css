@@ -808,9 +808,18 @@ details.more.channel[open] > summary { margin-bottom: 6px; }
 .size-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .size-now { font: 700 22px/1.1 var(--display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .size-chart { width: 160px; height: 44px; flex: 0 1 160px; }
-.size-chart .bar { fill: color-mix(in srgb, var(--accent) 55%, transparent); }
-.size-chart .bar:last-of-type { fill: var(--accent); }
-.size-chart .bar.bad { fill: var(--bad); }
+.size-chart .size { fill: color-mix(in srgb, var(--accent) 55%, transparent); }
+.size-chart .size:last-of-type { fill: var(--accent); }
+.size-chart .size.bad { fill: var(--bad); }
+.restore-trend { margin-top: 12px; }
+.restore-chart { display: block; width: 100%; height: auto; }
+.restore-chart .base { stroke: var(--border-strong); }
+.restore-chart .limit { stroke: var(--text); stroke-width: 1.5; stroke-dasharray: 6 4; pointer-events: none; }
+.restore-chart .hit { fill: transparent; }
+.restore-chart .test { fill: var(--accent); }
+.restore-chart .test.bad { fill: var(--bad); }
+.restore-chart g:hover .hit { fill: var(--surface-2); }
+.restore-axis { display: flex; justify-content: space-between; margin-top: 4px; }
 
 /* per-server speed limits and time window */
 .limits { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }

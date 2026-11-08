@@ -103,6 +103,7 @@ var alertWords = map[string]string{
 	"backup-failed": "backup failed", "drill-failed": "restore test failed", "job-failed": "job failed",
 	"check-failed": "storage check failed", "copy-failed": "copy to second storage failed",
 	"backup-overdue": "backup overdue", "proof-stale": "restore test overdue", "agent-offline": "server offline",
+	"rpo-missed": "data-loss limit passed", "rto-missed": "restore-time limit passed",
 }
 
 func (s *Server) alert(kind string, sourceID, agentID *int64, msg string) {

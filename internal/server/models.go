@@ -148,10 +148,13 @@ type Source struct {
 	DrillCron        string           `json:"drillCron"`
 	Retention        retention.Policy `json:"retention"`
 	ProofMaxAgeHours int              `json:"proofMaxAgeHours"`
-	Enabled          bool             `json:"enabled"`
-	NextBackup       *time.Time       `json:"nextBackup,omitempty"`
-	NextDrill        *time.Time       `json:"nextDrill,omitempty"`
-	Created          string           `json:"created"`
+	// RPOTargetHours and RTOTargetMinutes are optional limits (0 = none).
+	RPOTargetHours   int        `json:"rpoTargetHours,omitempty"`
+	RTOTargetMinutes int        `json:"rtoTargetMinutes,omitempty"`
+	Enabled          bool       `json:"enabled"`
+	NextBackup       *time.Time `json:"nextBackup,omitempty"`
+	NextDrill        *time.Time `json:"nextDrill,omitempty"`
+	Created          string     `json:"created"`
 }
 
 type SourceSecret struct {
@@ -206,6 +209,9 @@ func (s *Store) SaveSource(src *Source, sec *SourceSecret) (int64, error) {
 	if _, err := ParseSchedule(src.DrillCron); err != nil {
 		return 0, fmt.Errorf("drill schedule: %w", err)
 	}
+	if err := validateTargets(src); err != nil {
+		return 0, err
+	}
 	if src.ProofMaxAgeHours <= 0 {
 		src.ProofMaxAgeHours = 192
 	}
@@ -229,15 +235,15 @@ func (s *Store) SaveSource(src *Source, sec *SourceSecret) (int64, error) {
 		}
 	}
 	if src.ID == 0 {
-		res, err := s.db.Exec(`INSERT INTO sources(name,agent_id,verifier_id,repo_id,spec,secret,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,created)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, src.Name, src.AgentID, src.VerifierID, src.RepoID, string(spec), ct, src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled, now())
+		res, err := s.db.Exec(`INSERT INTO sources(name,agent_id,verifier_id,repo_id,spec,secret,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,created,rpo_target_hours,rto_target_minutes)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, src.Name, src.AgentID, src.VerifierID, src.RepoID, string(spec), ct, src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled, now(), src.RPOTargetHours, src.RTOTargetMinutes)
 		if err != nil {
 			return 0, err
 		}
 		return res.LastInsertId()
 	}
-	q := `UPDATE sources SET agent_id=?,verifier_id=?,repo_id=?,spec=?,backup_cron=?,drill_cron=?,retention=?,proof_max_age_hours=?,enabled=?,next_backup=NULL,next_drill=NULL`
-	args := []any{src.AgentID, src.VerifierID, src.RepoID, string(spec), src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled}
+	q := `UPDATE sources SET agent_id=?,verifier_id=?,repo_id=?,spec=?,backup_cron=?,drill_cron=?,retention=?,proof_max_age_hours=?,enabled=?,rpo_target_hours=?,rto_target_minutes=?,next_backup=NULL,next_drill=NULL`
+	args := []any{src.AgentID, src.VerifierID, src.RepoID, string(spec), src.BackupCron, src.DrillCron, string(ret), src.ProofMaxAgeHours, src.Enabled, src.RPOTargetHours, src.RTOTargetMinutes}
 	if ct != nil {
 		q += ",secret=?"
 		args = append(args, ct)
@@ -246,14 +252,14 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, src.Name, src.AgentID, src.VerifierID, src.Rep
 	return src.ID, err
 }
 
-const sourceCols = "id,name,agent_id,verifier_id,repo_id,spec,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,next_backup,next_drill,created,copy_repo_id"
+const sourceCols = "id,name,agent_id,verifier_id,repo_id,spec,backup_cron,drill_cron,retention,proof_max_age_hours,enabled,next_backup,next_drill,created,copy_repo_id,rpo_target_hours,rto_target_minutes"
 
 func scanSource(row interface{ Scan(...any) error }) (*Source, error) {
 	var src Source
 	var spec, ret string
 	var verifier, copyRepo sql.NullInt64
 	var nb, nd sql.NullString
-	if err := row.Scan(&src.ID, &src.Name, &src.AgentID, &verifier, &src.RepoID, &spec, &src.BackupCron, &src.DrillCron, &ret, &src.ProofMaxAgeHours, &src.Enabled, &nb, &nd, &src.Created, &copyRepo); err != nil {
+	if err := row.Scan(&src.ID, &src.Name, &src.AgentID, &verifier, &src.RepoID, &spec, &src.BackupCron, &src.DrillCron, &ret, &src.ProofMaxAgeHours, &src.Enabled, &nb, &nd, &src.Created, &copyRepo, &src.RPOTargetHours, &src.RTOTargetMinutes); err != nil {
 		return nil, err
 	}
 	if verifier.Valid {

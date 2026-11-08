@@ -117,6 +117,9 @@ func (s *Server) tick(now time.Time) {
 	s.heartbeat()
 }
 
+// agentOfflineAfter is how long a server can stay silent before it counts as offline.
+const agentOfflineAfter = 10 * time.Minute
+
 // watchdog is the dead-man's switch: it alerts on what did NOT happen —
 // overdue backups, stale proofs and silent agents — which job-level failure
 // alerts can never catch.
@@ -125,6 +128,7 @@ func (s *Server) watchdog(now time.Time, sources []Source) {
 		if !src.Enabled {
 			continue
 		}
+		s.watchRecovery(src, now)
 		id := src.ID
 		sched, err := ParseSchedule(src.BackupCron)
 		if err != nil || src.BackupCron == "manual" {
@@ -165,7 +169,7 @@ func (s *Server) watchdog(now time.Time, sources []Source) {
 		if a.Revoked {
 			continue
 		}
-		if a.LastSeen != nil && now.Sub(*a.LastSeen) > 10*time.Minute {
+		if a.LastSeen != nil && now.Sub(*a.LastSeen) > agentOfflineAfter {
 			s.alert("agent-offline", nil, &aid, fmt.Sprintf("The server '%s' hasn't been in touch since %s. Is it switched on?", a.Name, a.LastSeen.Local().Format("Jan 2, 15:04")))
 		} else {
 			s.resolve("agent-offline", nil, &aid)
