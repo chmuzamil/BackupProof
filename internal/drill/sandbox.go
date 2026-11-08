@@ -31,20 +31,50 @@ type SandboxOptions struct {
 	CPUs       string // e.g. "2"
 	ExtraArgs  []string
 	Entrypoint []string // optional command args after the image
+	Name       string   // container name (default: generated)
+	Network    string   // default "none"
+}
+
+// dockerCmd runs the Docker CLI. maxOut limits how much stdout is kept
+// (0 means all of it). The tests replace it.
+var dockerCmd = func(ctx context.Context, maxOut int, args ...string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &capWriter{buf: &out, max: maxOut}, &capWriter{buf: &errb, max: 64 << 10}
+	err := cmd.Run()
+	return out.String(), errb.String(), err
+}
+
+// capWriter keeps at most max bytes (all of them if max is 0) and discards the
+// rest, so a container can't fill this process's memory through its output.
+type capWriter struct {
+	buf *bytes.Buffer
+	max int
+}
+
+func (c *capWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if c.max > 0 {
+		p = p[:min(n, max(c.max-c.buf.Len(), 0))]
+	}
+	c.buf.Write(p)
+	return n, nil
+}
+
+func dockerError(args []string, err error, stderr string) error {
+	msg := strings.TrimSpace(stderr)
+	if len(msg) > 800 {
+		msg = "…" + msg[len(msg)-800:]
+	}
+	return fmt.Errorf("docker %s: %v: %s", args[0], err, msg)
 }
 
 func docker(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(errb.String())
-		if len(msg) > 800 {
-			msg = "…" + msg[len(msg)-800:]
-		}
-		return out.String(), fmt.Errorf("docker %s: %v: %s", args[0], err, msg)
+	out, stderr, err := dockerCmd(ctx, 0, args...)
+	if err != nil {
+		return out, dockerError(args, err, stderr)
 	}
-	return out.String(), nil
+	return out, nil
 }
 
 // DockerAvailable reports whether a usable container runtime exists.
@@ -59,10 +89,21 @@ func DockerAvailable(ctx context.Context) bool {
 // start as root to prepare the data folder, then switch to the database's user.
 var sandboxCaps = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
 
-func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
+func randomHex() string {
 	rb := make([]byte, 6)
 	rand.Read(rb)
-	name := "bp-drill-" + hex.EncodeToString(rb)
+	return hex.EncodeToString(rb)
+}
+
+func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
+	name := o.Name
+	if name == "" {
+		name = "bp-drill-" + randomHex()
+	}
+	network := o.Network
+	if network == "" {
+		network = "none"
+	}
 	if o.Memory == "" {
 		o.Memory = "2g"
 	}
@@ -77,7 +118,7 @@ func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
 	}
 	args := []string{"run", "-d", "--name", name,
 		"--label", "backupproof.drill=1",
-		"--network", "none",
+		"--network", network,
 		"--memory", o.Memory, "--cpus", o.CPUs, "--pids-limit", "512",
 		"--security-opt", "no-new-privileges",
 		"--cap-drop", "ALL",
