@@ -29,6 +29,8 @@ type FetchOptions struct {
 	// KeepGoing returns each chunk's error to its reader instead of stopping
 	// everything at the first failure (health checks count bad chunks).
 	KeepGoing bool
+	// Log receives a line when GetPatiently waits for a chunk.
+	Log Logger
 }
 
 // appendWants lists a file's chunks, guessing each one's size as the file's
@@ -89,6 +91,34 @@ func ReadChunk(ctx context.Context, r *repo.Repo, id bpcrypto.ID) ([]byte, error
 	return data, chunkError(ctx, id, nil, err)
 }
 
+// UnreadablePauses are the waits before reading again a chunk storage
+// failed to hand over after all its attempts (transfer.Attempts): about
+// three more minutes for the storage service to recover.
+var UnreadablePauses = []time.Duration{30 * time.Second, 60 * time.Second, 90 * time.Second}
+
+// GetPatiently is Get, except that a chunk storage couldn't hand over is
+// read again after each of UnreadablePauses before giving up.
+func (f *Fetcher) GetPatiently(ctx context.Context, id bpcrypto.ID) ([]byte, error) {
+	data, err := f.Get(ctx, id)
+	for i, pause := range UnreadablePauses {
+		if err == nil || !errors.Is(err, ErrUnreadable) {
+			return data, err
+		}
+		if f.log != nil {
+			f.log("chunk %s couldn't be read from storage; trying it again in %s (%d of %d)", id.Short(), pause, i+1, len(UnreadablePauses))
+		}
+		t := time.NewTimer(pause)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, ctx.Err()
+		case <-t.C:
+		}
+		data, err = ReadChunk(ctx, f.r, id)
+	}
+	return data, err
+}
+
 // defaultHint is the guessed size of a chunk whose size isn't known.
 const defaultHint = 1 << 20
 
@@ -112,6 +142,7 @@ type Fetcher struct {
 	wants []Want
 	seq   bool
 	keep  bool
+	log   Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -145,7 +176,7 @@ type fetched struct {
 func NewFetcher(ctx context.Context, r *repo.Repo, wants []Want, opts FetchOptions) *Fetcher {
 	s := transfer.SettingsFrom(ctx)
 	ctx, cancel := context.WithCancel(ctx)
-	f := &Fetcher{r: r, wants: wants, seq: s.Sequential(), keep: opts.KeepGoing, ctx: ctx, cancel: cancel,
+	f := &Fetcher{r: r, wants: wants, seq: s.Sequential(), keep: opts.KeepGoing, log: opts.Log, ctx: ctx, cancel: cancel,
 		cap: s.Inflight(), items: make([]*fetched, len(wants)), pending: map[bpcrypto.ID]*fetched{}}
 	f.cond = sync.NewCond(&f.mu)
 	f.ctrl = transfer.NewController(s, opts.MaxConcurrency)
@@ -243,7 +274,9 @@ func (f *Fetcher) finish(it *fetched, data []byte, err error) {
 	}
 	it.reserved = int64(len(data))
 	it.data, it.err = data, err
-	if err != nil && !f.keep && f.err == nil && !errors.Is(err, context.Canceled) {
+	// A chunk storage couldn't hand over doesn't stop the others: its reader
+	// may try it again (GetPatiently). Anything else stops everything.
+	if err != nil && !f.keep && f.err == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrUnreadable) {
 		f.err = err
 		f.cancel()
 	}

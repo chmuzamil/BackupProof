@@ -243,11 +243,12 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var pred struct {
-		Source     string `json:"source"`
-		SnapshotID string `json:"snapshotId"`
-		RepoID     string `json:"repoId"`
-		Passed     *bool  `json:"passed"`
-		RTOMs      *int64 `json:"rtoMs"`
+		Source     string        `json:"source"`
+		SnapshotID string        `json:"snapshotId"`
+		RepoID     string        `json:"repoId"`
+		Passed     *bool         `json:"passed"`
+		RTOMs      *int64        `json:"rtoMs"`
+		Checks     []proof.Check `json:"checks"`
 	}
 	if err := json.Unmarshal(st.Predicate, &pred); err != nil {
 		writeErr(w, 400, fmt.Errorf("attestation predicate: %w", err))
@@ -308,7 +309,14 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		if passed {
 			s.resolve("drill-failed", &sid, nil)
 		} else {
-			s.alert("drill-failed", &sid, nil, fmt.Sprintf("%s: the restore test FAILED. The backup may not be usable.", src.Name))
+			if storageOnlyFailure(pred.Checks) {
+				// Storage wouldn't hand data over: nothing was found wrong with
+				// the backup, so say so and try again soon.
+				s.alert("drill-failed", &sid, nil, fmt.Sprintf("%s: the restore test couldn't read part of the backup from storage (the storage service kept returning errors). Nothing was found damaged; it runs again within the hour.", src.Name))
+				s.retryDrillSoon(src)
+			} else {
+				s.alert("drill-failed", &sid, nil, fmt.Sprintf("%s: the restore test FAILED. The backup may not be usable.", src.Name))
+			}
 		}
 	}
 	writeJSON(w, 200, entry)

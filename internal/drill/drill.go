@@ -7,6 +7,7 @@ package drill
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -38,6 +39,9 @@ type Result struct {
 	Checks        []proof.Check
 	Passed        bool
 	RestoreDir    string
+	// StorageUnreadable: the restore stopped only because storage wouldn't
+	// hand some data over, even after retrying; nothing was found damaged.
+	StorageUnreadable bool
 	// Duration is measured on the monotonic clock (wall-clock timestamps
 	// can be too coarse for fast restores).
 	Duration time.Duration
@@ -88,6 +92,7 @@ func Run(ctx context.Context, rp *repo.Repo, s snapshot.WithID, spec source.Spec
 	restored := r.check("restore-from-storage", func() (string, error) {
 		rr, err := engine.Restore(ctx, rp, s.Snapshot, dir, engine.RestoreOptions{Log: opts.Log})
 		res.RestoredBytes = rr.Bytes
+		res.StorageUnreadable = errors.Is(err, engine.ErrUnreadable)
 		return fmt.Sprintf("%d files, %d bytes, every chunk authenticated and every file hash verified", rr.Files, rr.Bytes), err
 	})
 	if restored {

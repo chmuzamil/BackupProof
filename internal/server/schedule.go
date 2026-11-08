@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/chmuzamil/backupproof/internal/engine"
 	"github.com/chmuzamil/backupproof/internal/errreport"
+	"github.com/chmuzamil/backupproof/internal/proof"
 )
 
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
@@ -194,6 +197,35 @@ func failKind(jobKind string) string {
 		return "drill-failed"
 	}
 	return "job-failed"
+}
+
+// storageOnlyFailure reports a restore test that failed only because the
+// storage service wouldn't hand data over: the restore check failed with
+// engine.ErrUnreadable and no other check failed.
+func storageOnlyFailure(checks []proof.Check) bool {
+	unreadable := false
+	for _, c := range checks {
+		switch {
+		case c.Passed:
+		case c.Name == "restore-from-storage" && strings.Contains(c.Detail, engine.ErrUnreadable.Error()):
+			unreadable = true
+		default:
+			return false
+		}
+	}
+	return unreadable
+}
+
+// retryDrillSoon brings the item's next restore test forward to within the
+// hour, after one that storage errors kept from finishing.
+func (s *Server) retryDrillSoon(src *Source) {
+	next := time.Now().Add(time.Hour)
+	if src.NextDrill != nil && src.NextDrill.Before(next) {
+		return
+	}
+	if err := s.store.SetNextDrill(src.ID, next); err != nil {
+		s.log.Printf("restore test of %s: rescheduling: %v", src.Name, err)
+	}
 }
 
 // jobOutcome raises or closes the alert for a finished job.

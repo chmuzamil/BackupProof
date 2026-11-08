@@ -345,6 +345,12 @@ func (s *Store) SetNextRuns(id int64, nextBackup, nextDrill time.Time) error {
 	return err
 }
 
+// SetNextDrill moves only the item's next restore test.
+func (s *Store) SetNextDrill(id int64, next time.Time) error {
+	_, err := s.db.Exec("UPDATE sources SET next_drill=? WHERE id=?", next.UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
 // --- jobs ----------------------------------------------------------------
 
 type Job struct {

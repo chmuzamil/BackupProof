@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.11-0a7bbb" alt="version v0.2.11"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.12-0a7bbb" alt="version v0.2.12"></a>
   <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>
@@ -304,6 +304,15 @@ Off unless you set `BP_SENTRY_DSN`, and BackupProof contains no DSN of its own, 
 ### Transfers
 
 Backups, restores, restore tests, second copies, zip downloads and health checks move chunks in parallel. The number of requests at once starts at 8 and adapts between 4 and 32: it grows while throughput rises and halves when the storage service throttles (429, 503, SlowDown) or latency doubles. Chunk data waiting in memory is capped (64 MiB by default). Failed requests are retried with jittered backoff, honouring `Retry-After`. Speed limits apply to all transfers of a server together. Health checks use at most 4 at once. Every chunk is still verified as before; only the speed changes. Per server, both settings are under **Servers → Change speed limits and time window → Advanced**.
+
+### When the storage service has a bad moment
+
+Cloud storage sometimes refuses a request for a while (HTTP 500 or 503). BackupProof keeps that apart from damaged data:
+
+- Each request is tried up to 6 times over 15–30 seconds, and every retry is written to the job log.
+- A chunk still refused after that is read again after 30, 60 and 90 seconds while the rest of the restore carries on.
+- Only a failed authentication or content-hash check counts as **damaged**. Data the service still won't hand over is reported as **couldn't be read**: a restore test or health check that stops for that reason says *nothing was found damaged* and runs again within the hour, instead of warning that the backup may be unusable.
+- Each failure has its own alert, closed only when the same kind of job succeeds again.
 
 ## Security model
 

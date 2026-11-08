@@ -240,6 +240,9 @@ func DrillAttested(ctx context.Context, e *Env, spec source.Spec, ref, expectedR
 	if err != nil {
 		return res, rec, err
 	}
+	if !res.Passed && res.StorageUnreadable {
+		return res, rec, errors.New("the restore test couldn't read part of the backup from storage, even after retrying for several minutes; nothing was found damaged")
+	}
 	if !res.Passed {
 		return res, rec, errors.New("restore drill FAILED — see checks")
 	}

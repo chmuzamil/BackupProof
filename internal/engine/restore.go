@@ -105,7 +105,7 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 		}
 		wants = appendWants(wants, e)
 	}
-	pf := NewFetcher(ctx, r, wants, FetchOptions{})
+	pf := NewFetcher(ctx, r, wants, FetchOptions{Log: opts.Log})
 	defer pf.Close()
 	var waited atomic.Int64 // time spent waiting for chunks from storage
 
@@ -256,7 +256,7 @@ func restoreFile(ctx context.Context, pf *Fetcher, waited *atomic.Int64, root *o
 			return err
 		}
 		getStart := time.Now()
-		data, err := pf.Get(ctx, id)
+		data, err := pf.GetPatiently(ctx, id)
 		waited.Add(int64(time.Since(getStart)))
 		if err != nil {
 			f.Close()

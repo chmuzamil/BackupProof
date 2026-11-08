@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"os"
@@ -552,5 +553,60 @@ func TestCheckSeparatesUnreadableFromDamaged(t *testing.T) {
 	res = check()
 	if res.CorruptBlobs != 1 || res.UnreadableBlobs != 0 || res.OnlyUnreadable() {
 		t.Fatalf("damaged chunk: %+v", res)
+	}
+}
+
+// A restore waits for a chunk storage keeps refusing: one that comes back
+// after a pause is restored; one that never does fails the restore as
+// unreadable (not damaged), without stopping the other downloads early.
+func TestRestoreWaitsForUnreadableChunk(t *testing.T) {
+	fastRetries(t)
+	oldPauses := UnreadablePauses
+	UnreadablePauses = []time.Duration{time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { UnreadablePauses = oldPauses })
+	fs := newFakeStore(t)
+	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, want := testSnapshot(t, r)
+	entries, _ := snapshot.ReadManifest(context.Background(), r, s)
+	var key string
+	for _, e := range entries {
+		if e.Path == "files/big.bin" {
+			id, _ := bpcrypto.ParseID(e.Chunks[len(e.Chunks)/2])
+			key = repo.DataKey(id)
+		}
+	}
+	ctx := withSettings(transfer.Settings{Concurrency: 8})
+	var lines []string
+	var mu sync.Mutex
+	logf := func(f string, a ...any) { mu.Lock(); lines = append(lines, fmt.Sprintf(f, a...)); mu.Unlock() }
+
+	// Refused for one full round of attempts, then back.
+	fs.mu.Lock()
+	fs.busy[key] = transfer.Attempts
+	fs.mu.Unlock()
+	dir := t.TempDir()
+	if _, err := Restore(ctx, r, s, dir, RestoreOptions{Log: logf}); err != nil {
+		t.Fatalf("restore after storage recovered: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "files", "big.bin")); !bytes.Equal(got, want["files/big.bin"]) {
+		t.Fatal("restored file differs")
+	}
+	mu.Lock()
+	waitedLine := strings.Contains(strings.Join(lines, "\n"), "couldn't be read from storage; trying it again")
+	mu.Unlock()
+	if !waitedLine {
+		t.Errorf("the wait isn't in the log: %q", lines)
+	}
+
+	// Refused for good.
+	fs.mu.Lock()
+	fs.busy[key] = 1 << 30
+	fs.mu.Unlock()
+	_, err = Restore(ctx, r, s, t.TempDir(), RestoreOptions{Log: logf})
+	if !errors.Is(err, ErrUnreadable) || errors.Is(err, ErrCorrupt) {
+		t.Fatalf("lasting refusal: %v, want ErrUnreadable", err)
 	}
 }

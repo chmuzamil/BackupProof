@@ -90,7 +90,7 @@ func CopySnapshot(ctx context.Context, src, dst *repo.Repo, id bpcrypto.ID, expe
 			}
 		}
 	}
-	pf := NewFetcher(ctx, src, need, FetchOptions{})
+	pf := NewFetcher(ctx, src, need, FetchOptions{Log: log})
 	defer pf.Close()
 	up := NewUploader(ctx)
 	defer up.Close()
@@ -116,7 +116,7 @@ func CopySnapshot(ctx context.Context, src, dst *repo.Repo, id bpcrypto.ID, expe
 				if err != nil {
 					return snapshot.WithID{}, st, err
 				}
-				data, err := pf.Get(ctx, sid)
+				data, err := pf.GetPatiently(ctx, sid)
 				if err != nil {
 					return snapshot.WithID{}, st, fmt.Errorf("%s: %w", e.Path, err)
 				}

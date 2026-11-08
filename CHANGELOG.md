@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-11-08
+
+### Fixed
+
+- **Restore tests wait for storage that refuses a chunk.** After a chunk's 6 attempts, a restore (and a copy to a second storage) reads it again after 30, 60 and 90 seconds while the other downloads carry on, instead of stopping at once. Found on 8 November, when Backblaze B2 returned HTTP 500 and 503 for one chunk for about 25 seconds and the weekly restore test of rasikh-recovery failed.
+- **A restore test stopped only by storage errors says so.** Its alert reads "couldn't read part of the backup from storage … Nothing was found damaged; it runs again within the hour", and the restore test runs again within the hour. Any other failure still warns that the backup may not be usable.
+
 ## [0.2.11] - 2026-11-08
 
 ### Security
