@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **App restore test.** Optionally start the restored app after a restore test passes and check that it responds: container running, HTTP status, expected text and response time, recorded as `app-*` checks in the signed proof. You name the image; nothing from the backup is run, including restored Compose files. Restored data is read-only (writable paths get a throwaway copy), there's no network or published port, secrets are referenced from the server running the test and never stored, and containers are always removed. Set it under **Edit (advanced)**, administrators only. Older agents ignore the setting.
+- **App test templates** for WordPress in Docker and any web app. They fill in the form for you to review, can't give an app more access or hold secrets, and are recorded by name and version in the proof. Docker apps found on a server suggest a template.
+- **Recovery plan** for each server, to print or download ahead of time: what to restore in what order, the newest tested backup, the storage and recovery kit needed, dashboard and command-line steps, what a person must confirm, known gaps, and what to do if the dashboard is lost. It holds no secrets.
+
+### Fixed
+
+- **Edit (advanced) on a Docker item** no longer turns it into a Folders item on save.
+
 ## [0.2.14] - 2026-11-09
 
 ### Security
