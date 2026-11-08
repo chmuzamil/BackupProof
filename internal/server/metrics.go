@@ -141,6 +141,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		testOK     = gauge("last_restore_test_success", "1 if the last restore test passed.")
 		point      = gauge("verified_recovery_point_timestamp_seconds", "When the newest backup that passed a restore test was taken.")
 		restore    = gauge("last_restore_duration_seconds", "How long the last passed restore test took, checks included.")
+		copyTest   = gauge("last_copy_restore_test_timestamp_seconds", "When the second copy was last restore-tested.")
+		copyTestOK = gauge("last_copy_restore_test_success", "1 if the last restore test of the second copy passed.")
 		rpo        = gauge("rpo_target_seconds", "The item's data-loss limit, if set.")
 		rto        = gauge("rto_target_seconds", "The item's restore-time limit, if set.")
 		tests      = &metric{name: prefix + "restore_tests_total", kind: "counter", help: "Restore tests recorded, by result."}
@@ -166,6 +168,10 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		if t, ok := proofUnix(st.LastDrill); ok {
 			test.add(t, name...)
 			testOK.add(boolValue(st.LastDrill.Passed), name...)
+		}
+		if t, ok := proofUnix(st.LastCopyTest); ok {
+			copyTest.add(t, name...)
+			copyTestOK.add(boolValue(st.LastCopyTest.Passed), name...)
 		}
 		if st.Recovery.VerifiedPoint != nil {
 			point.add(unixSeconds(*st.Recovery.VerifiedPoint), name...)
@@ -214,7 +220,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	var b strings.Builder
-	for _, m := range []*metric{build, enabled, status, backup, test, testOK, point, restore, rpo, rto, tests, agentUp, agentSeen, repoBytes, openAlerts} {
+	for _, m := range []*metric{build, enabled, status, backup, test, testOK, copyTest, copyTestOK, point, restore, rpo, rto, tests, agentUp, agentSeen, repoBytes, openAlerts} {
 		m.write(&b)
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

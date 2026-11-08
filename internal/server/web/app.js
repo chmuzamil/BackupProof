@@ -263,7 +263,7 @@ const STATUS = {
   failing: { cls: 'bad', label: 'Problem', help: 'The last backup or restore test failed.' },
 };
 
-const JOB_WORDS = { backup: 'Backup', drill: 'Restore test', check: 'Storage health check', maintain: 'Cleanup', copy: 'Copy to second storage', restore: 'Restore', 'restore-db': 'Database restore' };
+const JOB_WORDS = { backup: 'Backup', drill: 'Restore test', check: 'Storage health check', maintain: 'Cleanup', copy: 'Copy to second storage', 'copy-drill': 'Restore test of second copy', restore: 'Restore', 'restore-db': 'Database restore' };
 function jobWord(kind, isImport) { return kind === 'backup' && isImport ? 'Conversion' : JOB_WORDS[kind] || kind; }
 const STATE_WORDS = { queued: 'Waiting', running: 'Running', succeeded: 'Done ✓', failed: 'Failed' };
 
@@ -390,6 +390,7 @@ const ALERT_WORDS = {
   'agent-offline': 'Server offline', 'drill-failed': 'Restore test failed',
   'check-failed': 'Storage check failed', 'copy-failed': 'Copy to second storage failed',
   'rpo-missed': 'Data-loss limit passed', 'rto-missed': 'Restore-time limit passed',
+  'copy-drill-failed': 'Restore test of second copy failed',
 };
 
 // --------------------------------------------------------------- widgets
@@ -1216,7 +1217,7 @@ function runButtons(id, running, after, withCheck, isImport, name) {
 
 function runningLine(j, isImport) {
   if (!j) return null;
-  const what = j.kind === 'drill' ? 'Testing the restore' : j.kind === 'check' ? 'Checking storage health' : isImport ? 'Converting' : 'Backing up';
+  const what = j.kind === 'drill' ? 'Testing the restore' : j.kind === 'copy-drill' ? 'Testing the second copy' : j.kind === 'check' ? 'Checking storage health' : isImport ? 'Converting' : 'Backing up';
   return h('div', { class: 'running', role: 'status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), j.state === 'queued' ? `${what} — waiting for the server to start…` : `${what} now…`);
 }
 
@@ -1234,7 +1235,7 @@ function proofTapes(proofs) {
   const seen = new Map(); // sourceId → [{ drill, backup }] per day, newest proof wins
   for (const p of proofs || []) { // newest first
     const d = toDate(p.created);
-    if (!p.sourceId || !d || d < start) continue;
+    if (!p.sourceId || !d || d < start || p.kind === 'copy-drill') continue; // the tape is about the main backups
     const i = Math.round((dayStart(d) - start) / 864e5);
     if (i < 0 || i >= TAPE_DAYS) continue;
     let days = seen.get(p.sourceId);
@@ -1437,25 +1438,27 @@ async function pageRestore(id) {
     // ---- databases
     const k = src.spec.kind, sqlite = k === 'sqlite';
     const orig = sqlite ? (src.spec.paths || [''])[0] : src.spec.database;
+    // WordPress and container items may only learn the database's name at backup time.
+    const origWords = orig || 'the original database', confirmWord = orig || src.name;
     const defName = sqlite ? orig.replace(/(\.[^./\\]+)?$/, `.restored-${yyyymmdd()}$1`) : `${orig || 'db'}_restored_${yyyymmdd()}`;
     const mode = { v: 'new' };
     const target = input({ name: 'db-target', code: true, value: defName, autocomplete: 'off' });
-    const confirmName = input({ name: 'confirm-name', code: true, autocomplete: 'off', placeholder: orig + '…' });
+    const confirmName = input({ name: 'confirm-name', code: true, autocomplete: 'off', placeholder: confirmWord + '…' });
     const replaceBox = h('div', { hidden: true }, h('div', { class: 'banner warn' }, sqlite
       ? 'The database file is replaced with the backup. Stop the app that uses it first, or it may keep writing to the old file.'
       : 'Tables in the backup replace the tables in the original database. Anything changed since this backup is lost.'),
-    field(`Type “${orig}” to confirm`, confirmName));
+    field(`Type “${confirmWord}” to confirm`, confirmName));
     const newBox = h('div', null, field(sqlite ? 'New database file' : 'New database name', target, sqlite ? 'A full path on the server. The original file isn’t touched.' : 'Created on the same database server. The original isn’t touched.'));
     const modes = choices([
       { value: 'new', title: sqlite ? 'Restore to a new file' : 'Restore into a new database', desc: 'Safe: check the data before using it.', badge: 'recommended', badgeCls: 'ok' },
-      { value: 'replace', title: 'Replace the original', desc: sqlite ? 'Overwrites ' + orig + '.' : 'Overwrites the tables in ' + orig + '.' },
+      { value: 'replace', title: 'Replace the original', desc: sqlite ? 'Overwrites ' + origWords + '.' : 'Overwrites the tables in ' + origWords + '.' },
     ], { value: 'new', small: true, label: 'How to restore', onPick: (v) => { mode.v = v; newBox.hidden = v !== 'new'; replaceBox.hidden = v !== 'replace'; } });
     const err = errBox();
     const go = btn('Restore the database', busy(async () => {
       err.textContent = '';
       const body = { snapshotId: R.snap };
       if (mode.v === 'replace') {
-        if (confirmName.value.trim() !== orig) return fieldError(confirmName, `Type “${orig}” exactly to confirm.`);
+        if (confirmName.value.trim() !== confirmWord) return fieldError(confirmName, `Type “${confirmWord}” exactly to confirm.`);
         body.dbReplace = true;
       } else {
         if (!target.value.trim()) return fieldError(target, 'Enter a name.');
@@ -1465,7 +1468,7 @@ async function pageRestore(id) {
       fill(out, restoreProgress(res.jobId, 'Restoring the database'));
     }, 'Starting…'), 'primary');
     const dumpLink = () => `/api/sources/${id}/download?` + qs({ snapshot: R.snap, path: rp.dumpPath });
-    const dl = h('a', { class: 'btn', href: dumpLink(), onclick: (e) => { e.currentTarget.href = dumpLink(); } }, 'Download the backup file');
+    const dl = rp.dumpPath ? h('a', { class: 'btn', href: dumpLink(), onclick: (e) => { e.currentTarget.href = dumpLink(); } }, 'Download the backup file') : null;
     return h('div', null, head,
       card('1. Choose a backup', pointList),
       card('2. Restore', modes, newBox, replaceBox, err, h('div', { class: 'form-actions start' }, go, dl), out));
@@ -1652,10 +1655,13 @@ async function pageSource(id) {
   // Second copy (3-2-1): another storage that gets a copy of every backup.
   const lastCopy = (proofs || []).find((p) => p.kind === 'copy' && p.passed);
   const copyRepo = src.copyRepoId ? (repos || []).find((r) => r.id === src.copyRepoId) : null;
+  const copyTest = st.lastCopyTest;
   const copySel = select([['', 'No second copy'], ...(repos || []).filter((r) => r.id !== src.repoId).map((r) => [String(r.id), r.name])], src.copyRepoId ? String(src.copyRepoId) : '', { name: 'copy-storage', 'aria-label': 'Second storage' });
   const copyCard = h('section', { class: 'card' }, cardHead('Second copy'),
     h('p', { class: 'muted small' }, 'Keep a copy of every backup in another storage, ideally somewhere else entirely, such as a different cloud. Each copy gets its own signed proof.'),
     copyRepo ? h('p', null, 'Copies go to ', h('strong', null, copyRepo.name), '. ', lastCopy ? ['Last copied ', timeEl(lastCopy.created), '.'] : h('span', { class: 'muted' }, 'Not copied yet.')) : null,
+    copyRepo ? h('p', null, copyTest ? [h('span', { class: copyTest.passed ? 'fact-ok' : 'fact-bad' }, copyTest.passed ? 'Restore test passed ' : 'Restore test failed '), timeEl(copyTest.created), copyTest.rtoMs != null ? ` · took ${durWords(copyTest.rtoMs)}` : '', '.'] : h('span', { class: 'muted' }, 'This copy hasn’t been restore-tested yet.'), ' ', h('span', { class: 'muted small' }, 'Tested every 30 days, because each test downloads the whole backup.')) : null,
+    copyRepo && (lastCopy || copyTest) && canOperate() ? h('div', { class: 'form-actions start' }, btn('Test this copy', busy(() => runJob(id, 'copy-drill', after, isImp), 'Starting…'), 'sm')) : null,
     isAdmin() && !(repos || []).some((r) => r.id !== src.repoId) ? h('p', { class: 'hint' }, 'To keep a second copy, first ', h('a', { href: '#/storage/new' }, 'add another storage'), ', for example a different cloud provider.') : null,
     isAdmin() && (repos || []).some((r) => r.id !== src.repoId) ? h('div', { class: 'form-actions start' }, copySel, btn('Save', busy(async () => {
       await put(`/sources/${id}/copy`, { repoId: copySel.value ? Number(copySel.value) : null });
@@ -1701,7 +1707,7 @@ async function showJobLog(box, sourceId, jobId, isImport) {
 
 function proofRow(p, headers, withSource) {
   const rto = p.rtoMs != null ? p.rtoMs : null;
-  const what = p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind === 'copy' ? 'Copy in second storage' : p.kind;
+  const what = p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind === 'copy' ? 'Copy in second storage' : p.kind === 'copy-drill' ? 'Restore test of second copy' : p.kind;
   const ctx = `${what} proof${p.sourceName ? ' for ' + p.sourceName : ''}, ${absTime(p.created)}`;
   const cells = [
     timeEl(p.created),
@@ -1720,7 +1726,7 @@ function hostOf(u) { try { return new URL(u).host; } catch { return u || ''; } }
 async function viewProof(id) {
   const p = await api(`/proofs/${id}`);
   const env = p.envelope || {};
-  const what = p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind === 'copy' ? 'Copy in second storage' : p.kind;
+  const what = p.kind === 'drill' ? 'Restore test' : p.kind === 'backup' ? 'Backup' : p.kind === 'copy' ? 'Copy in second storage' : p.kind === 'copy-drill' ? 'Restore test of second copy' : p.kind;
   modal(`Proof: ${what}`, h('div', null,
     h('p', { class: 'muted small' }, 'A tamper-proof record that this really happened. Anyone with the public keys can check it, even without this dashboard.'),
     h('dl', { class: 'kv' },

@@ -165,6 +165,11 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 			return nil, err
 		}
 	}
+	if job.Kind == copyDrillKind {
+		if err := s.copyDrillLease(job, src, lease); err != nil {
+			return nil, err
+		}
+	}
 	if job.Kind == "check" {
 		if rid := s.checkRepo(job.ID, src); rid != src.RepoID {
 			repo, sec, err := s.store.Repository(rid)
@@ -255,7 +260,11 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wantType := map[string]string{"backup": proof.PredicateBackup, "drill": proof.PredicateDrill, "copy": proof.PredicateCopy}[req.Kind]
-	if st.PredicateType != wantType || req.Kind != job.Kind {
+	agentKind := job.Kind
+	if job.Kind == copyDrillKind {
+		agentKind = "drill" // agents run these as ordinary restore tests
+	}
+	if st.PredicateType != wantType || req.Kind != agentKind {
 		writeErr(w, 400, errors.New("attestation kind does not match job"))
 		return
 	}
@@ -291,13 +300,22 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		}
 		repoRow = *src.CopyRepoID
 	}
+	recordKind := req.Kind
+	if job.Kind == copyDrillKind {
+		p, err := s.checkCopyDrill(job, st, req.SnapshotID)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		repoRow, recordKind = p.RepoID, copyDrillKind
+	}
 	if err := s.store.SetRepoID(repoRow, pred.RepoID); err != nil {
 		s.log.Printf("repository #%d: could not record repository ID: %v", repoRow, err)
 	}
 	sid := src.ID
-	row := &ProofRow{Kind: req.Kind, SourceID: &sid, SourceName: src.Name, SnapshotID: req.SnapshotID, Passed: passed,
+	row := &ProofRow{Kind: recordKind, SourceID: &sid, SourceName: src.Name, SnapshotID: req.SnapshotID, Passed: passed,
 		RTOMs: pred.RTOMs, Envelope: req.Envelope, Timestamp: req.Timestamp, Signer: a.Name + " (" + pk.KeyID + ")"}
-	entry, err := s.store.AppendLedger(req.Kind, req.SnapshotID, req.Envelope.Digest(), src.Name, func(tx *sql.Tx, e proof.LedgerEntry) error {
+	entry, err := s.store.AppendLedger(recordKind, req.SnapshotID, req.Envelope.Digest(), src.Name, func(tx *sql.Tx, e proof.LedgerEntry) error {
 		row.LedgerSeq = e.Seq
 		return insertProof(tx, row)
 	})
@@ -305,7 +323,9 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	if req.Kind == "drill" {
+	if job.Kind == copyDrillKind {
+		s.copyDrillOutcome(src, passed, pred.Checks)
+	} else if req.Kind == "drill" {
 		if passed {
 			s.resolve("drill-failed", &sid, nil)
 		} else {
@@ -394,6 +414,11 @@ func (s *Server) attestedSnapshot(sourceID int64) (string, string, error) {
 	if last == nil {
 		return "", "", errors.New("there is no verified backup to restore-test yet")
 	}
+	return s.proofRoot(last)
+}
+
+// proofRoot returns a proof's snapshot and the content root it commits to.
+func (s *Server) proofRoot(last *ProofRow) (string, string, error) {
 	p, err := s.store.Proof(last.ID)
 	if err != nil {
 		return "", "", err
@@ -404,7 +429,7 @@ func (s *Server) attestedSnapshot(sourceID int64) (string, string, error) {
 	}
 	root := st.Subject[0].Digest["blake3"]
 	if root == "" {
-		return "", "", errors.New("backup proof has no content root")
+		return "", "", errors.New("the proof has no content root")
 	}
 	return p.SnapshotID, root, nil
 }

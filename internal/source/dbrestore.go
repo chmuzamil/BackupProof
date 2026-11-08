@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -44,6 +45,33 @@ func DumpPath(s Spec) (string, error) {
 		return "sqlite/" + filepath.Base(s.Paths[0]), nil
 	}
 	return "", fmt.Errorf("%s items aren't databases", s.Kind)
+}
+
+// ForRestore fills in what a database item leaves to the backup to work out:
+// the database's name, from the dump in the backup (the wp-config or container
+// that named it may have changed since), and the login, read on this machine
+// as a backup does. It returns the completed spec and the dump's path.
+func ForRestore(ctx context.Context, s Spec, backedUp []string) (Spec, string, error) {
+	if s.Kind == "postgres" || s.Kind == "mysql" {
+		if s.Database == "" {
+			ext := map[string]string{"postgres": ".dump", "mysql": ".sql"}[s.Kind]
+			var dumps []string
+			for _, p := range backedUp {
+				if path.Dir(p) == s.Kind && path.Ext(p) == ext {
+					dumps = append(dumps, p)
+				}
+			}
+			if len(dumps) != 1 {
+				return s, "", fmt.Errorf("expected one database dump in this backup, found %d", len(dumps))
+			}
+			s.Database = strings.TrimSuffix(path.Base(dumps[0]), ext)
+		}
+		if err := resolveCredentials(ctx, &s); err != nil {
+			return s, "", fmt.Errorf("couldn't read the database login on this server: %w. If the app's files are part of what was lost, put them back first", err)
+		}
+	}
+	dump, err := DumpPath(s)
+	return s, dump, err
 }
 
 // RestoreDatabase loads the dump file into target (a new database name), or

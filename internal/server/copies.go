@@ -96,6 +96,10 @@ func (s *Server) handleSetCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(s.actor(r), "set-copy", fmt.Sprintf("item %q: second copy in %s", src.Name, what))
+	// A new storage has its own first copy to test.
+	if err := s.store.SetSetting(copyTestKey(src.ID), ""); err != nil {
+		s.log.Printf("%s: resetting the copy test: %v", src.Name, err)
+	}
 	// Copy the newest backup straight away, so the second copy exists now.
 	if req.RepoID != nil {
 		if last := s.store.LastProof(src.ID, "backup", true); last != nil && last.SnapshotID != "" {

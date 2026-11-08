@@ -67,6 +67,36 @@ func AppMount(src string) bool {
 	return true
 }
 
+// noPutBack are places a container might mount that a put-back still never
+// writes: files there would let a tampered backup run code or log in here.
+var noPutBack = []string{"/etc/cron.d", "/etc/cron.hourly", "/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.monthly", "/etc/crontab",
+	"/etc/sudoers", "/etc/sudoers.d", "/etc/ssh", "/etc/passwd", "/etc/shadow", "/etc/group", "/etc/gshadow", "/etc/pam.d",
+	"/etc/systemd", "/etc/init.d", "/etc/profile", "/etc/profile.d", "/etc/ld.so.preload", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
+	"/var/spool/cron"}
+
+var shellStartup = map[string]bool{".bashrc": true, ".bash_profile": true, ".bash_login": true, ".profile": true, ".zshrc": true, ".zshenv": true}
+
+// PutBackAllowed reports whether a restore may write a mounted folder's file
+// to p. The paths come from the backup, so what backing up allowed is checked
+// again here.
+func PutBackAllowed(p string) bool {
+	if !AppMount(p) {
+		return false
+	}
+	p = path.Clean(p)
+	for _, s := range noPutBack {
+		if p == s || strings.HasPrefix(p, s+"/") {
+			return false
+		}
+	}
+	for _, part := range strings.Split(p, "/") {
+		if part == ".ssh" {
+			return false
+		}
+	}
+	return !shellStartup[path.Base(p)]
+}
+
 // topLevel drops paths that are inside another path in the list.
 func topLevel(paths []string) []string {
 	var out []string

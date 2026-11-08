@@ -113,6 +113,7 @@ func (s *Server) tick(now time.Time) {
 	}
 	s.watchdog(now, sources)
 	s.scheduleChecks(now, sources)
+	s.scheduleCopyTests(now, sources)
 	s.maybeSendWeeklyReport(now)
 	s.heartbeat()
 }
@@ -185,7 +186,7 @@ func since(last, created, now time.Time) string {
 }
 
 func plainKind(k string) string {
-	return map[string]string{"backup": "backup", "drill": "restore test", "check": "storage check", "copy": "copy to the second storage"}[k]
+	return map[string]string{"backup": "backup", "drill": "restore test", "check": "storage check", "copy": "copy to the second storage", copyDrillKind: "restore test of the second copy"}[k]
 }
 
 // failKind is the alert a failed job of this kind raises. Each kind has its
@@ -199,6 +200,8 @@ func failKind(jobKind string) string {
 		return "copy-failed"
 	case "drill":
 		return "drill-failed"
+	case copyDrillKind:
+		return "copy-drill-failed"
 	}
 	return "job-failed"
 }

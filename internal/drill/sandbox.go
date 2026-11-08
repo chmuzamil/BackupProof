@@ -55,6 +55,10 @@ func DockerAvailable(ctx context.Context) bool {
 	return err == nil
 }
 
+// sandboxCaps are what the official database images need: their entrypoints
+// start as root to prepare the data folder, then switch to the database's user.
+var sandboxCaps = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
+
 func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
 	rb := make([]byte, 6)
 	rand.Read(rb)
@@ -76,6 +80,10 @@ func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
 		"--network", "none",
 		"--memory", o.Memory, "--cpus", o.CPUs, "--pids-limit", "512",
 		"--security-opt", "no-new-privileges",
+		"--cap-drop", "ALL",
+	}
+	for _, c := range sandboxCaps {
+		args = append(args, "--cap-add", c)
 	}
 	if o.MountDir != "" {
 		args = append(args, "-v", o.MountDir+":/restore:ro")

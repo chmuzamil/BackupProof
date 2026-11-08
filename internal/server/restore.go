@@ -298,7 +298,12 @@ func (s *Server) handleRestorePoints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dump, _ := source.DumpPath(src.Spec)
-	writeJSON(w, 200, map[string]any{"points": pts, "database": dump != "", "dumpPath": dump})
+	database := dump != ""
+	// When the name is worked out at backup time, only the agent can find the file.
+	if (src.Spec.Kind == "postgres" || src.Spec.Kind == "mysql") && src.Spec.Database == "" {
+		dump = ""
+	}
+	writeJSON(w, 200, map[string]any{"points": pts, "database": database, "dumpPath": dump})
 }
 
 func (s *Server) handleBrowseBackup(w http.ResponseWriter, r *http.Request) {

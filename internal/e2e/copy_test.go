@@ -107,4 +107,61 @@ func TestSecondCopy(t *testing.T) {
 	if code := a.do("DELETE", fmt.Sprintf("/api/repositories/%d", second), nil, nil); code != http.StatusConflict {
 		t.Errorf("removing a storage used for copies: HTTP %d, want 409", code)
 	}
+
+	// The copy gets a restore test of its own, separate from the main ones.
+	type status struct {
+		Status       string
+		LastDrill    *struct{ ID int64 }
+		LastCopyTest *struct{ Passed bool }
+	}
+	runCopyTest := func() {
+		t.Helper()
+		if code := a.do("POST", fmt.Sprintf("/api/sources/%d/run", src.ID), map[string]string{"kind": "copy-drill"}, &r); code != 200 {
+			t.Fatalf("starting the copy test: HTTP %d", code)
+		}
+		if ran, _ := ag.PollOnce(ctx); !ran {
+			t.Fatal("the copy test did not run")
+		}
+	}
+	var before, after status
+	a.do("GET", fmt.Sprintf("/api/sources/%d", src.ID), nil, &before)
+	if before.LastCopyTest != nil {
+		t.Fatalf("copy tested before any test ran: %+v", before.LastCopyTest)
+	}
+	runCopyTest()
+	a.do("GET", fmt.Sprintf("/api/sources/%d", src.ID), nil, &after)
+	if after.LastCopyTest == nil || !after.LastCopyTest.Passed {
+		t.Fatalf("copy test: %+v", after.LastCopyTest)
+	}
+	if after.LastDrill == nil || after.LastDrill.ID != before.LastDrill.ID {
+		t.Errorf("the copy test counted as a main restore test: %+v then %+v", before.LastDrill, after.LastDrill)
+	}
+
+	// Damage in the second storage fails only the copy's test.
+	err = filepath.WalkDir(filepath.Join(dir, "offsite", "data"), func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		return os.WriteFile(path, []byte("damaged"), 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCopyTest()
+	a.do("GET", fmt.Sprintf("/api/sources/%d", src.ID), nil, &after)
+	if after.LastCopyTest == nil || after.LastCopyTest.Passed {
+		t.Errorf("a damaged copy passed its test: %+v", after.LastCopyTest)
+	}
+	if after.Status != before.Status {
+		t.Errorf("a damaged copy changed the item's status from %s to %s", before.Status, after.Status)
+	}
+	var alerts []struct{ Kind string }
+	a.do("GET", "/api/alerts?open=1", nil, &alerts)
+	open := map[string]bool{}
+	for _, al := range alerts {
+		open[al.Kind] = true
+	}
+	if !open["copy-drill-failed"] || open["drill-failed"] {
+		t.Errorf("open alerts after a damaged copy: %+v", alerts)
+	}
 }

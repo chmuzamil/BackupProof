@@ -117,8 +117,12 @@ func (a *Agent) runRestore(ctx context.Context, r *repo.Repo, lease *protocol.Le
 				if !ok || !included(e.Path, mounts) {
 					continue
 				}
-				if full := "/" + rel; engine.IsDenied(full, a.deny) {
+				full := "/" + rel
+				if engine.IsDenied(full, a.deny) {
 					return nil, fmt.Errorf("%s is part of the BackupProof server's own data and can't be overwritten; restore to a folder instead", full)
+				}
+				if !source.PutBackAllowed(full) {
+					return nil, fmt.Errorf("%s can't be put back because it could change how this machine runs; restore to a folder instead", full)
 				}
 				if top := mountRoot(e.Path, mounts); top != "" && !seenRoot[top] {
 					seenRoot[top] = true
@@ -269,12 +273,16 @@ func mountRoot(entryPath string, sel []string) string {
 }
 
 func (a *Agent) runRestoreDB(ctx context.Context, r *repo.Repo, lease *protocol.Lease, jl *jobLog) (any, error) {
-	s, _, err := loadAttested(ctx, r, lease)
+	s, entries, err := loadAttested(ctx, r, lease)
 	if err != nil {
 		return nil, err
 	}
 	p := lease.Restore
-	dump, err := source.DumpPath(lease.Source)
+	backedUp := make([]string, len(entries))
+	for i, e := range entries {
+		backedUp[i] = e.Path
+	}
+	spec, dump, err := source.ForRestore(ctx, lease.Source, backedUp)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +309,7 @@ func (a *Agent) runRestoreDB(ctx context.Context, r *repo.Repo, lease *protocol.
 	if _, err := os.Stat(file); err != nil {
 		return nil, fmt.Errorf("the backup has no %s", dump)
 	}
-	where, err := source.RestoreDatabase(ctx, lease.Source, file, p.DBTarget, p.DBReplace, jl.Logf)
+	where, err := source.RestoreDatabase(ctx, spec, file, p.DBTarget, p.DBReplace, jl.Logf)
 	if err != nil {
 		return nil, err
 	}

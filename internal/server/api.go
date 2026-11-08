@@ -245,6 +245,7 @@ type SourceStatus struct {
 	LastPassingDrill *ProofRow `json:"lastPassingDrill"`
 	Running          *Job      `json:"running"`
 	Recovery         Recovery  `json:"recovery"`
+	LastCopyTest     *ProofRow `json:"lastCopyTest,omitempty"`
 }
 
 func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int64]string) SourceStatus {
@@ -256,8 +257,11 @@ func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int
 	st.LastDrill = s.store.LastProof(src.ID, "drill", false)
 	st.LastPassingDrill = s.store.LastProof(src.ID, "drill", true)
 	st.Recovery = s.sourceRecovery(src, time.Now())
+	if src.CopyRepoID != nil {
+		st.LastCopyTest = s.store.LastProof(src.ID, copyDrillKind, false)
+	}
 	for _, state := range []string{"running", "queued"} {
-		for _, kind := range []string{"backup", "drill", "check"} {
+		for _, kind := range []string{"backup", "drill", "check", copyDrillKind} {
 			if j := s.store.LastJob(src.ID, kind, state); j != nil && st.Running == nil {
 				st.Running = j
 			}
@@ -493,13 +497,18 @@ func (s *Server) handleRunSource(w http.ResponseWriter, r *http.Request) {
 	agent := src.AgentID
 	switch req.Kind {
 	case "backup":
-	case "drill", "check":
+	case "drill", "check", copyDrillKind:
 		agent = src.DrillAgent()
 	default:
-		writeErr(w, 400, errors.New("kind must be backup, drill or check"))
+		writeErr(w, 400, errors.New("kind must be backup, drill, check or copy-drill"))
 		return
 	}
-	jobID, err := s.store.EnqueueJob(req.Kind, id, agent, "manual:"+s.actor(r))
+	var jobID int64
+	if req.Kind == copyDrillKind {
+		jobID, err = s.queueCopyDrill(src, "manual:"+s.actor(r), time.Now())
+	} else {
+		jobID, err = s.store.EnqueueJob(req.Kind, id, agent, "manual:"+s.actor(r))
+	}
 	if err != nil {
 		writeErr(w, 409, err)
 		return
