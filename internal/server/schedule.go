@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"strings"
@@ -221,6 +222,32 @@ func storageOnlyFailure(checks []proof.Check) bool {
 		}
 	}
 	return unreadable
+}
+
+// appOnlyFailure reports a restore test where the data restored and passed its
+// checks, and only starting the app failed. Those are the app-* checks, which
+// run after everything else has passed.
+func appOnlyFailure(checks []proof.Check) bool {
+	failed := false
+	for _, c := range checks {
+		if c.Passed {
+			continue
+		}
+		if !strings.HasPrefix(c.Name, "app-") {
+			return false
+		}
+		failed = true
+	}
+	return failed
+}
+
+// lastChecks reads the checks of a restore-test proof.
+func lastChecks(p *ProofRow) []proof.Check {
+	var pred struct {
+		Checks []proof.Check `json:"checks"`
+	}
+	_ = json.Unmarshal(p.Predicate, &pred)
+	return pred.Checks
 }
 
 // retryDrillSoon brings the item's next restore test forward to within the

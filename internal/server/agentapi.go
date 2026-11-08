@@ -334,6 +334,8 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 				// the backup, so say so and try again soon.
 				s.alert("drill-failed", &sid, nil, fmt.Sprintf("%s: the restore test couldn't read part of the backup from storage (the storage service kept returning errors). Nothing was found damaged; it runs again within the hour.", src.Name))
 				s.retryDrillSoon(src)
+			} else if appOnlyFailure(pred.Checks) {
+				s.alert("drill-failed", &sid, nil, fmt.Sprintf("%s: the data restored and passed its checks, but the app didn't come back up in the test.", src.Name))
 			} else {
 				s.alert("drill-failed", &sid, nil, fmt.Sprintf("%s: the restore test FAILED. The backup may not be usable.", src.Name))
 			}

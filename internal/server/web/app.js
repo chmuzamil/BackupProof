@@ -371,6 +371,12 @@ const CHECK_WORDS = [
   [/^sandbox$/, 'A safe test environment is available'],
   [/^(locate-dump|locate-database)$/, 'Found the database backup'],
   [/^custom-verify-command$/, 'Your custom check'],
+  [/^app-sandbox-start$/, 'Started the app in a safe, separate place'],
+  [/^app-running$/, 'The app stayed running'],
+  [/^app-database-running$/, 'The app’s database stayed running'],
+  [/^app-http-status$/, 'The app answered'],
+  [/^app-body-text$/, 'The app’s answer contains the expected text'],
+  [/^app-response-time$/, 'The app answered quickly enough'],
 ];
 
 function checkWords(name) {
@@ -1600,14 +1606,22 @@ async function pageSource(id) {
   hero.setAttribute('aria-label', 'Status');
 
   const checks = dp.checks || [];
+  const isApp = (c) => /^app-/.test(c.name || '');
+  const appResults = checks.filter(isApp), appTestOn = !!(src.spec && src.spec.drill && src.spec.drill.appTest);
+  const onlyAppFailed = drill && !drill.passed && appResults.some((c) => !c.passed) && checks.every((c) => c.passed || isApp(c));
+  const checkItem = (c) => h('li', null,
+    h('span', { class: 'ico ' + (c.passed ? 'ok' : 'bad') }, mark(c.passed)),
+    h('div', null, h('div', null, checkWords(c.name)), (!c.passed || c.name === 'database-dumps' || isApp(c)) && c.detail ? h('div', { class: 'detail' }, c.detail) : null),
+    h('span', { class: 'muted small' }, c.durationMs ? durWords(c.durationMs) : ''));
   const rootsMatch = dp.restoredRoot && dp.restoredRoot === dp.expectedRoot;
   const drillCard = card('What the last restore test checked', drill ? h('div', null,
     h('p', { class: 'muted' }, `The backup copy from ${day(dp.snapshotTime || drill.created)} was restored into a safe, separate place and checked. `,
-      drill.passed ? 'Everything passed.' : 'Something did not pass — see below.'),
-    checks.length ? h('ul', { class: 'checks' }, checks.map((c) => h('li', null,
-      h('span', { class: 'ico ' + (c.passed ? 'ok' : 'bad') }, mark(c.passed)),
-      h('div', null, h('div', null, checkWords(c.name)), (!c.passed || c.name === 'database-dumps') && c.detail ? h('div', { class: 'detail' }, c.detail) : null),
-      h('span', { class: 'muted small' }, c.durationMs ? durWords(c.durationMs) : '')))) : h('p', { class: 'muted' }, 'No checks were recorded.'),
+      drill.passed ? 'Everything passed.' : onlyAppFailed ? 'The data came back and passed its checks, but the app didn’t — see below.' : 'Something did not pass — see below.'),
+    checks.filter((c) => !isApp(c)).length ? h('ul', { class: 'checks' }, checks.filter((c) => !isApp(c)).map(checkItem)) : h('p', { class: 'muted' }, 'No checks were recorded.'),
+    appResults.length ? [h('h3', null, 'Starting the app'),
+      h('p', { class: 'muted small' }, 'Started on its own after the data passed: no outside network, no ports on the server, and nothing from the backup was run.'),
+      h('ul', { class: 'checks' }, appResults.map(checkItem))]
+      : appTestOn ? h('div', { class: 'banner warn' }, 'The app test is on, but this restore test didn’t run it. If the checks above passed and the server running the test is older than this dashboard, update that server. Otherwise it runs at the next restore test.') : null,
     tech(h('dl', { class: 'kv' },
       h('dt', null, 'Backup copy ID'), h('dd', null, h('code', { class: 'break' }, drill.snapshotId || '—')),
       h('dt', null, 'Restore time (RTO)'), h('dd', null, dur(rto)),
@@ -3335,6 +3349,110 @@ const KINDS = [['files', 'Folders & files'], ['postgres', 'PostgreSQL'], ['mysql
 const BACKUP_PRESETS = [['Every hour', '@hourly'], ['Every 6 hours', '@every 6h'], ['Every night', '0 2 * * *'], ['Every week', '0 3 * * 0']];
 const DRILL_PRESETS = [['Every day', '0 5 * * *'], ['Every week', '0 4 * * 0'], ['Every month', '0 4 1 * *']];
 
+// appTestSection is the part of the advanced form that starts the restored
+// app after a restore test. read() returns the settings, undefined when the
+// test is off, or false after showing an error on a field.
+function appTestSection(initial) {
+  const at = initial || {}, app = at.app || {}, db = at.database || {};
+  const mountsText = (ms) => (ms || []).map((m) => `${m.from} -> ${m.to}${m.writable ? ' writable' : ''}`).join('\n');
+  const envText = (es) => (es || []).map((e) => (e.secretEnv ? `${e.name}=$${e.secretEnv}` : `${e.name}=${e.value || ''}`)).join('\n');
+  const area = (name, value, placeholder) => h('textarea', { name, rows: 2, spellcheck: 'false', autocapitalize: 'off', placeholder }, value);
+  const on = checkbox('After a restore test passes, start the app and check that it responds', !!initial, 'Off unless you turn it on. Needs Docker on the server that runs the restore test.');
+  const f = {
+    image: input({ name: 'app-image', code: true, value: app.image || '', placeholder: 'wordpress:6-apache…', autocomplete: 'off' }),
+    port: input({ name: 'app-port', type: 'number', inputmode: 'numeric', min: 1, max: 65535, value: at.port || '', placeholder: '80…' }),
+    mounts: area('app-mounts', mountsText(app.mounts), 'docker/volumes/site_data -> /var/www/html…'),
+    tmpfs: area('app-tmpfs', (app.tmpfs || []).join('\n'), '/run/app…'),
+    env: area('app-env', envText(app.env), 'WORDPRESS_DB_HOST=127.0.0.1…'),
+    path: input({ name: 'app-path', code: true, value: at.path || '', placeholder: '/…' }),
+    status: input({ name: 'app-status', type: 'number', inputmode: 'numeric', min: 100, max: 599, value: at.expectStatus || '', placeholder: '200…' }),
+    host: input({ name: 'app-host', code: true, value: at.host || '', autocomplete: 'off', placeholder: 'www.example.com…' }),
+    text: input({ name: 'app-text', value: at.expectText || '', autocomplete: 'off' }),
+    maxMs: input({ name: 'app-max-ms', type: 'number', inputmode: 'numeric', min: 0, max: 60000, value: at.maxResponseMs || '' }),
+    start: input({ name: 'app-start', type: 'number', inputmode: 'numeric', min: 0, max: 900, value: at.startTimeoutSecs || '', placeholder: '120…' }),
+    dbImage: input({ name: 'app-db-image', code: true, value: db.image || '', placeholder: 'mariadb:11…', autocomplete: 'off' }),
+    dbMounts: area('app-db-mounts', mountsText(db.mounts), 'docker/volumes/db_data -> /var/lib/mysql writable…'),
+    dbTmpfs: area('app-db-tmpfs', (db.tmpfs || []).join('\n'), ''),
+    dbEnv: area('app-db-env', envText(db.env), ''),
+  };
+  let template = at.template ? { name: at.template, version: at.templateVersion } : null;
+  const parseMounts = (text) => {
+    const out = [];
+    for (const line of lines(text)) {
+      const m = /^(\S.*?)\s*->\s*(\S+?)(\s+writable)?$/.exec(line);
+      if (!m) return { out, bad: `Write each line as: path in the backup -> path in the container. “${line}” doesn’t fit.` };
+      out.push({ from: m[1], to: m[2], ...(m[3] ? { writable: true } : {}) });
+    }
+    return { out };
+  };
+  const parseEnv = (text) => {
+    const out = [];
+    for (const line of lines(text)) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+      if (!m) return { out, bad: `Write each line as NAME=value. “${line}” doesn’t fit.` };
+      const ref = /^\$(\S+)$/.exec(m[2]);
+      out.push(ref ? { name: m[1], secretEnv: ref[1] } : { name: m[1], value: m[2] });
+    }
+    return { out };
+  };
+  const collect = (mounts, env, dbMounts, dbEnv) => {
+    const out = {
+      ...(template ? { template: template.name, templateVersion: template.version } : {}),
+      app: { image: f.image.value.trim(), mounts, tmpfs: lines(f.tmpfs.value), env },
+      port: num(f.port.value), path: f.path.value.trim(), host: f.host.value.trim(), expectStatus: num(f.status.value),
+      expectText: f.text.value, maxResponseMs: num(f.maxMs.value), startTimeoutSecs: num(f.start.value),
+    };
+    if (f.dbImage.value.trim()) out.database = { image: f.dbImage.value.trim(), mounts: dbMounts, tmpfs: lines(f.dbTmpfs.value), env: dbEnv };
+    return out;
+  };
+  const read = () => {
+    if (!on.cb.checked) return undefined;
+    if (!f.image.value.trim()) return fieldError(f.image, 'Name the image to start.');
+    if (!num(f.port.value)) return fieldError(f.port, 'Give the port the app listens on inside its container.');
+    const parsed = [[f.mounts, parseMounts], [f.env, parseEnv], [f.dbMounts, parseMounts], [f.dbEnv, parseEnv]].map(([ctl, parse]) => ({ ctl, ...parse(ctl.value) }));
+    const wrong = parsed.find((p) => p.bad);
+    if (wrong) return fieldError(wrong.ctl, wrong.bad);
+    if (!parsed[0].out.length) return fieldError(f.mounts, 'Give the app at least one part of the backup.');
+    return collect(...parsed.map((p) => p.out));
+  };
+  const preview = h('div', { class: 'banner info' });
+  const mountWords = (m) => h('li', null, 'Gives it ', h('code', null, m.from), ' at ', h('code', null, m.to), m.writable ? ' as a throwaway copy it can change' : ', read-only');
+  const envWords = (e) => h('li', null, 'Sets ', h('code', null, e.name), e.secretEnv ? [' from ', h('code', null, e.secretEnv), ' on the server'] : '');
+  const renderPreview = () => {
+    const a = collect(parseMounts(f.mounts.value).out, parseEnv(f.env.value).out, parseMounts(f.dbMounts.value).out, parseEnv(f.dbEnv.value).out);
+    const want = a.expectStatus || 200;
+    fill(preview,
+      h('strong', null, 'What will run'),
+      h('ul', null,
+        a.app.image ? h('li', null, 'Starts ', h('code', null, a.app.image), ' with its own start command. Nothing from the backup is run, including any Compose files.') : h('li', null, 'Name an image to start.'),
+        a.app.mounts.map(mountWords), a.app.tmpfs.map((p) => h('li', null, 'Gives it an empty temporary folder at ', h('code', null, p))), a.app.env.map(envWords),
+        a.database ? [h('li', null, 'Starts ', h('code', null, a.database.image), ' beside it, reachable only by the app at 127.0.0.1'), a.database.mounts.map(mountWords), a.database.tmpfs.map((p) => h('li', null, 'Gives the database an empty temporary folder at ', h('code', null, p))), a.database.env.map(envWords)] : null,
+        h('li', null, 'No outside network and no ports on the server. No extra privileges, and each container is limited to 2 GB of memory and 2 CPUs.'),
+        h('li', null, `Asks for ${a.path || '/'} on port ${a.port || '?'} from inside the test. Passes on status ${want}${a.expectText ? `, the text “${a.expectText}”` : ''}${a.maxResponseMs ? ` and an answer within ${a.maxResponseMs} ms` : ''}, within ${a.startTimeoutSecs || 120} seconds.`),
+        template ? h('li', null, `Based on the ${template.name} template, version ${template.version}.`) : null));
+  };
+  const body = h('div', null,
+    h('div', { class: 'row' }, field('Image to start', f.image, 'Started as the restored app. You choose it; it is never taken from the backup.'), field('Port inside the container', f.port)),
+    field('Parts of the backup to give the app', f.mounts, 'One per line: path in the backup -> path in the container. Read-only; add “writable” for a throwaway copy the app can change.'),
+    h('div', { class: 'row' },
+      field('Empty temporary folders', f.tmpfs, 'One path inside the container per line.'),
+      field('Settings', f.env, 'NAME=value, one per line. Never write a password here: use NAME=$BP_APPTEST_SOMETHING and set that variable on the server that runs the test.')),
+    h('h3', null, 'What to check'),
+    h('div', { class: 'row' }, field('Address to ask for', f.path), field('Expected status', f.status), field('Host name to send', f.host, 'Optional, for apps that only answer to their own name.')),
+    h('div', { class: 'row' }, field('Text the answer must contain', f.text, 'Optional. Searched for in the first 1 MB.'), field('Slowest allowed answer (ms)', f.maxMs, 'Optional.'), field('Time to start up (seconds)', f.start)),
+    details('A database beside the app',
+      h('div', { class: 'row' }, field('Database image', f.dbImage, 'The same version as your server. The app reaches it at 127.0.0.1.')),
+      field('Parts of the backup to give it', f.dbMounts, 'Database files need “writable”, so they get a throwaway copy.'),
+      h('div', { class: 'row' }, field('Empty temporary folders', f.dbTmpfs), field('Settings', f.dbEnv))),
+    preview);
+  const sync = () => { body.classList.toggle('hidden', !on.cb.checked); renderPreview(); };
+  on.cb.addEventListener('change', sync);
+  body.addEventListener('input', renderPreview);
+  sync();
+  const el = h('div', null, h('h3', null, 'Start the app'), on.el, body);
+  return { el, read, fill: (fn) => { fn({ on, f, setTemplate: (t) => { template = t; }, mountsText, envText }); sync(); } };
+}
+
 async function pageSourceForm(id) {
   if (!canOperate()) return h('div', { class: 'banner warn' }, 'Your account can only view.');
   const [agents, repos, existing] = await Promise.all([
@@ -3346,7 +3464,7 @@ async function pageSourceForm(id) {
   };
   const sp = src.spec || {}, dr = sp.drill || {}, ret = src.retention || {};
   const liveAgents = agentOrder((agents || []).filter((a) => !a.revoked));
-  const kinds = sp.kind === 'import' ? [...KINDS, ['import', 'Imported backups']] : KINDS;
+  const kinds = sp.kind === 'import' ? [...KINDS, ['import', 'Imported backups']] : sp.kind === 'docker' ? [...KINDS, ['docker', 'Docker app or volumes']] : KINDS;
 
   const f = {
     name: input({ name: 'name', value: src.name, required: true, disabled: !!id, autocomplete: 'off' }),
@@ -3405,6 +3523,7 @@ async function pageSourceForm(id) {
   (dr.assertions || []).forEach(addAssert);
 
   const isDb = (k) => ['postgres', 'mysql', 'mongodb'].includes(k);
+  const appTest = appTestSection(dr.appTest);
   const kindBox = h('div');
   const addBtn = btn('+ Add check', () => addAssert().focus(), 'sm');
   const assertFs = h('div', null, h('h3', null, 'Your own database checks'),
@@ -3424,6 +3543,7 @@ async function pageSourceForm(id) {
       k === 'import' ? h('div', { class: 'banner info' }, `Imported from ${sp.import ? sp.import.format : 'another tool'} at ${sp.import ? repoUrl(sp.import.storage) : '—'}. To import from a different place, use Import.`) : null,
     ]);
     assertFs.classList.toggle('hidden', !(isDb(k) || k === 'sqlite') || k === 'mongodb');
+    appTest.el.classList.toggle('hidden', !['files', 'docker', 'import'].includes(k));
   };
   f.kind.addEventListener('change', renderKind);
 
@@ -3462,6 +3582,11 @@ async function pageSourceForm(id) {
         rowCountTolerance: num(f.tolerance.value),
         skipDumps: !f.testDumps.cb.checked,
       };
+      if (isAdmin()) { // only administrators choose what an app test starts
+        const at = ['files', 'docker', 'import'].includes(k) ? appTest.read() : undefined;
+        if (at === false) return;
+        if (at) spec.drill.appTest = at; else delete spec.drill.appTest;
+      }
       const body = {
         ...(id ? { id } : {}),
         name: spec.name,
@@ -3515,7 +3640,8 @@ async function pageSourceForm(id) {
     field('Files that must be present', f.expectPaths, 'One per line.'),
     h('div', { class: 'row' }, field('Test environment image', f.image), field('Your own check command', f.drillCommand)),
     f.testDumps.el,
-    assertFs),
+    assertFs,
+    isAdmin() ? appTest.el : null),
   err,
   h('div', { class: 'form-actions' },
     h('a', { class: 'btn', href: id ? `#/sources/${id}` : '#/protect' }, 'Cancel'),

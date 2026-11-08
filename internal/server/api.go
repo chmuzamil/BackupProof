@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -271,6 +272,8 @@ func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int
 	lastOK := s.store.LastJob(src.ID, "backup", "succeeded")
 	maxAge := time.Duration(src.ProofMaxAgeHours) * time.Hour
 	switch {
+	case st.LastDrill != nil && !st.LastDrill.Passed && appOnlyFailure(lastChecks(st.LastDrill)):
+		st.Status, st.Reason = "failing", "The data restored and passed its checks, but the app didn't come back up in the test. Open it to see what went wrong."
 	case st.LastDrill != nil && !st.LastDrill.Passed:
 		st.Status, st.Reason = "failing", "The last restore test failed, so this backup may not be usable. Open it to see what went wrong."
 	case lastFailed != nil && (lastOK == nil || lastFailed.ID > lastOK.ID):
@@ -955,7 +958,7 @@ func plural(n int, unit string) string {
 
 // operatorMayChange enforces what non-admin users may configure. Anything
 // that runs commands on a server (hooks, command sources, custom restore
-// checks), moves an item to a different server (which would hand that
+// checks, the image an app test starts), moves an item to a different server (which would hand that
 // server the item's secrets), or reads arbitrary local paths through rclone
 // can turn "set up backups" into control of the server, so it is admin-only.
 // Values that are unchanged from what an admin already saved are allowed.
@@ -979,6 +982,9 @@ func operatorMayChange(old *Source, src *Source) error {
 	}
 	if n.Drill.Command != o.Drill.Command {
 		return deny("custom restore-test commands")
+	}
+	if !reflect.DeepEqual(n.Drill.AppTest, o.Drill.AppTest) {
+		return deny("which app a restore test starts")
 	}
 	if old != nil {
 		if src.AgentID != old.AgentID {
