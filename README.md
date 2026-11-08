@@ -61,13 +61,13 @@ The dashboard machine is protected straight away by its built-in agent ("This se
 **Linux / macOS** (installs a service and prints the address and a one-time setup code):
 
 ```bash
-curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh
+curl -fsSL https://backupproof.dev/install.sh | sudo sh
 ```
 
 **Windows** (PowerShell as Administrator):
 
 ```powershell
-irm https://github.com/chmuzamil/BackupProof/releases/latest/download/install.ps1 | iex
+irm https://backupproof.dev/install.ps1 | iex
 ```
 
 **Docker:**
@@ -89,7 +89,7 @@ Put the dashboard behind HTTPS before servers connect to it over the internet: t
 2. Run the installer with `--domain`. On Linux it sets up HTTPS for you: it uses nginx (with a free Let's Encrypt certificate from certbot) or Caddy if one is installed, and installs Caddy if neither is. The dashboard then only listens on `127.0.0.1`, and its public address is set to `https://backup.example.com`.
 
    ```bash
-   curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh -s -- --domain backup.example.com --email you@example.com
+   curl -fsSL https://backupproof.dev/install.sh | sudo sh -s -- --domain backup.example.com --email you@example.com
    ```
 
 3. Open `https://backup.example.com` and create the admin account with the setup code.
@@ -97,7 +97,7 @@ Put the dashboard behind HTTPS before servers connect to it over the internet: t
 Already have HTTPS in front of it (your own proxy, a load balancer or a tunnel)? Set the address yourself instead, and keep the dashboard local:
 
 ```bash
-curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh -s -- --public-url https://backup.example.com --listen 127.0.0.1:8420
+curl -fsSL https://backupproof.dev/install.sh | sudo sh -s -- --public-url https://backup.example.com --listen 127.0.0.1:8420
 ```
 
 You can also change the address later under **Settings**. Options always go after `sh -s --`: `curl … | sudo sh --public-url …` fails with `Illegal option`.

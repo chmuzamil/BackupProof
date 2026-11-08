@@ -23,13 +23,13 @@ Copy one line and paste it into a terminal on the machine that will run the dash
 **Linux or Mac** (open Terminal):
 
 ```bash
-curl -fsSL https://github.com/chmuzamil/BackupProof/releases/latest/download/install.sh | sudo sh
+curl -fsSL https://backupproof.dev/install.sh | sudo sh
 ```
 
 **Windows** (right-click Start → **Terminal (Admin)**):
 
 ```powershell
-irm https://github.com/chmuzamil/BackupProof/releases/latest/download/install.ps1 | iex
+irm https://backupproof.dev/install.ps1 | iex
 ```
 
 When it finishes, it shows two things:
