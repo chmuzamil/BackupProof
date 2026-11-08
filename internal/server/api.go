@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chmuzamil/backupproof/internal/backend"
+	"github.com/chmuzamil/backupproof/internal/discover"
 	"github.com/chmuzamil/backupproof/internal/engine"
 	"github.com/chmuzamil/backupproof/internal/errreport"
 	"github.com/chmuzamil/backupproof/internal/proof"
@@ -100,6 +101,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/dashboard", s.auth("auditor", s.handleDashboard))
 
+	mux.HandleFunc("GET /api/app-templates", s.auth("operator", s.handleAppTemplates))
 	mux.HandleFunc("GET /api/sources", s.auth("auditor", s.handleListSources))
 	mux.HandleFunc("POST /api/sources", s.auth("operator", s.handleSaveSource))
 	mux.HandleFunc("GET /api/sources/{id}", s.auth("auditor", s.handleGetSource))
@@ -424,6 +426,10 @@ func (s *Server) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, _, err := s.store.Repository(src.RepoID); err != nil {
 		writeErr(w, 400, err)
+		return
+	}
+	if at := src.Spec.Drill.AppTest; at != nil && at.Template != "" && !discover.KnownTemplate(at.Template, at.TemplateVersion) {
+		writeErr(w, 400, errors.New("the app test names a template this dashboard doesn't have"))
 		return
 	}
 	// Secrets arriving in the spec are moved to the encrypted secret column.
@@ -934,6 +940,12 @@ func (s *Server) handlePutServerSettings(w http.ResponseWriter, r *http.Request)
 	}
 	s.audit(s.actor(r), "update-public-url", u)
 	writeJSON(w, 200, map[string]any{"ok": true, "publicUrl": s.publicURL()})
+}
+
+// handleAppTemplates lists the built-in app-test templates, so the form can
+// show exactly what each one fills in.
+func (s *Server) handleAppTemplates(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, discover.Templates())
 }
 
 // humanDur renders durations the way people say them.

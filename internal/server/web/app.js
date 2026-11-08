@@ -3352,7 +3352,7 @@ const DRILL_PRESETS = [['Every day', '0 5 * * *'], ['Every week', '0 4 * * 0'], 
 // appTestSection is the part of the advanced form that starts the restored
 // app after a restore test. read() returns the settings, undefined when the
 // test is off, or false after showing an error on a field.
-function appTestSection(initial) {
+function appTestSection(initial, templates, hint, expectPaths) {
   const at = initial || {}, app = at.app || {}, db = at.database || {};
   const mountsText = (ms) => (ms || []).map((m) => `${m.from} -> ${m.to}${m.writable ? ' writable' : ''}`).join('\n');
   const envText = (es) => (es || []).map((e) => (e.secretEnv ? `${e.name}=$${e.secretEnv}` : `${e.name}=${e.value || ''}`)).join('\n');
@@ -3376,11 +3376,50 @@ function appTestSection(initial) {
     dbEnv: area('app-db-env', envText(db.env), ''),
   };
   let template = at.template ? { name: at.template, version: at.templateVersion } : null;
+  const FILL_IN = 'PATH-IN-BACKUP';
+  const tplNote = h('div');
+  const applyTemplate = (t) => {
+    const found = hint && hint.template === t.name ? hint : {};
+    const test = t.test, db = test.database;
+    const withData = (ms, from) => (ms || []).map((m) => ({ ...m, from: m.from || from || FILL_IN }));
+    template = { name: t.name, version: t.version };
+    on.cb.checked = true;
+    f.image.value = found.appImage || test.app.image || '';
+    f.port.value = test.port || '';
+    f.mounts.value = mountsText(withData(test.app.mounts, found.appFrom));
+    f.tmpfs.value = (test.app.tmpfs || []).join('\n');
+    f.env.value = envText(test.app.env);
+    f.path.value = test.path || '';
+    f.status.value = test.expectStatus || '';
+    f.host.value = test.host || '';
+    f.text.value = test.expectText || '';
+    f.maxMs.value = test.maxResponseMs || '';
+    f.start.value = test.startTimeoutSecs || '';
+    f.dbImage.value = db ? found.databaseImage || db.image || '' : '';
+    f.dbMounts.value = db ? mountsText(withData(db.mounts, found.databaseFrom)) : '';
+    f.dbTmpfs.value = db ? (db.tmpfs || []).join('\n') : '';
+    f.dbEnv.value = db ? envText(db.env) : '';
+    if (t.expectPaths && expectPaths && found.appFrom) {
+      const have = lines(expectPaths.value);
+      expectPaths.value = [...have, ...t.expectPaths.map((p) => `${found.appFrom}/${p}`).filter((p) => !have.includes(p))].join('\n');
+    }
+    fill(tplNote, h('p', { class: 'hint' }, t.summary), t.needs && t.needs.length ? h('ul', { class: 'hint' }, t.needs.map((n) => h('li', null, n))) : null,
+      found.appFrom ? h('p', { class: 'hint' }, `Filled in from what was found on this server: ${found.appImage}${found.databaseImage ? `, ${found.databaseImage}` : ''}.`) : null);
+    sync();
+  };
+  const tplSelect = templates.length ? select([['', 'Fill in by hand'], ...templates.map((t) => [t.name, `Template: ${t.title} (version ${t.version})`])], at.template || '', { name: 'app-template' }) : null;
+  if (tplSelect) {
+    tplSelect.addEventListener('change', () => {
+      const t = templates.find((x) => x.name === tplSelect.value);
+      if (t) applyTemplate(t); else { template = null; fill(tplNote); sync(); }
+    });
+  }
   const parseMounts = (text) => {
     const out = [];
     for (const line of lines(text)) {
       const m = /^(\S.*?)\s*->\s*(\S+?)(\s+writable)?$/.exec(line);
       if (!m) return { out, bad: `Write each line as: path in the backup -> path in the container. “${line}” doesn’t fit.` };
+      if (m[1] === FILL_IN) return { out, bad: `Replace ${FILL_IN} with the path of that data inside the backup.` };
       out.push({ from: m[1], to: m[2], ...(m[3] ? { writable: true } : {}) });
     }
     return { out };
@@ -3432,6 +3471,7 @@ function appTestSection(initial) {
         template ? h('li', null, `Based on the ${template.name} template, version ${template.version}.`) : null));
   };
   const body = h('div', null,
+    tplSelect ? [field('Start from', tplSelect, 'A template only fills in these fields. You can change anything before saving, and it can’t give the app more access.'), tplNote] : null,
     h('div', { class: 'row' }, field('Image to start', f.image, 'Started as the restored app. You choose it; it is never taken from the backup.'), field('Port inside the container', f.port)),
     field('Parts of the backup to give the app', f.mounts, 'One per line: path in the backup -> path in the container. Read-only; add “writable” for a throwaway copy the app can change.'),
     h('div', { class: 'row' },
@@ -3449,14 +3489,17 @@ function appTestSection(initial) {
   on.cb.addEventListener('change', sync);
   body.addEventListener('input', renderPreview);
   sync();
-  const el = h('div', null, h('h3', null, 'Start the app'), on.el, body);
-  return { el, read, fill: (fn) => { fn({ on, f, setTemplate: (t) => { template = t; }, mountsText, envText }); sync(); } };
+  const useHint = hint && !initial && templates.find((t) => t.name === hint.template);
+  const el = h('div', null, h('h3', null, 'Start the app'),
+    useHint ? h('div', { class: 'banner info' }, `This looks like ${useHint.title}. `, btn('Use its template', () => { tplSelect.value = useHint.name; applyTemplate(useHint); }, 'sm')) : null,
+    on.el, body);
+  return { el, read };
 }
 
 async function pageSourceForm(id) {
   if (!canOperate()) return h('div', { class: 'banner warn' }, 'Your account can only view.');
-  const [agents, repos, existing] = await Promise.all([
-    api('/agents'), api('/repositories'), id ? api(`/sources/${id}`) : Promise.resolve(null),
+  const [agents, repos, existing, appTemplates] = await Promise.all([
+    api('/agents'), api('/repositories'), id ? api(`/sources/${id}`) : Promise.resolve(null), isAdmin() ? api('/app-templates') : Promise.resolve([]),
   ]);
   const src = existing ? existing.source : {
     name: '', spec: { kind: 'files', drill: {} }, backupCron: '0 2 * * *', drillCron: '0 4 * * 0',
@@ -3523,7 +3566,9 @@ async function pageSourceForm(id) {
   (dr.assertions || []).forEach(addAssert);
 
   const isDb = (k) => ['postgres', 'mysql', 'mongodb'].includes(k);
-  const appTest = appTestSection(dr.appTest);
+  const serverInv = ((agents || []).find((a) => a.id === src.agentId) || {}).inventory;
+  const dockerApp = sp.docker && serverInv && (serverInv.dockerApps || []).find((a) => a.name === (sp.docker.project || (sp.docker.containers || [])[0]));
+  const appTest = appTestSection(dr.appTest, appTemplates || [], dockerApp && dockerApp.template, f.expectPaths);
   const kindBox = h('div');
   const addBtn = btn('+ Add check', () => addAssert().focus(), 'sm');
   const assertFs = h('div', null, h('h3', null, 'Your own database checks'),

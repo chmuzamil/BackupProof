@@ -3,6 +3,7 @@ package server
 import (
 	"testing"
 
+	"github.com/chmuzamil/backupproof/internal/discover"
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/source"
 )
@@ -22,6 +23,26 @@ func TestAppOnlyFailure(t *testing.T) {
 	} {
 		if got := appOnlyFailure(c.checks); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// A template's values get the same validation as anything typed by hand.
+func TestTemplatesPassItemValidation(t *testing.T) {
+	for _, tpl := range discover.Templates() {
+		at := tpl.Test
+		if at.App.Image == "" {
+			at.App.Image = "example/app:1"
+		}
+		at.App.Mounts[0].From = "docker/volumes/data"
+		if at.Database != nil {
+			at.Database.Mounts[0].From = "docker/volumes/db"
+		}
+		kind := tpl.Kinds[0]
+		spec := source.Spec{Name: "x", Kind: kind, Paths: []string{"/a"}, Docker: &source.DockerSpec{Volumes: []string{"data"}}}
+		spec.Drill.AppTest = &at
+		if err := spec.Validate(); err != nil {
+			t.Errorf("%s: %v", tpl.Name, err)
 		}
 	}
 }
