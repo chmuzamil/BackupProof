@@ -254,7 +254,7 @@ func streamCommand(ctx context.Context, b *engine.Builder, name string, cmd *exe
 	}
 	werr := cmd.Wait()
 	if werr != nil {
-		return 0, fmt.Errorf("%s failed: %v: %s", cmd.Args[0], werr, tail(stderr.String()))
+		return 0, fmt.Errorf("%s failed: %v: %s", cmd.Args[0], werr, failureText(werr, stderr.String()))
 	}
 	if serr != nil {
 		return 0, serr
@@ -263,6 +263,16 @@ func streamCommand(ctx context.Context, b *engine.Builder, name string, cmd *exe
 		return 0, fmt.Errorf("%s produced an empty dump", cmd.Args[0])
 	}
 	return e.Size, nil
+}
+
+// failureText is what to say about a failed program: its own last words, or
+// the meaning of the exit status shells and docker exec use for a missing program.
+func failureText(err error, stderr string) string {
+	var ee *exec.ExitError
+	if strings.TrimSpace(stderr) == "" && errors.As(err, &ee) && ee.ExitCode() == 127 {
+		return "the program to run wasn't found where it needs to run"
+	}
+	return tail(stderr)
 }
 
 type limitedBuffer struct {
@@ -312,7 +322,7 @@ func runOutput(cmd *exec.Cmd) (string, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("%v: %s", err, tail(stderr.String()))
+		return "", fmt.Errorf("%v: %s", err, failureText(err, stderr.String()))
 	}
 	return string(out), nil
 }

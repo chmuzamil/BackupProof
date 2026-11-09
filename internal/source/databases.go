@@ -127,7 +127,8 @@ func backupMySQL(ctx context.Context, s Spec, b *engine.Builder, log engine.Logg
 	meta := map[string]any{"database": s.Database}
 	q := fmt.Sprintf("SELECT VERSION() UNION ALL SELECT CONCAT(table_name,'=',IFNULL(table_rows,0)) FROM information_schema.tables WHERE table_schema='%s' AND table_type='BASE TABLE'",
 		strings.ReplaceAll(s.Database, "'", "''"))
-	cli := toolCmd(ctx, s, myEnv(s), "mysql", append(myConnArgs(s), "-N", "-B", "-e", q)...)
+	client, tool := mysqlTools(ctx, s)
+	cli := toolCmd(ctx, s, myEnv(s), client, append(myConnArgs(s), "-N", "-B", "-e", q)...)
 	if out, err := runOutput(cli); err != nil {
 		log("warning: could not read table statistics: %v", err)
 	} else {
@@ -139,7 +140,6 @@ func backupMySQL(ctx context.Context, s Spec, b *engine.Builder, log engine.Logg
 		}
 	}
 	log("dumping MySQL database %s", s.Database)
-	tool := "mysqldump"
 	if v, _ := meta["serverVersion"].(string); strings.Contains(strings.ToLower(v), "mariadb") {
 		tool = "mariadb-dump"
 	}

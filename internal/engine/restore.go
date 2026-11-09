@@ -28,7 +28,10 @@ type RestoreOptions struct {
 	// file keeps the owner of the file it replaces (new files and folders take
 	// their folder's owner) and folders get their backed-up permissions.
 	Original bool
-	Log      Logger
+	// Owners gives a restore into a new folder the backed-up owners and folder
+	// permissions, for handing the result to a program that isn't root.
+	Owners bool
+	Log    Logger
 }
 
 type RestoreResult struct {
@@ -201,6 +204,19 @@ func Restore(ctx context.Context, r *repo.Repo, s *snapshot.Snapshot, target str
 			opts.Log("warning: cannot create symlink %s: %v", e.Path, err)
 		} else if opts.Original {
 			restoreOwner(parent, base, e)
+		}
+	}
+	if opts.Owners && !opts.Original {
+		for i := len(entries) - 1; i >= 0; i-- {
+			e := entries[i]
+			if !matchInclude(e.Path, opts.Include) {
+				continue
+			}
+			name := filepath.FromSlash(e.Path)
+			restoreOwner(root, name, e)
+			if e.Type == snapshot.TypeDir && e.Mode != 0 && runtime.GOOS != "windows" {
+				root.Chmod(name, fs.FileMode(e.Mode).Perm())
+			}
 		}
 	}
 	// Directory mtimes last, deepest first, so file writes don't bump them.

@@ -140,10 +140,7 @@ func restorePostgres(ctx context.Context, s Spec, dump, target string, replace b
 }
 
 func restoreMySQL(ctx context.Context, s Spec, dump, target string, replace bool, log func(string, ...any)) (string, error) {
-	tool := "mysql"
-	if s.Container != "" && mariaDB(ctx, s) {
-		tool = "mariadb"
-	}
+	tool, _ := mysqlTools(ctx, s)
 	f, err := os.Open(dump)
 	if err != nil {
 		return "", err
@@ -190,10 +187,26 @@ func restoreMySQL(ctx context.Context, s Spec, dump, target string, replace bool
 	return "MySQL database " + target, nil
 }
 
-// mariaDB reports whether a container has the mariadb client (newer MariaDB
-// images no longer ship a "mysql" command).
+// mysqlTools names the client and dump programs to run. Newer MariaDB no
+// longer ships "mysql" and "mysqldump".
+func mysqlTools(ctx context.Context, s Spec) (client, dump string) {
+	if mariaDB(ctx, s) {
+		return "mariadb", "mariadb-dump"
+	}
+	return "mysql", "mysqldump"
+}
+
+// mariaDB reports whether the place the tools run has the mariadb client: for
+// a container, whether it's there; on this machine, whether it's the only one.
 func mariaDB(ctx context.Context, s Spec) bool {
-	return exec.CommandContext(ctx, "docker", "exec", s.Container, "sh", "-c", "command -v mariadb").Run() == nil
+	if s.Container != "" {
+		return exec.CommandContext(ctx, "docker", "exec", s.Container, "sh", "-c", "command -v mariadb").Run() == nil
+	}
+	if _, err := exec.LookPath("mysql"); err == nil {
+		return false
+	}
+	_, err := exec.LookPath("mariadb")
+	return err == nil
 }
 
 func restoreMongo(ctx context.Context, s Spec, dump, target string, replace bool, log func(string, ...any)) (string, error) {

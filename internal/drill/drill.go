@@ -86,11 +86,11 @@ func Run(ctx context.Context, rp *repo.Repo, s snapshot.WithID, spec source.Spec
 	}
 	res.RestoreDir = dir
 	if !opts.Keep {
-		defer os.RemoveAll(dir)
+		defer RemoveLeftover(dir)
 	}
 
 	restored := r.check("restore-from-storage", func() (string, error) {
-		rr, err := engine.Restore(ctx, rp, s.Snapshot, dir, engine.RestoreOptions{Log: opts.Log})
+		rr, err := engine.Restore(ctx, rp, s.Snapshot, dir, engine.RestoreOptions{Owners: spec.Drill.AppTest != nil, Log: opts.Log})
 		res.RestoredBytes = rr.Bytes
 		res.StorageUnreadable = errors.Is(err, engine.ErrUnreadable)
 		if err != nil {

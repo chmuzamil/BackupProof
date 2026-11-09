@@ -338,6 +338,10 @@ func (a *appRun) containerArgs(ctx context.Context, name string, c *source.AppCo
 		if err != nil {
 			return nil, err
 		}
+		// A folder the backup has no entry for is still private to the restore.
+		if fi, err := os.Stat(src); err == nil && fi.IsDir() && fi.Mode().Perm() == 0o700 {
+			_ = os.Chmod(src, 0o755)
+		}
 		opt := ",readonly"
 		if m.Writable {
 			copied := filepath.Join(a.work, name+"-"+strconv.Itoa(i))
