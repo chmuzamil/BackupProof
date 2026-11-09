@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.15-0a7bbb" alt="version v0.2.15"></a>
+  <a href="https://github.com/chmuzamil/BackupProof/releases"><img src="https://img.shields.io/badge/version-v0.2.16-0a7bbb" alt="version v0.2.16"></a>
   <a href="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml"><img src="https://github.com/chmuzamil/BackupProof/actions/workflows/test.yml/badge.svg?branch=main" alt="build status"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.27-00add8" alt="go 1.27"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a" alt="license MIT"></a>
@@ -244,7 +244,7 @@ A restore test proves the data came back. Turn on the app test under **Edit (adv
 - The same dropped capabilities, no-new-privileges, memory, CPU and process limits as the database restore tests. Containers are always removed afterwards, whether the test passed, failed, timed out or was cancelled.
 - Secrets are never stored in the item. Set them on the server that runs the test as variables starting with `BP_APPTEST_` (for example in the agent's systemd unit), and refer to one with `WORDPRESS_DB_PASSWORD=$BP_APPTEST_WP_DB_PASSWORD`. Response bodies and container logs are never kept in a proof.
 
-Results appear as ordinary checks in the signed proof, named `app-sandbox-start`, `app-running`, `app-database-running`, `app-http-status`, `app-body-text` and `app-response-time`. If they fail, only the app test has failed: the backup still counts as restore-tested, the item says the app didn't come back up, and you get a separate **App test failed** alert. An agent too old to know about the app test ignores it, so the item page says it didn't run.
+Results appear as ordinary checks in the signed proof, named `app-sandbox-start`, `app-running`, `app-database-running`, `app-http-status`, `app-body-text`, `app-response-time` and, if the server runs short of disk, `app-disk-space`. If they fail, only the app test has failed: the backup still counts as restore-tested, the item says the app didn't come back up, and you get a separate **App test failed** alert. An agent too old to know about the app test ignores it, so the item page says it didn't run.
 
 **Templates** fill in the form, and you see everything they'll run before saving: **WordPress (Docker)** and **Any web app**. A template can only fill in the fields above, so it can't give an app more access, and it never holds secrets. Its name and version are recorded in the proof. When BackupProof recognises WordPress in a Docker backup, it offers the template with the images and paths filled in.
 

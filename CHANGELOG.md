@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-11-09
+
+### Security
+
+- **Operators can no longer get around the edit limits** by sending a change as a new item. They also can't choose the restore-test image or reduce how many backups are kept.
+- **Restore tests no longer receive the item's database password or import credentials,** which they never used. A separate verifier server now really only has access to the storage.
+- **Sign-ins are limited:** 10 failures from one address in 15 minutes, and 4 password checks at a time. The storage test is for administrators only.
+- **Docker put-back refuses more places** that control startup, such as `/etc/logrotate.d`, `/etc/rc.local` and `~/.config/systemd`.
+
+### Fixed
+
+- **Stopping or upgrading a service during a job now cleans up.** Containers stopped for a backup start again, and restore-test containers and decrypted copies are removed. Anything left by a killed process is cleared when the agent next starts.
+- **Cleaning old backups can no longer break a running backup in shared storage.** Unused data is now marked and deleted on a later run at least a day afterwards, so freed space appears later than before. Backups never reuse marked data.
+- **Docker volume put-back** now restores first and replaces the volume only if that succeeds, so a failed download leaves it as it was. It briefly needs room for both copies.
+- **An item no longer shows as restore-tested when its last restore test couldn't finish.** It shows as at risk, with the reason.
+- **A real failure is no longer hidden behind an open "nothing was found damaged" alert.** The alert is reworded and you're notified.
+- **A blown data-loss limit no longer closes itself** after a long run of failed tests, and it now applies to items that have never passed a restore test.
+- **Weekday-only schedules no longer raise a false overdue alert** at weekends.
+- **Paused and manual items close their overdue alerts.**
+- **A busy database no longer fails a proof or cancels a running job,** and a job with a number like 409 is no longer cancelled by a passing network error.
+- **An app test no longer counts towards restore time,** can wait as long as the item's own response limit, and stops if the server is running out of disk (`app-disk-space`).
+- **Recovery plan:** usable steps for items not yet tested, and the SFTP settings the command line needs. The recovery kit has them too.
+- **A restore that failed no longer claims every file was verified** in its proof, and an expired restore no longer raises an unrelated alert.
+
 ## [0.2.15] - 2026-11-09
 
 ### Added
