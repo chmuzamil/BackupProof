@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -115,34 +116,45 @@ func TestIncrementalReusesChunks(t *testing.T) {
 	}
 }
 
+// One damaged blob is one problem, whether it holds file data or the file list.
 func TestTamperedBlobDetected(t *testing.T) {
-	ctx := context.Background()
-	r, dir := newRepo(t)
-	src := filepath.Join(dir, "src")
-	writeTree(t, src)
-	s := backup(t, r, src, nil)
+	for _, tc := range []struct {
+		name     string
+		fileList bool
+	}{{"file data", false}, {"file list", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			r, dir := newRepo(t)
+			src := filepath.Join(dir, "src")
+			writeTree(t, src)
+			s := backup(t, r, src, nil)
 
-	// Flip one byte in one stored data blob.
-	var victim string
-	r.Backend().List(ctx, "data/", func(o backend.ObjectInfo) error {
-		if victim == "" {
-			victim = o.Key
-		}
-		return nil
-	})
-	p := filepath.Join(dir, "repo", filepath.FromSlash(victim))
-	b, _ := os.ReadFile(p)
-	b[len(b)/2] ^= 0xff
-	os.WriteFile(p, b, 0o600)
+			// Flip one byte in one stored data blob of the kind under test.
+			var victim string
+			r.Backend().List(ctx, "data/", func(o backend.ObjectInfo) error {
+				name := o.Key[strings.LastIndex(o.Key, "/")+1:]
+				if victim == "" && slices.Contains(s.Manifest, name) == tc.fileList {
+					victim = o.Key
+				}
+				return nil
+			})
+			if victim == "" {
+				t.Fatal("no blob of this kind to damage")
+			}
+			p := filepath.Join(dir, "repo", filepath.FromSlash(victim))
+			b, _ := os.ReadFile(p)
+			b[len(b)/2] ^= 0xff
+			os.WriteFile(p, b, 0o600)
 
-	res, err := Check(ctx, r, CheckOptions{ReadDataPercent: 100})
-	if err != nil {
-		t.Fatal(err)
+			res, err := Check(ctx, r, CheckOptions{ReadDataPercent: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.CorruptBlobs != 1 || res.OK() {
+				t.Fatalf("expected 1 corrupt blob, got %+v", res)
+			}
+		})
 	}
-	if res.CorruptBlobs != 1 || res.OK() {
-		t.Fatalf("expected 1 corrupt blob, got %+v", res)
-	}
-	_ = s
 }
 
 func TestWrongPassword(t *testing.T) {

@@ -59,7 +59,7 @@ func (c CheckResult) OK() bool {
 // checkReferences is References for a check: a snapshot whose file list
 // storage won't hand over (errors, timeouts) is tried again after a pause,
 // and if it still can't be read it counts as unreadable, not as damage.
-func checkReferences(ctx context.Context, r *repo.Repo, snaps []snapshot.WithID, res *CheckResult, log Logger) (map[bpcrypto.ID]struct{}, error) {
+func checkReferences(ctx context.Context, r *repo.Repo, snaps []snapshot.WithID, res *CheckResult, counted map[bpcrypto.ID]struct{}, log Logger) (map[bpcrypto.ID]struct{}, error) {
 	refs := map[bpcrypto.ID]struct{}{}
 	add := func(s snapshot.WithID) error {
 		for _, m := range s.Manifest {
@@ -84,7 +84,7 @@ func checkReferences(ctx context.Context, r *repo.Repo, snaps []snapshot.WithID,
 	for _, s := range snaps {
 		if err := add(s); err != nil {
 			if retry, _, _ := transfer.Classify(err); !retry {
-				countManifestError(res, s, err)
+				countManifestError(res, s, err, counted)
 				continue
 			}
 			again = append(again, s)
@@ -108,15 +108,21 @@ func checkReferences(ctx context.Context, r *repo.Repo, snaps []snapshot.WithID,
 				res.Errors = append(res.Errors, fmt.Sprintf("snapshot %s: file list %v: %v", s.ID.Short(), ErrUnreadable, err))
 				continue
 			}
-			countManifestError(res, s, err)
+			countManifestError(res, s, err, counted)
 		}
 	}
 	return refs, nil
 }
 
 // countManifestError records a snapshot file list that is missing or
-// damaged (not just unreadable).
-func countManifestError(res *CheckResult, s snapshot.WithID, err error) {
+// damaged (not just unreadable), and notes its blobs in counted so the later
+// passes over every blob don't count the same problem again.
+func countManifestError(res *CheckResult, s snapshot.WithID, err error, counted map[bpcrypto.ID]struct{}) {
+	for _, m := range s.Manifest {
+		if id, perr := bpcrypto.ParseID(m); perr == nil {
+			counted[id] = struct{}{}
+		}
+	}
 	if errors.Is(err, backend.ErrNotFound) {
 		res.MissingBlobs++
 	} else {
@@ -174,7 +180,8 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 		return res, err
 	}
 	res.Snapshots = len(snaps)
-	refs, err := checkReferences(ctx, r, snaps, &res, opts.Log)
+	counted := map[bpcrypto.ID]struct{}{}
+	refs, err := checkReferences(ctx, r, snaps, &res, counted, opts.Log)
 	if err != nil {
 		return res, err
 	}
@@ -189,7 +196,9 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 	}
 	for id := range refs {
 		if _, ok := stored[id]; !ok {
-			res.MissingBlobs++
+			if _, done := counted[id]; !done {
+				res.MissingBlobs++
+			}
 			res.Errors = append(res.Errors, "missing blob "+id.String())
 		}
 	}
@@ -214,6 +223,12 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 		pf := NewFetcher(ctx, r, wants, FetchOptions{MaxConcurrency: transfer.CheckConcurrency, KeepGoing: true})
 		defer pf.Close()
 		var unread []bpcrypto.ID
+		damaged := func(id bpcrypto.ID, err error) {
+			if _, done := counted[id]; !done {
+				res.CorruptBlobs++
+			}
+			res.Errors = append(res.Errors, err.Error())
+		}
 		for _, id := range sample {
 			data, err := pf.Get(ctx, id)
 			res.ReadBlobs++
@@ -228,8 +243,7 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 			case ctx.Err() != nil:
 				return res, ctx.Err()
 			default:
-				res.CorruptBlobs++
-				res.Errors = append(res.Errors, err.Error())
+				damaged(id, err)
 			}
 		}
 		pf.Close()
@@ -256,8 +270,7 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 					res.MissingBlobs++
 					res.Errors = append(res.Errors, err.Error())
 				default:
-					res.CorruptBlobs++
-					res.Errors = append(res.Errors, err.Error())
+					damaged(id, err)
 				}
 			}
 		}

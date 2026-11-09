@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **The recovery kit can now be downloaded when you choose your own encryption password.** It's only made once the password is long enough and both fields match.
 - **"I saved the password" now unticks when the password changes,** including when you switch between a generated password and your own.
 - **Recovery kit commands now work when the password contains an apostrophe.**
+- **A storage check counts a damaged or missing file list once,** instead of reporting one problem as two.
 
 ## [0.2.17] - 2026-11-10
 
