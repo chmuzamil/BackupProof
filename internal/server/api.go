@@ -43,7 +43,7 @@ func (s *Server) auth(minRole string, h http.HandlerFunc) http.HandlerFunc {
 			}
 			u.ViaToken = name
 			if tokenForbidden(r.Pattern) {
-				writeErr(w, http.StatusForbidden, errors.New("API tokens can't manage users, tokens or two-factor sign-in; use the dashboard"))
+				writeErr(w, http.StatusForbidden, errors.New("API tokens can't manage users, tokens or two-factor sign-in, or download recovery kits; use the dashboard"))
 				return
 			}
 			if roleRank[u.Role] < roleRank[minRole] {
@@ -132,6 +132,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/repositories", s.auth("admin", s.handleCreateRepo))
 	mux.HandleFunc("DELETE /api/repositories/{id}", s.auth("admin", s.handleDeleteRepo))
 	mux.HandleFunc("POST /api/repositories/{id}/check", s.auth("operator", s.handleCheckRepo))
+	mux.HandleFunc("POST /api/repositories/{id}/recovery-kit", s.auth("admin", s.handleRecoveryKit))
 	mux.HandleFunc("GET /api/repositories/stats", s.auth("auditor", s.handleRepoStats))
 
 	mux.HandleFunc("GET /api/proofs", s.auth("auditor", s.handleListProofs))
@@ -704,6 +705,67 @@ func (s *Server) handleCreateRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(s.actor(r), "create-repository", fmt.Sprintf("repository %q type=%s lock=%s/%dd", req.Name, req.Backend.Type, req.Backend.ObjectLockMode, req.Backend.ObjectLockDays))
 	writeJSON(w, 200, map[string]int64{"id": id})
+}
+
+// handleRecoveryKit gives an administrator the encryption password of existing
+// storage, for the kit the browser builds from it. Whoever gets it can read the
+// backups, so a session alone isn't enough: the person confirms who they are
+// the way they sign in, and every attempt is recorded.
+func (s *Server) handleRecoveryKit(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	var req struct{ Password, Code string }
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	repo, sec, err := s.store.Repository(id)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	addr := clientAddr(r)
+	if !s.signins.allowed(addr, time.Now()) {
+		writeErr(w, http.StatusTooManyRequests, errors.New("too many failed attempts from this address; try again in 15 minutes"))
+		return
+	}
+	if !s.takeSigninSlot(w, r) {
+		return
+	}
+	defer func() { <-s.signinSlots }()
+	refuse := func(why, msg string) {
+		s.signins.failed(addr, time.Now())
+		s.audit(s.actor(r), "recovery-kit-refused", fmt.Sprintf("storage %q (#%d) from %s: %s", repo.Name, id, addr, why))
+		time.Sleep(300 * time.Millisecond)
+		writeErr(w, 403, errors.New(msg))
+	}
+	u, err := s.store.Authenticate(currentUser(r).Username, req.Password)
+	if err != nil {
+		refuse("wrong password", "that password is wrong")
+		return
+	}
+	how := "password"
+	if u.TwoFactor {
+		method, err := s.store.VerifySecondFactor(u.ID, req.Code)
+		if err != nil {
+			refuse("wrong two-factor code", "that code is wrong or was already used. Try the newest code from your authenticator app")
+			return
+		}
+		how += " and " + method
+	}
+	s.signins.clear(addr)
+	s.audit(s.actor(r), "download-recovery-kit", fmt.Sprintf("storage %q (#%d) from %s, confirmed with %s", repo.Name, id, addr, how))
+	ev := event{
+		Subject: "BackupProof: recovery kit downloaded",
+		Body:    fmt.Sprintf("%s downloaded the recovery kit for the storage %q from %s. It holds that storage's encryption password. If nobody expected this, treat the password as exposed.%s", u.Username, repo.Name, addr, s.dashboardLine()),
+		Key:     "backupproof:recovery-kit:storage:" + strconv.FormatInt(id, 10),
+		Urgent:  true,
+	}
+	go func() { _ = s.notify(ev) }() // notify logs its own failures
+	writeJSON(w, 200, map[string]string{"password": sec.Password})
 }
 
 // --- proofs & ledger -----------------------------------------------------------

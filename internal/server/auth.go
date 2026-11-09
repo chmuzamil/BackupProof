@@ -27,7 +27,7 @@ func (s *Server) accountRoutes(mux *http.ServeMux) {
 
 // tokenForbidden lists what API tokens may never do.
 func tokenForbidden(pattern string) bool {
-	return strings.Contains(pattern, "/api/users") || strings.Contains(pattern, "/api/tokens") || strings.Contains(pattern, "/api/2fa")
+	return strings.Contains(pattern, "/api/users") || strings.Contains(pattern, "/api/tokens") || strings.Contains(pattern, "/api/2fa") || strings.HasSuffix(pattern, "/recovery-kit")
 }
 
 // --- sign-in with a second factor ----------------------------------------------
@@ -121,15 +121,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusTooManyRequests, errors.New("too many failed sign-ins from this address; try again in 15 minutes"))
 		return
 	}
-	select {
-	case s.signinSlots <- struct{}{}:
-		defer func() { <-s.signinSlots }()
-	case <-r.Context().Done():
-		return
-	case <-time.After(20 * time.Second):
-		writeErr(w, http.StatusTooManyRequests, errors.New("the server is busy with other sign-ins; try again shortly"))
+	if !s.takeSigninSlot(w, r) {
 		return
 	}
+	defer func() { <-s.signinSlots }()
 	u, err := s.store.Authenticate(req.Username, req.Password)
 	if err != nil {
 		s.signins.failed(addr, time.Now())

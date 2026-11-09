@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -55,6 +56,20 @@ func (l *signinLimiter) clear(addr string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.seen, addr)
+}
+
+// takeSigninSlot waits for room to check a password, and answers the request
+// itself if there's none. A true result must be followed by releasing the slot.
+func (s *Server) takeSigninSlot(w http.ResponseWriter, r *http.Request) bool {
+	select {
+	case s.signinSlots <- struct{}{}:
+		return true
+	case <-r.Context().Done():
+		return false
+	case <-time.After(20 * time.Second):
+		writeErr(w, http.StatusTooManyRequests, errors.New("the server is busy with other sign-ins; try again shortly"))
+		return false
+	}
 }
 
 // clientAddr is the address a request came from. The forwarding headers are

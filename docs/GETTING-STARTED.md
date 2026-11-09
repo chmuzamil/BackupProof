@@ -119,6 +119,6 @@ You can get these alerts by email, Slack or Discord under **Settings → Notific
 
 ## Golden rules
 
-1. **Save the recovery kit** for every storage. No password means no restore.
+1. **Save the recovery kit** for every storage. No password means no restore. Administrators can download it again from **Storage** while the dashboard is running.
 2. **Keep at least one copy away from the computer itself:** the cloud or another building.
 3. **Trust the green tick, not a "backup finished" message.** BackupProof only shows it after a real restore test.

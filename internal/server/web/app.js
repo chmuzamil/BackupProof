@@ -2044,6 +2044,7 @@ function recoveryKit(name, kindLabel, b, password) {
       : `Bucket: ${b.bucket}\nFolder inside the bucket: ${b.prefix || '(top level)'}\nEndpoint: ${b.endpoint || 'Amazon S3 default'}\nRegion: ${b.region || ''}`;
   const env = b.type === 's3' ? 'AWS_ACCESS_KEY_ID=<your access key> AWS_SECRET_ACCESS_KEY=<your secret key> '
     : b.type === 'sftp' ? `BP_SFTP_HOSTKEY="${b.hostKey || '<the server’s key, from ssh-keyscan>'}" BP_SFTP_PASSWORD=<server password> ` : '';
+  const shellPw = password.replace(/'/g, "'\\''"); // a password someone chose can hold a quote
   return [
     'BACKUPPROOF RECOVERY KIT',
     '=======================',
@@ -2063,13 +2064,47 @@ function recoveryKit(name, kindLabel, b, password) {
     'To restore without the dashboard:',
     '1. Download the backupproof program for your system.',
     '2. List the backup copies:',
-    `   ${env}BP_PASSWORD='${password}' backupproof snapshots --repo '${repoUrl(b)}'`,
+    `   ${env}BP_PASSWORD='${shellPw}' backupproof snapshots --repo '${repoUrl(b)}'`,
     '3. Restore one of them into an empty folder:',
-    `   ${env}BP_PASSWORD='${password}' backupproof restore --repo '${repoUrl(b)}' --target ./restored <BACKUP-COPY-ID>`,
+    `   ${env}BP_PASSWORD='${shellPw}' backupproof restore --repo '${repoUrl(b)}' --target ./restored <BACKUP-COPY-ID>`,
     '',
     'Without this password nobody can restore these backups - not even BackupProof support.',
     '',
   ].join('\n');
+}
+
+function saveRecoveryKit(name, kindLabel, b, password) {
+  download(`backupproof-recovery-kit-${(name || 'storage').replace(/[^\w.-]+/g, '-')}.txt`, recoveryKit(name, kindLabel, b, password));
+}
+
+// repoKitDialog gets existing storage's password after the administrator
+// confirms who they are. The kit is built here and only saved as a file.
+function repoKitDialog(r) {
+  const tfa = !!S.user.twoFactor;
+  const pass = input({ name: 'current-password', type: 'password', autocomplete: 'current-password' });
+  const code = tfa ? input({ name: 'one-time-code', autocomplete: 'one-time-code', code: true, placeholder: '123456…' }) : null;
+  const err = errBox();
+  const body = h('div', null,
+    h('p', null, `This file holds the encryption password for “${r.name}”. Anyone with it and access to the storage can read your backups.`),
+    h('p', null, 'The download is recorded in Activity and sent to your alert channels.'),
+    field('Your password', pass),
+    tfa ? field('Code from your authenticator app', code, 'Or one of your recovery codes, which can only be used once.') : null,
+    err);
+  let close;
+  const go = btn('Download recovery kit', busy(async () => {
+    err.textContent = '';
+    clearErrors(body);
+    if (!pass.value) return fieldError(pass, 'Enter your password.');
+    if (tfa && !code.value.trim()) return fieldError(code, 'Enter the code from your authenticator app.');
+    try {
+      const res = await post(`/repositories/${r.id}/recovery-kit`, { password: pass.value, code: tfa ? code.value.trim() : '' });
+      const kindLabel = (STORE_TYPES.find((x) => x.value === uiType(r.backend)) || {}).title || '';
+      saveRecoveryKit(r.name, kindLabel, r.backend, res.password);
+      close();
+      toast('Recovery kit downloaded. Keep it somewhere other than this server.', 'ok');
+    } catch (ex) { showErr(err, ex.message); }
+  }, 'Checking…'), 'primary');
+  close = modal('Download recovery kit', body, [go], { closeLabel: 'Cancel', initialFocus: pass });
 }
 
 // storageChooser: full "add storage" form. Calls onSaved(id) after creating it.
@@ -2106,12 +2141,24 @@ function storageChooser({ agent, onSaved, onCancel, title }) {
   const own1 = input({ name: 'encryption-password', type: 'password', autocomplete: 'new-password', minlength: 12 });
   const own2 = input({ name: 'encryption-password-2', type: 'password', autocomplete: 'new-password' });
   const saved = checkbox('I saved the password somewhere safe — without it nobody can restore', false);
-  const kitBtn = btn('Download recovery kit', () => {
+  // A saved copy of the old password is no use once the password changes.
+  own1.addEventListener('input', () => { saved.cb.checked = false; });
+  const ownPwOk = () => {
+    if (own1.value.length < 12) return fieldError(own1, 'The password must be at least 12 characters.');
+    if (own1.value !== own2.value) return fieldError(own2, 'The two passwords are different. Type the same password twice.');
+    return true;
+  };
+  const downloadKit = () => {
     const c = sf.collect();
     if (c.error) { toast(c.error, 'bad'); return; }
+    if (pwMode === 'own') {
+      clearErrors(ownBox);
+      if (!ownPwOk()) return;
+    }
     const kindLabel = (STORE_TYPES.find((x) => x.value === sf.kind()) || {}).title || '';
-    download(`backupproof-recovery-kit-${(name.value || 'storage').replace(/[^\w.-]+/g, '-')}.txt`, recoveryKit(name.value, kindLabel, c.backend, currentPw()));
-  }, 'sm');
+    saveRecoveryKit(name.value, kindLabel, c.backend, currentPw());
+  };
+  const kitBtn = () => btn('Download recovery kit', downloadKit, 'sm');
   const regen = btn('Make a new one', async () => {
     const ok = await confirmDlg('Make a new encryption password? If you already wrote down or downloaded the current one, that copy won’t work for this storage — you’ll need to save the new one instead.', 'Make a new one', { danger: false, title: 'Replace the password?' });
     if (!ok) return;
@@ -2121,11 +2168,15 @@ function storageChooser({ agent, onSaved, onCancel, title }) {
     toast('New password made. Save it before you continue.', 'ok');
   }, 'sm');
   const autoBox = h('div', null,
-    h('div', { class: 'pwbox' }, pwShow, h('div', { class: 'btns' }, copyBtn(() => pw, 'Copy', 'Copy the encryption password'), regen, kitBtn)),
+    h('div', { class: 'pwbox' }, pwShow, h('div', { class: 'btns' }, copyBtn(() => pw, 'Copy', 'Copy the encryption password'), regen, kitBtn())),
     h('p', { class: 'hint' }, 'Write it down or download the recovery kit and keep it somewhere other than this server.'));
-  const ownBox = h('div', { class: 'hidden' }, h('div', { class: 'row' }, field('Password', own1, 'At least 12 characters.'), field('Type it again', own2)));
+  const ownBox = h('div', { class: 'hidden' },
+    h('div', { class: 'row' }, field('Password', own1, 'At least 12 characters.'), field('Type it again', own2)),
+    h('div', { class: 'btns' }, kitBtn()),
+    h('p', { class: 'hint' }, 'Keep this password or the recovery kit somewhere other than this server.'));
   const modePick = h('div', { class: 'btns' });
   const setMode = (m) => {
+    if (m !== pwMode) saved.cb.checked = false;
     pwMode = m;
     autoBox.classList.toggle('hidden', m !== 'auto');
     ownBox.classList.toggle('hidden', m !== 'own');
@@ -2178,10 +2229,7 @@ function storageChooser({ agent, onSaved, onCancel, title }) {
     const c = sf.collect();
     if (c.error) return showErr(err, c.error);
     if (!name.value.trim()) return fieldError(name, 'Give this storage a name.');
-    if (pwMode === 'own') {
-      if (own1.value.length < 12) return fieldError(own1, 'The password must be at least 12 characters.');
-      if (own1.value !== own2.value) return fieldError(own2, 'The two passwords are different. Type the same password twice.');
-    }
+    if (pwMode === 'own' && !ownPwOk()) return;
     if (!saved.cb.checked) return fieldError(saved.cb, 'Save the password first and tick this box — without it nobody can restore.');
     if (lock === 'COMPLIANCE' && isS3Like(sf.kind())) {
       const days = num(lockDays.value) || 30;
@@ -2370,9 +2418,11 @@ async function pageRepositories() {
               toast('Health check started. It reads back a sample of the stored data.', 'ok');
             }, 'Starting…'), 'sm') : null);
         })(),
-        isAdmin() ? h('div', { class: 'form-actions start' }, usedBy(r.id).length
-          ? h('p', { class: 'hint' }, 'To remove this storage, first remove the items that use it.')
-          : btn('Remove', busy(() => removeRepo(r)), 'sm danger quiet', { 'aria-label': `Remove storage ${r.name}` })) : null,
+        isAdmin() ? h('div', { class: 'form-actions start' },
+          btn('Download recovery kit', () => repoKitDialog(r), 'sm', { 'aria-label': `Download recovery kit for ${r.name}` }),
+          usedBy(r.id).length
+            ? h('p', { class: 'hint' }, 'To remove this storage, first remove the items that use it.')
+            : btn('Remove', busy(() => removeRepo(r)), 'sm danger quiet', { 'aria-label': `Remove storage ${r.name}` })) : null,
         tech(h('dl', { class: 'kv' },
           h('dt', null, 'Address'), h('dd', null, h('code', { class: 'break' }, repoUrl(r.backend))),
           h('dt', null, 'Storage ID'), h('dd', null, h('code', { class: 'break' }, r.repoId || 'created on first backup')),
@@ -3843,7 +3893,7 @@ const ACTION_WORDS = {
   'run-backup': 'Started a backup', 'run-drill': 'Started a restore test', 'run-check': 'Started a storage health check',
   'create-enroll-token': 'Created a server connection code', enroll: 'Connected a server', 'revoke-agent': 'Disconnected a server',
   'update-notifications': 'Changed alert settings', 'update-public-url': 'Changed the dashboard address', 'update-tsa': 'Changed timestamp services',
-  'export-evidence': 'Downloaded a proof report',
+  'export-evidence': 'Downloaded a proof report', 'download-recovery-kit': 'Downloaded a recovery kit', 'recovery-kit-refused': 'Was refused a recovery kit',
 };
 
 async function pageActivity() {
