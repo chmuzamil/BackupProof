@@ -3346,7 +3346,7 @@ async function pageSourceForm(id) {
   };
   const sp = src.spec || {}, dr = sp.drill || {}, ret = src.retention || {};
   const liveAgents = agentOrder((agents || []).filter((a) => !a.revoked));
-  const kinds = sp.kind === 'import' ? [...KINDS, ['import', 'Imported backups']] : KINDS;
+  const kinds = sp.kind === 'import' ? [...KINDS, ['import', 'Imported backups']] : sp.kind === 'docker' ? [...KINDS, ['docker', 'Docker app or volumes']] : KINDS;
 
   const f = {
     name: input({ name: 'name', value: src.name, required: true, disabled: !!id, autocomplete: 'off' }),
