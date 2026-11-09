@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-11-09
+
 ### Added
 
 - **App restore test.** Optionally start the restored app after a restore test passes and check that it responds: container running, HTTP status, expected text and response time, recorded as `app-*` checks in the signed proof. A failed app test raises its own alert and the backup still counts as restore-tested. You name the image; nothing from the backup is run, including restored Compose files. Restored data is read-only (writable paths get a throwaway copy), there's no network or published port, secrets are referenced from the server running the test and never stored, and containers are always removed. Set it under **Edit (advanced)**, administrators only. Older agents ignore the setting.
@@ -14,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- **Edit (advanced) on a Docker item** no longer turns it into a Folders item on save.
+- **Edit (advanced) on a Docker item** showed it as folders and files and wouldn't save it without a folder.
 
 ## [0.2.14] - 2026-11-09
 
