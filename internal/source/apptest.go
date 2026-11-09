@@ -94,6 +94,11 @@ var (
 	appTemplateRe  = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
 )
 
+// appEnvSwitches are database image settings that only sound like secrets:
+// their values are switches such as 1 or trust.
+var appEnvSwitches = map[string]bool{"MARIADB_ALLOW_EMPTY_ROOT_PASSWORD": true, "MYSQL_ALLOW_EMPTY_PASSWORD": true,
+	"MARIADB_RANDOM_ROOT_PASSWORD": true, "MYSQL_RANDOM_ROOT_PASSWORD": true, "POSTGRES_HOST_AUTH_METHOD": true}
+
 // Validate checks an app test for an item of the given kind.
 func (a *AppTest) Validate(kind string) error {
 	switch kind {
@@ -200,7 +205,7 @@ func validAppEnv(e AppEnv) error {
 	if strings.ContainsAny(e.Value, "\r\n\x00") || len(e.Value) > 4096 {
 		return fmt.Errorf("the value of %s can't be used", e.Name)
 	}
-	if e.Value != "" && (appSecretish.MatchString(e.Name) || appURLPassword.MatchString(e.Value)) {
+	if e.Value != "" && ((appSecretish.MatchString(e.Name) && !appEnvSwitches[e.Name]) || appURLPassword.MatchString(e.Value)) {
 		return fmt.Errorf("%s looks like a secret, so it can't be saved here: set it on the server as %s… and refer to that instead", e.Name, AppTestSecretPrefix)
 	}
 	return nil

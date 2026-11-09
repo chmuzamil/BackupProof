@@ -82,7 +82,7 @@ func TestAppTestValidate(t *testing.T) {
 	}
 	// References, and empty values for anything, are fine.
 	a = goodAppTest()
-	a.App.Env = []AppEnv{{Name: "WORDPRESS_DB_PASSWORD", SecretEnv: "BP_APPTEST_WP_DB"}, {Name: "SECRET_FROM_NOWHERE"}, {Name: "WORDPRESS_DB_HOST", Value: "127.0.0.1"}}
+	a.App.Env = []AppEnv{{Name: "WORDPRESS_DB_PASSWORD", SecretEnv: "BP_APPTEST_WP_DB"}, {Name: "SECRET_FROM_NOWHERE"}, {Name: "WORDPRESS_DB_HOST", Value: "127.0.0.1"}, {Name: "MARIADB_ALLOW_EMPTY_ROOT_PASSWORD", Value: "1"}}
 	if err := a.Validate("docker"); err != nil {
 		t.Error(err)
 	}
