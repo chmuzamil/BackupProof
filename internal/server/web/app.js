@@ -1588,8 +1588,9 @@ async function pageSource(id) {
       isAdmin() ? btn('Remove', busy(() => removeItem(id, src.name, () => { location.hash = '#/protected'; })), 'danger') : null) : null);
 
   const rto = drill ? (drill.rtoMs ?? dp.rtoMs) : null;
+  const appDown = ['proven', 'at-risk'].includes(st.status) && (dp.checks || []).some((c) => /^app-/.test(c.name || '') && !c.passed);
   const hero = h('section', { class: 'card hero ' + statusInfo.cls },
-    h('div', { class: 'hero-status' }, h('h2', { class: 'hero-label' }, glyphLabel(statusInfo.label)), h('p', { class: 'hero-reason' }, statusLine(st) || statusInfo.help || st.reason || '')),
+    h('div', { class: 'hero-status' }, h('h2', { class: 'hero-label' }, glyphLabel(statusInfo.label)), h('p', { class: 'hero-reason' }, appDown ? 'The data passed its latest restore test, but the app didn’t come back up in that test.' : statusLine(st) || statusInfo.help || st.reason || '')),
     runningLine(st.running, isImp),
     h('dl', { class: 'kv' },
       h('dt', null, isImp ? 'Last conversion' : 'Last backup'),
