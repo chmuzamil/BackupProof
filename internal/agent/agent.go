@@ -158,6 +158,9 @@ func enroll(ctx context.Context, hc *http.Client, server, token, name, dir strin
 	return st, os.WriteFile(statePath(dir), b, 0o600)
 }
 
+// leftoverContainerAge is well past the longest a restore test keeps a container.
+const leftoverContainerAge = 12 * time.Hour
+
 type Agent struct {
 	dir    string
 	quiet  bool
@@ -185,6 +188,7 @@ func New(dir string) (*Agent, error) {
 func (a *Agent) Run(ctx context.Context) error {
 	fmt.Printf("agent %s (#%d) polling %s\n", a.st.Name, a.st.AgentID, a.st.Server)
 	a.docker = drill.DockerAvailable(ctx)
+	a.clearLeftovers()
 	go a.reportInventory(ctx)
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -211,6 +215,19 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.execute(ctx, &lease)
 	}
 	return ctx.Err()
+}
+
+// clearLeftovers removes what a job killed outright couldn't, which can be a
+// whole decrypted backup. It runs before the first job, so none of it is in use.
+func (a *Agent) clearLeftovers() {
+	for _, pattern := range []string{"drills/bp-drill-*", "drills/bp-apptest-*", "volume-*", "restore-*"} {
+		found, _ := filepath.Glob(filepath.Join(a.dir, filepath.FromSlash(pattern)))
+		for _, p := range found {
+			if fi, err := os.Lstat(p); err == nil && fi.IsDir() {
+				drill.RemoveLeftover(p)
+			}
+		}
+	}
 }
 
 // PollOnce asks for one job and executes it. It reports whether a job ran.
@@ -242,13 +259,12 @@ func (l *jobLog) Logf(format string, args ...any) {
 	l.mu.Unlock()
 }
 
-func (l *jobLog) flush(ctx context.Context) error {
+func (l *jobLog) flush(ctx context.Context) (int, error) {
 	l.mu.Lock()
 	lines := l.buf.String()
 	l.buf.Reset()
 	l.mu.Unlock()
-	_, err := l.a.c.post(ctx, fmt.Sprintf("/api/agent/jobs/%d/log", l.jobID), protocol.LogRequest{Lines: lines}, nil)
-	return err
+	return l.a.c.post(ctx, fmt.Sprintf("/api/agent/jobs/%d/log", l.jobID), protocol.LogRequest{Lines: lines}, nil)
 }
 
 // remoteLedger submits signed records to the control plane, which verifies
@@ -296,7 +312,7 @@ func (a *Agent) execute(parent context.Context, lease *protocol.Lease) {
 			case <-done:
 				return
 			case <-t.C:
-				if err := jl.flush(ctx); err != nil && strings.Contains(err.Error(), "409") {
+				if code, err := jl.flush(ctx); err != nil && code == http.StatusConflict {
 					fmt.Fprintln(os.Stderr, "lease lost, cancelling job:", err)
 					cancel()
 					return
@@ -316,7 +332,7 @@ func (a *Agent) execute(parent context.Context, lease *protocol.Lease) {
 	}
 	fctx, fcancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer fcancel()
-	if err := jl.flush(fctx); err != nil {
+	if _, err := jl.flush(fctx); err != nil {
 		fmt.Fprintln(os.Stderr, "could not upload job log:", err)
 	}
 	if _, err := a.c.post(fctx, fmt.Sprintf("/api/agent/jobs/%d/finish", lease.JobID), fin, nil); err != nil {
@@ -415,6 +431,9 @@ func (a *Agent) reportInventory(ctx context.Context) {
 		inv := discover.Collect(ctx)
 		if _, err := a.c.post(ctx, "/api/agent/inventory", inv, nil); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, "inventory report failed:", err)
+		}
+		if a.docker {
+			drill.SweepContainers(ctx, leftoverContainerAge)
 		}
 		select {
 		case <-ctx.Done():

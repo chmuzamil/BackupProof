@@ -72,9 +72,11 @@ func AppMount(src string) bool {
 var noPutBack = []string{"/etc/cron.d", "/etc/cron.hourly", "/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.monthly", "/etc/crontab",
 	"/etc/sudoers", "/etc/sudoers.d", "/etc/ssh", "/etc/passwd", "/etc/shadow", "/etc/group", "/etc/gshadow", "/etc/pam.d",
 	"/etc/systemd", "/etc/init.d", "/etc/profile", "/etc/profile.d", "/etc/ld.so.preload", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
-	"/var/spool/cron"}
+	"/etc/logrotate.conf", "/etc/logrotate.d", "/etc/rc.local", "/etc/rc.d", "/etc/environment", "/etc/security", "/etc/anacrontab",
+	"/etc/apt", "/etc/yum", "/etc/yum.repos.d", "/etc/dnf", "/etc/modprobe.d", "/etc/modules-load.d", "/etc/sysctl.conf", "/etc/sysctl.d",
+	"/etc/udev", "/etc/nsswitch.conf", "/etc/xdg/autostart", "/var/spool/cron", "/var/spool/at"}
 
-var shellStartup = map[string]bool{".bashrc": true, ".bash_profile": true, ".bash_login": true, ".profile": true, ".zshrc": true, ".zshenv": true}
+var shellStartup = map[string]bool{".bashrc": true, ".bash_profile": true, ".bash_login": true, ".profile": true, ".bash_logout": true, ".zshrc": true, ".zshenv": true, ".zprofile": true, ".zlogin": true, ".kshrc": true, ".cshrc": true, ".tcshrc": true}
 
 // PutBackAllowed reports whether a restore may write a mounted folder's file
 // to p. The paths come from the backup, so what backing up allowed is checked
@@ -93,6 +95,9 @@ func PutBackAllowed(p string) bool {
 		if part == ".ssh" {
 			return false
 		}
+	}
+	if strings.Contains(p, "/.config/systemd/") || strings.Contains(p, "/.config/autostart/") {
+		return false
 	}
 	return !shellStartup[path.Base(p)]
 }
@@ -381,10 +386,9 @@ func ContainersUsing(ctx context.Context, paths []string) []string {
 	if err != nil || len(strings.Fields(string(out))) == 0 {
 		return nil
 	}
-	out, err = docker(ctx, append([]string{"inspect"}, strings.Fields(string(out))...)...)
-	if err != nil {
-		return nil
-	}
+	// A container gone since the list was taken makes inspect exit with an
+	// error, but it still prints all the others.
+	out, _ = docker(ctx, append([]string{"inspect"}, strings.Fields(string(out))...)...)
 	var cs []struct {
 		Name   string
 		Mounts []dockerMount
@@ -523,17 +527,18 @@ func RestoreVolume(ctx context.Context, v, src string, owners map[string]Owner, 
 	}
 	defer stopContainers(ctx, volumeUsers(ctx, v), log)()
 	if dir := volumeDir(ctx, v); dir != "" {
-		log("replacing the contents of volume %s", v)
-		entries, err := os.ReadDir(dir)
+		// Restored inside the volume first, so a failed download leaves it as
+		// it was and the swap can't cross filesystems.
+		staging, err := os.MkdirTemp(dir, ".bp-restore-")
 		if err != nil {
 			return err
 		}
-		for _, e := range entries {
-			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
-				return err
-			}
+		defer os.RemoveAll(staging)
+		if err := restore(staging); err != nil {
+			return err
 		}
-		return restore(dir)
+		log("replacing the contents of volume %s", v)
+		return swapIn(dir, staging)
 	}
 	// Through a helper container: restore into src, then stream it in.
 	if err := restore(src); err != nil {
@@ -549,6 +554,31 @@ func RestoreVolume(ctx context.Context, v, src string, owners map[string]Owner, 
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helper container: %v %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// swapIn replaces what's in dir with what's in staging, a folder inside dir.
+func swapIn(dir, staging string) error {
+	old, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range old {
+		if e.Name() != filepath.Base(staging) {
+			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	restored, err := os.ReadDir(staging)
+	if err != nil {
+		return err
+	}
+	for _, e := range restored {
+		if err := os.Rename(filepath.Join(staging, e.Name()), filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
 	}
 	return nil
 }

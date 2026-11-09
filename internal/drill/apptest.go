@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/chmuzamil/backupproof/internal/source"
@@ -51,13 +52,20 @@ const (
 	appTmpfsOptions = "rw,nosuid,nodev,size=1g"
 	appCopyLimit    = int64(64 << 30)
 	appExpiryLabel  = "backupproof.apptest.expires"
+	// appMinFreeBytes is the free disk a test stops at, so a restored app that
+	// writes without limit can't fill the server it runs on.
+	appMinFreeBytes = uint64(1 << 30)
 	// appLeftoverAfter is when a container counts as left over from an agent
 	// that died mid-test, comfortably past the longest possible test.
 	appLeftoverAfter = 45 * time.Minute
 )
 
 // appPollEvery is how often the app is asked whether it is up yet.
-var appPollEvery = 2 * time.Second
+var (
+	appPollEvery = 2 * time.Second
+	appDiskEvery = 3 * time.Second
+	appFreeBytes = freeBytes
+)
 
 type appRun struct {
 	at   *source.AppTest
@@ -68,6 +76,7 @@ type appRun struct {
 	holder       string
 	app, db      string
 	secrets      []string // values to keep out of anything recorded
+	diskLow      atomic.Bool
 }
 
 // appChecks runs the app test and always removes what it started.
@@ -84,6 +93,14 @@ func appChecks(ctx context.Context, r *runner, dir string, spec source.Spec, par
 	if !a.check(r, "app-sandbox-start", func() (string, error) { return a.start(ctx) }) {
 		return
 	}
+	defer func() {
+		if a.diskLow.Load() {
+			a.check(r, "app-disk-space", func() (string, error) {
+				return "", errors.New("the test was stopped because the server was running out of disk space")
+			})
+		}
+	}()
+	defer a.guardDisk(ctx)()
 	var last probeResult
 	ready := false
 	dbStopped := ""
@@ -137,6 +154,45 @@ func appChecks(ctx context.Context, r *runner, dir string, spec source.Spec, par
 			}
 			return fmt.Sprintf("answered in %d ms (limit %d ms)", final.ms, a.at.MaxResponseMs), nil
 		})
+	}
+}
+
+// guardDisk removes the test's containers if the disk they write to runs low.
+// Docker has no size limit that works on every filesystem. It returns a
+// function that stops watching.
+func (a *appRun) guardDisk(ctx context.Context) func() {
+	paths := []string{a.parent}
+	if root, err := docker(ctx, "info", "--format", "{{.DockerRootDir}}"); err == nil && strings.TrimSpace(root) != "" {
+		paths = append(paths, strings.TrimSpace(root))
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(appDiskEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			for _, p := range paths {
+				if free, ok := appFreeBytes(p); ok && free < appMinFreeBytes {
+					a.diskLow.Store(true)
+					for _, name := range []string{a.app, a.db, a.holder} {
+						if name != "" {
+							_, _ = docker(context.WithoutCancel(ctx), "rm", "-f", "-v", name)
+						}
+					}
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
 	}
 }
 
@@ -511,11 +567,15 @@ const probeMarker = "BPPROBE"
 // probe requests the app from inside the holder's network. curl sends the
 // measurements to stderr so a large body can't push them out of the stdout limit.
 func (a *appRun) probe(ctx context.Context) probeResult {
-	ctx, cancel := context.WithTimeout(ctx, appProbeTimeout+5*time.Second)
+	limit := appProbeTimeout
+	if d := time.Duration(a.at.MaxResponseMs)*time.Millisecond + time.Second; d > limit {
+		limit = d // long enough to measure an answer that breaks the item's own limit
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit+5*time.Second)
 	defer cancel()
 	args := []string{"exec", a.holder, "curl", "-q", "--silent", "--show-error", "--globoff",
 		"--proto", "=http", "--noproxy", "*",
-		"--max-time", strconv.Itoa(int(appProbeTimeout.Seconds())),
+		"--max-time", strconv.Itoa(int(limit.Seconds())),
 		"--output", "-",
 		"--write-out", "%{stderr}" + probeMarker + " %{http_code} %{time_total}"}
 	if a.at.Host != "" {
@@ -567,6 +627,15 @@ func (a *appRun) cleanup() {
 			fixPermissions(a.work)
 			_ = os.RemoveAll(a.work)
 		}
+	}
+}
+
+// RemoveLeftover deletes a folder a killed job left behind, including one
+// holding read-only folders.
+func RemoveLeftover(dir string) {
+	if os.RemoveAll(dir) != nil {
+		fixPermissions(dir)
+		_ = os.RemoveAll(dir)
 	}
 }
 

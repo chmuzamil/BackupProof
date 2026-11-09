@@ -235,8 +235,53 @@ func (r *Repo) LoadIndex(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Blobs waiting to be deleted can't be reused: a prune may remove them
+	// while this backup runs. Backing up the same data uploads it again,
+	// which a later prune sees as recent.
+	marks, err := r.loadPruneMarks(ctx)
+	if err != nil {
+		return err
+	}
+	for id := range r.index {
+		if _, ok := marks[id.String()]; ok {
+			delete(r.index, id)
+		}
+	}
 	r.loaded = true
 	return nil
+}
+
+// pruneMarksKey holds the blobs a prune found unused and will delete on a later run.
+const pruneMarksKey = "maintenance/prune-marks.json"
+
+// loadPruneMarks returns when each marked blob was marked, in Unix seconds.
+func (r *Repo) loadPruneMarks(ctx context.Context) (map[string]int64, error) {
+	raw, err := r.get(ctx, pruneMarksKey)
+	if errors.Is(err, backend.ErrNotFound) {
+		return map[string]int64{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading prune marks: %w", err)
+	}
+	marks := map[string]int64{}
+	if err := json.Unmarshal(raw, &marks); err != nil {
+		return map[string]int64{}, nil // a damaged list only delays deletion
+	}
+	return marks, nil
+}
+
+// PruneMarks returns the blobs waiting to be deleted.
+func (r *Repo) PruneMarks(ctx context.Context) (map[string]int64, error) {
+	return r.loadPruneMarks(ctx)
+}
+
+// SavePruneMarks replaces the list of blobs waiting to be deleted.
+func (r *Repo) SavePruneMarks(ctx context.Context, marks map[string]int64) error {
+	b, err := json.Marshal(marks)
+	if err != nil {
+		return err
+	}
+	return r.put(ctx, pruneMarksKey, b)
 }
 
 // HasBlob reports whether a data blob is stored (after LoadIndex).

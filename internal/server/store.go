@@ -71,7 +71,7 @@ type Store struct {
 
 func OpenStore(dataDir string, secret []byte) (*Store, error) {
 	dsn := "file:" + filepath.ToSlash(filepath.Join(dataDir, "backupproof.db")) +
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err

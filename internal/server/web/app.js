@@ -377,6 +377,7 @@ const CHECK_WORDS = [
   [/^app-http-status$/, 'The app answered'],
   [/^app-body-text$/, 'The app’s answer contains the expected text'],
   [/^app-response-time$/, 'The app answered quickly enough'],
+  [/^app-disk-space$/, 'The app left the server enough disk space'],
 ];
 
 function checkWords(name) {
@@ -2042,7 +2043,7 @@ function recoveryKit(name, kindLabel, b, password) {
     : b.type === 'sftp' ? `Server: ${b.user}@${b.host}:${b.port || 22}\nFolder: ${b.path}`
       : `Bucket: ${b.bucket}\nFolder inside the bucket: ${b.prefix || '(top level)'}\nEndpoint: ${b.endpoint || 'Amazon S3 default'}\nRegion: ${b.region || ''}`;
   const env = b.type === 's3' ? 'AWS_ACCESS_KEY_ID=<your access key> AWS_SECRET_ACCESS_KEY=<your secret key> '
-    : b.type === 'sftp' ? 'BP_SFTP_PASSWORD=<server password> ' : '';
+    : b.type === 'sftp' ? `BP_SFTP_HOSTKEY="${b.hostKey || '<the server’s key, from ssh-keyscan>'}" BP_SFTP_PASSWORD=<server password> ` : '';
   return [
     'BACKUPPROOF RECOVERY KIT',
     '=======================',

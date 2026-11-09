@@ -114,13 +114,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.startSession(w, r, u)
 		return
 	}
-	// Step 1: the password.
+	// Step 1: the password. Checking one is deliberately expensive, so both
+	// how many run at once and how often one address may fail are limited.
+	addr := clientAddr(r)
+	if !s.signins.allowed(addr, time.Now()) {
+		writeErr(w, http.StatusTooManyRequests, errors.New("too many failed sign-ins from this address; try again in 15 minutes"))
+		return
+	}
+	select {
+	case s.signinSlots <- struct{}{}:
+		defer func() { <-s.signinSlots }()
+	case <-r.Context().Done():
+		return
+	case <-time.After(20 * time.Second):
+		writeErr(w, http.StatusTooManyRequests, errors.New("the server is busy with other sign-ins; try again shortly"))
+		return
+	}
 	u, err := s.store.Authenticate(req.Username, req.Password)
 	if err != nil {
+		s.signins.failed(addr, time.Now())
 		time.Sleep(300 * time.Millisecond)
 		writeErr(w, 401, err)
 		return
 	}
+	s.signins.clear(addr)
 	if u.TwoFactor {
 		writeJSON(w, 200, map[string]any{"needCode": true, "challenge": s.logins.add(u.ID)})
 		return

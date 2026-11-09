@@ -26,7 +26,7 @@ import (
 func (s *Server) onboardingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/inventory", s.agentAuth(s.handleInventory))
 	mux.HandleFunc("GET /api/browse", s.auth("operator", s.handleBrowse))
-	mux.HandleFunc("POST /api/repositories/test", s.auth("operator", s.handleTestStorage))
+	mux.HandleFunc("POST /api/repositories/test", s.auth("admin", s.handleTestStorage))
 	mux.HandleFunc("POST /api/import/scan", s.auth("admin", s.handleImportScan))
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript("sh"))
 	mux.HandleFunc("GET /install.ps1", s.handleInstallScript("ps1"))
@@ -382,6 +382,7 @@ Wants=network-online.target
 Environment=BP_STATE=/var/lib/backupproof
 ExecStart=/usr/local/bin/backupproof agent run
 Restart=always
+TimeoutStopSec=180
 RestartSec=10
 Nice=10
 [Install]

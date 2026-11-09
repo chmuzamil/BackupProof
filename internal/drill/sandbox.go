@@ -180,6 +180,26 @@ func (s *Sandbox) Remove() {
 	_, _ = docker(ctx, "rm", "-f", "-v", s.Name)
 }
 
+// SweepContainers removes restore-test containers older than age, which an
+// agent that was killed outright can leave running.
+func SweepContainers(ctx context.Context, age time.Duration) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	out, err := docker(ctx, "ps", "-a", "--filter", "label=backupproof.drill=1", "--format", "{{.ID}}|{{.CreatedAt}}")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		id, created, ok := strings.Cut(line, "|")
+		if !ok {
+			continue
+		}
+		if t, err := time.Parse("2006-01-02 15:04:05 -0700 MST", created); err == nil && time.Since(t) > age {
+			_, _ = docker(ctx, "rm", "-f", "-v", id)
+		}
+	}
+}
+
 func (s *Sandbox) Describe() string {
 	d := s.Image
 	if s.Digest != "" {

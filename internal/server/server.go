@@ -55,8 +55,11 @@ type Server struct {
 	pollMu  sync.Mutex
 	waiters map[int64]chan struct{} // agent long-poll wake-ups
 
-	logins    challenges    // sign-ins waiting for a two-factor code
-	manifests manifestCache // recently browsed backups' file lists
+	logins  challenges // sign-ins waiting for a two-factor code
+	signins signinLimiter
+	// signinSlots limits password checks in progress; each one takes 64 MB.
+	signinSlots chan struct{}
+	manifests   manifestCache // recently browsed backups' file lists
 }
 
 func loadSecret(dataDir string) ([]byte, error) {
@@ -99,7 +102,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: st, key: key, log: log.New(os.Stderr, "backupproof ", log.LstdFlags), waiters: map[int64]chan struct{}{}}
+	s := &Server{cfg: cfg, store: st, key: key, log: log.New(os.Stderr, "backupproof ", log.LstdFlags), waiters: map[int64]chan struct{}{}, signinSlots: make(chan struct{}, signinChecks)}
 	if st.Setting("tsa") == "" {
 		b, _ := json.Marshal(proof.DefaultTSAs)
 		if err := st.SetSetting("tsa", string(b)); err != nil {
@@ -145,12 +148,23 @@ func securityHeaders(next http.Handler) http.Handler {
 
 func (s *Server) Run(ctx context.Context) error {
 	go s.schedulerLoop(ctx)
-	if !s.cfg.NoLocalAgent {
-		go s.runBuiltinAgent(ctx)
+	agentDone := make(chan struct{})
+	if s.cfg.NoLocalAgent {
+		close(agentDone)
+	} else {
+		go func() {
+			defer close(agentDone)
+			s.runBuiltinAgent(ctx)
+		}()
 	}
 	srv := &http.Server{Addr: s.cfg.Listen, Handler: s.Handler(), ReadHeaderTimeout: 15 * time.Second}
 	go func() {
 		<-ctx.Done()
+		// The built-in agent reports its stopped job to this server, so it goes first.
+		select {
+		case <-agentDone:
+		case <-time.After(time.Minute):
+		}
 		sc, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(sc); err != nil {

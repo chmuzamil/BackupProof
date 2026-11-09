@@ -414,6 +414,9 @@ func (s *Store) LeaseJob(agentID int64, lease time.Duration, windowOpen bool) (*
 	return s.Job(id)
 }
 
+// errLeaseLost means the job is no longer this agent's to run.
+var errLeaseLost = errors.New("job is not running on this agent")
+
 func (s *Store) ExtendLease(jobID, agentID int64, lease time.Duration, logLines string) error {
 	res, err := s.db.Exec("UPDATE jobs SET lease_expires=?, log=substr(log || ?, -200000) WHERE id=? AND agent_id=? AND state='running'",
 		time.Now().Add(lease).UTC().Format(time.RFC3339Nano), logLines, jobID, agentID)
@@ -421,7 +424,7 @@ func (s *Store) ExtendLease(jobID, agentID int64, lease time.Duration, logLines 
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.New("job is not running on this agent")
+		return errLeaseLost
 	}
 	return nil
 }
@@ -691,10 +694,29 @@ type Alert struct {
 	Resolved *time.Time `json:"resolved,omitempty"`
 }
 
-// RaiseAlert opens an alert unless an identical one is already open.
-// It reports whether a new alert was created (so notifications fire once).
+// Wording of alerts that say nothing is known to be wrong with the backup. A
+// real failure replaces them instead of being hidden behind them.
+const (
+	alertNothingDamaged = "Nothing was found damaged"
+	alertServerSilent   = "stopped because the server running it stopped responding"
+)
+
+// RaiseAlert opens an alert unless one of its kind is already open, or
+// rewords an open harmless one when this is a real failure. It reports
+// whether there is something new to notify (so notifications fire once).
 func (s *Store) RaiseAlert(kind string, sourceID, agentID *int64, msg string) bool {
 	res, err := s.db.Exec("INSERT INTO alerts(source_id,agent_id,kind,message,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING", sourceID, agentID, kind, msg, now())
+	if err != nil {
+		return false
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return true
+	}
+	if strings.Contains(msg, alertNothingDamaged) || strings.Contains(msg, alertServerSilent) {
+		return false
+	}
+	res, err = s.db.Exec("UPDATE alerts SET message=? WHERE resolved IS NULL AND kind=? AND IFNULL(source_id,0)=IFNULL(?,0) AND IFNULL(agent_id,0)=IFNULL(?,0) AND (instr(message,?)>0 OR instr(message,?)>0)",
+		msg, kind, sourceID, agentID, alertNothingDamaged, alertServerSilent)
 	if err != nil {
 		return false
 	}

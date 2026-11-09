@@ -72,6 +72,10 @@ func (s *Server) tick(now time.Time) {
 		s.log.Printf("scheduler: expiring leases: %v", err)
 	}
 	for _, j := range expired {
+		if restoreKind(j.Kind) {
+			s.audit("scheduler", j.Kind+"-done", fmt.Sprintf("job #%d failed: the server running it stopped responding", j.ID))
+			continue
+		}
 		sid := j.SourceID
 		s.alert(failKind(j.Kind), &sid, nil, fmt.Sprintf("A %s stopped because the server running it stopped responding.", plainKind(j.Kind)))
 	}
@@ -127,26 +131,35 @@ const agentOfflineAfter = 10 * time.Minute
 // alerts can never catch.
 func (s *Server) watchdog(now time.Time, sources []Source) {
 	for _, src := range sources {
+		id := src.ID
 		if !src.Enabled {
+			for _, kind := range []string{"backup-overdue", "proof-stale", "rpo-missed", "rto-missed"} {
+				s.resolve(kind, &id, nil)
+			}
 			continue
 		}
 		s.watchRecovery(src, now)
-		id := src.ID
 		sched, err := ParseSchedule(src.BackupCron)
 		if err != nil || src.BackupCron == "manual" {
+			s.resolve("backup-overdue", &id, nil)
+			s.resolve("proof-stale", &id, nil)
 			continue
 		}
-		// Expected interval = distance between two consecutive runs.
-		n1 := sched.Next(now)
-		interval := sched.Next(n1).Sub(n1)
-		grace := interval + interval/2 + 15*time.Minute
 		created, _ := time.Parse(time.RFC3339Nano, src.Created)
 		last := s.store.LastProof(src.ID, "backup", false)
 		var lastAt time.Time
 		if last != nil {
 			lastAt, _ = time.Parse(time.RFC3339Nano, last.Created)
 		}
-		if lastAt.IsZero() && now.Sub(created) > grace || !lastAt.IsZero() && now.Sub(lastAt) > grace {
+		// Measured from the first run due after the last backup, so a gap in
+		// the schedule, such as a weekend, doesn't count as lateness.
+		from := lastAt
+		if from.IsZero() {
+			from = created
+		}
+		due := sched.Next(from)
+		interval := sched.Next(due).Sub(due)
+		if now.Sub(due) > interval/2+15*time.Minute {
 			msg := fmt.Sprintf("%s: no backup for %s (it should run every %s).", src.Name, since(lastAt, created, now), humanDur(interval))
 			s.alert("backup-overdue", &id, nil, msg)
 		} else {

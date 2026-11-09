@@ -136,8 +136,12 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing restore-tested snapshots: %w", err)
 	}
+	spec := src.Spec
+	if job.Kind == "drill" || job.Kind == copyDrillKind {
+		spec = spec.Redacted() // a restore test only touches the storage and its own sandbox
+	}
 	lease := &protocol.Lease{
-		JobID: job.ID, Kind: job.Kind, Source: src.Spec, Repository: repo.Backend, RepoID: repo.ID,
+		JobID: job.ID, Kind: job.Kind, Source: spec, Repository: repo.Backend, RepoID: repo.ID,
 		Password: sec.Password, Creds: sec.Credentials, Retention: src.Retention,
 		Verified: verified, TSAs: s.tsaURLs(), LeaseSecs: int(leaseDuration.Seconds()),
 	}
@@ -197,8 +201,11 @@ func (s *Server) handleJobLog(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.TouchAgent(a.ID, a.Version, a.Docker); err != nil {
 		s.log.Printf("agent #%d: could not record heartbeat: %v", a.ID, err)
 	}
-	if err := s.store.ExtendLease(id, a.ID, leaseDuration, req.Lines); err != nil {
-		writeErr(w, 409, err)
+	if err := s.store.ExtendLease(id, a.ID, leaseDuration, req.Lines); errors.Is(err, errLeaseLost) {
+		writeErr(w, 409, err) // tells the agent to cancel the job
+		return
+	} else if err != nil {
+		writeErr(w, 500, err)
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})

@@ -93,7 +93,10 @@ func Run(ctx context.Context, rp *repo.Repo, s snapshot.WithID, spec source.Spec
 		rr, err := engine.Restore(ctx, rp, s.Snapshot, dir, engine.RestoreOptions{Log: opts.Log})
 		res.RestoredBytes = rr.Bytes
 		res.StorageUnreadable = errors.Is(err, engine.ErrUnreadable)
-		return fmt.Sprintf("%d files, %d bytes, every chunk authenticated and every file hash verified", rr.Files, rr.Bytes), err
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%d files, %d bytes, every chunk authenticated and every file hash verified", rr.Files, rr.Bytes), nil
 	})
 	if restored {
 		r.check("content-root", func() (string, error) {
@@ -126,12 +129,13 @@ func Run(ctx context.Context, rp *repo.Repo, s snapshot.WithID, spec source.Spec
 				return strings.TrimSpace(lastLine(out)), err
 			})
 		}
-		if spec.Drill.AppTest != nil && allPassed(res.Checks) {
-			appChecks(ctx, r, dir, spec, opts.WorkDir)
-		}
 	}
+	// The restore time stops here: waiting for an app to start isn't part of it.
 	res.Duration = time.Since(began)
 	res.FinishedAt = res.StartedAt.Add(res.Duration)
+	if spec.Drill.AppTest != nil && allPassed(res.Checks) {
+		appChecks(ctx, r, dir, spec, opts.WorkDir)
+	}
 	res.Passed = allPassed(dataChecks(res.Checks))
 	return res, nil
 }

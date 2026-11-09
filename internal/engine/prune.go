@@ -13,15 +13,21 @@ type PruneOptions struct {
 	// Grace protects recently written blobs that may belong to a backup that
 	// is still running. Without repository locks this is what makes prune
 	// safe to run concurrently with backups.
-	Grace  time.Duration
-	DryRun bool
-	Log    Logger
+	Grace time.Duration
+	// MarkAge is how long an unused blob stays marked before it is deleted.
+	// Backups that start after the mark upload the data again instead of
+	// reusing it, so only a backup already running for this long is at risk.
+	// Negative deletes without waiting.
+	MarkAge time.Duration
+	DryRun  bool
+	Log     Logger
 }
 
 type PruneResult struct {
 	Deleted      int   `json:"deleted"`
 	DeletedBytes int64 `json:"deletedBytes"`
 	KeptRecent   int   `json:"keptRecent"`
+	Marked       int   `json:"marked"`
 	Locked       int   `json:"locked"`
 }
 
@@ -43,6 +49,9 @@ func Prune(ctx context.Context, r *repo.Repo, opts PruneOptions) (PruneResult, e
 	if opts.Grace == 0 {
 		opts.Grace = 6 * time.Hour
 	}
+	if opts.MarkAge == 0 {
+		opts.MarkAge = 24 * time.Hour
+	}
 	var res PruneResult
 	snaps, err := snapshot.List(ctx, r)
 	if err != nil {
@@ -57,13 +66,29 @@ func Prune(ctx context.Context, r *repo.Repo, opts PruneOptions) (PruneResult, e
 	if err != nil {
 		return res, err
 	}
-	cutoff := time.Now().Add(-opts.Grace)
+	marks, err := r.PruneMarks(ctx)
+	if err != nil {
+		return res, err
+	}
+	now := time.Now()
+	nextMarks := map[string]int64{}
+	cutoff := now.Add(-opts.Grace)
 	for id, info := range stored {
 		if _, ok := refs[id]; ok {
 			continue
 		}
 		if info.Modified.After(cutoff) {
 			res.KeptRecent++
+			continue
+		}
+		key := id.String()
+		marked, ok := marks[key]
+		if !ok {
+			marked = now.Unix()
+		}
+		if opts.MarkAge > 0 && now.Sub(time.Unix(marked, 0)) < opts.MarkAge {
+			nextMarks[key] = marked
+			res.Marked++
 			continue
 		}
 		if opts.DryRun {
@@ -74,11 +99,17 @@ func Prune(ctx context.Context, r *repo.Repo, opts PruneOptions) (PruneResult, e
 		if err := r.Backend().Delete(ctx, repo.DataKey(id)); err != nil {
 			// Object-locked blobs cannot be deleted until retention expires.
 			res.Locked++
+			nextMarks[key] = marked
 			continue
 		}
 		res.Deleted++
 		res.DeletedBytes += info.Size
 	}
-	opts.Log("prune: deleted %d blobs (%d bytes), %d too recent, %d locked", res.Deleted, res.DeletedBytes, res.KeptRecent, res.Locked)
+	if !opts.DryRun && (len(marks) > 0 || len(nextMarks) > 0) {
+		if err := r.SavePruneMarks(ctx, nextMarks); err != nil {
+			return res, err
+		}
+	}
+	opts.Log("prune: deleted %d blobs (%d bytes), %d waiting to be deleted, %d too recent, %d locked", res.Deleted, res.DeletedBytes, res.Marked, res.KeptRecent, res.Locked)
 	return res, nil
 }

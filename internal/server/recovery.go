@@ -152,7 +152,21 @@ func (s *Server) sourceRecovery(src Source, now time.Time) Recovery {
 	if err != nil {
 		s.log.Printf("recovery %s: %v", src.Name, err)
 	}
-	return recoveryFrom(src, tests, now)
+	return recoveryFrom(src, s.withLastPass(src.ID, tests), now)
+}
+
+// withLastPass adds the newest passing test when the recent ones all failed,
+// so a long run of failures doesn't make the last good backup disappear.
+func (s *Server) withLastPass(sourceID int64, tests []ProofRow) []ProofRow {
+	for i := range tests {
+		if tests[i].Passed {
+			return tests
+		}
+	}
+	if p := s.store.LastProof(sourceID, "drill", true); p != nil {
+		return append(tests[:len(tests):len(tests)], *p)
+	}
+	return tests
 }
 
 // watchRecovery alerts when an item is past a limit its owner set.
@@ -162,6 +176,8 @@ func (s *Server) watchRecovery(src Source, now time.Time) {
 	if r.RPOState == goalMissed {
 		s.alert("rpo-missed", &id, nil, fmt.Sprintf("%s: the newest backup that passed a restore test is %s old, over your limit of %s. Newer backups only count once a restore test passes.",
 			src.Name, humanDur(time.Duration(*r.VerifiedAgeMs)*time.Millisecond), plural(src.RPOTargetHours, "hour")))
+	} else if created, err := time.Parse(time.RFC3339Nano, src.Created); err == nil && r.VerifiedPoint == nil && src.RPOTargetHours > 0 && now.Sub(created) > time.Duration(src.RPOTargetHours)*time.Hour {
+		s.alert("rpo-missed", &id, nil, fmt.Sprintf("%s: no backup has passed a restore test yet, and this item is older than your limit of %s.", src.Name, plural(src.RPOTargetHours, "hour")))
 	} else {
 		s.resolve("rpo-missed", &id, nil)
 	}
@@ -190,7 +206,7 @@ func (s *Server) handleRecovery(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	rec := recoveryFrom(*src, tests, time.Now())
+	rec := recoveryFrom(*src, s.withLastPass(id, tests), time.Now())
 	rec.History = recoveryHistory(tests)
 	writeJSON(w, 200, rec)
 }

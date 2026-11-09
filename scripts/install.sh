@@ -141,6 +141,7 @@ Wants=network-online.target
 ExecStart=$BIN server --data $DATA --listen $LISTEN${PUBLIC_URL:+ --public-url $PUBLIC_URL}
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=180
 PrivateTmp=yes
 
 [Install]

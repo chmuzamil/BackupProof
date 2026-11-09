@@ -171,7 +171,7 @@ func TestStreamAndPrune(t *testing.T) {
 	if err := Forget(ctx, r, []string{s.ID.String()}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := Prune(ctx, r, PruneOptions{Grace: -time.Hour})
+	res, err := Prune(ctx, r, PruneOptions{Grace: -time.Hour, MarkAge: -1})
 	if err != nil {
 		t.Fatal(err)
 	}

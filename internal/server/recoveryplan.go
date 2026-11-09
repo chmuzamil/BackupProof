@@ -161,7 +161,11 @@ func planCLIEnv(b backend.Config) string {
 	case "s3":
 		return "export AWS_ACCESS_KEY_ID=<access key> AWS_SECRET_ACCESS_KEY=<secret key>"
 	case "sftp":
-		return "export BP_SFTP_PASSWORD=<server password>"
+		key := b.HostKey
+		if key == "" {
+			key = "<the server's key, from ssh-keyscan>"
+		}
+		return "export BP_SFTP_HOSTKEY='" + key + "'\nexport BP_SFTP_PASSWORD=<server password>  # or BP_SFTP_KEY_FILE=<path to the private key>"
 	}
 	return ""
 }
@@ -316,13 +320,14 @@ func appTestSecretNames(at *source.AppTest) []string {
 
 func (s *Server) planItem(src Source, r Repository, order int) (planItem, error) {
 	tests, err := s.store.RecoveryTests(src.ID, recoveryTests)
+	tests = s.withLastPass(src.ID, tests)
 	if err != nil {
 		return planItem{}, err
 	}
 	_, stage := planStage(src.Spec.Kind)
 	item := planItem{Order: order, Name: src.Name, Kind: kindWords(src.Spec), Stage: stage, Storage: r.Name, StorageWhat: storageWhat(r.Backend),
 		AutoChecks: []string{}, Confirm: []string{}, NotCovered: []string{}}
-	snap := "(newest backup marked as tested)"
+	snap := "<backup ID from the list above>"
 	best := newestTested(tests)
 	if best != nil {
 		item.Tested, item.SnapshotID, item.TestedAt = true, best.SnapshotID, best.Created
@@ -350,7 +355,10 @@ func (s *Server) planItem(src Source, r Repository, order int) (planItem, error)
 
 // planSteps fills in how to restore each kind of item, and says what isn't covered.
 func planSteps(item *planItem, src Source, r Repository, snap string) {
-	open := fmt.Sprintf("In the dashboard, open Protected, then %q, then Restore, and choose the backup marked as tested (%s).", src.Name, short(snap))
+	open := fmt.Sprintf("In the dashboard, open Protected, then %q, then Restore, and choose the newest backup. None has passed a restore test yet.", src.Name)
+	if item.Tested {
+		open = fmt.Sprintf("In the dashboard, open Protected, then %q, then Restore, and choose the backup marked as tested (%s).", src.Name, short(snap))
+	}
 	base := fmt.Sprintf("backupproof restore --repo '%s' --target /root/restored", planRepoURL(r.Backend))
 	env := "export BP_PASSWORD='<password from the recovery kit>'"
 	if extra := planCLIEnv(r.Backend); extra != "" {

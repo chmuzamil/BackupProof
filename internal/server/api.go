@@ -16,6 +16,7 @@ import (
 	"github.com/chmuzamil/backupproof/internal/engine"
 	"github.com/chmuzamil/backupproof/internal/errreport"
 	"github.com/chmuzamil/backupproof/internal/proof"
+	"github.com/chmuzamil/backupproof/internal/retention"
 	"github.com/chmuzamil/backupproof/internal/source"
 )
 
@@ -273,12 +274,15 @@ func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int
 	}
 	lastFailed := s.store.LastJob(src.ID, "backup", "failed")
 	lastOK := s.store.LastJob(src.ID, "backup", "succeeded")
+	stoppedDrill := s.store.LastJob(src.ID, "drill", "failed")
 	maxAge := time.Duration(src.ProofMaxAgeHours) * time.Hour
 	switch {
 	case st.LastDrill != nil && !st.LastDrill.Passed:
 		st.Status, st.Reason = "failing", "The last restore test failed, so this backup may not be usable. Open it to see what went wrong."
 	case lastFailed != nil && (lastOK == nil || lastFailed.ID > lastOK.ID):
 		st.Status, st.Reason = "failing", "The last backup didn't finish: "+lastFailed.Error
+	case stoppedDrill != nil && drillStoppedSince(stoppedDrill, st.LastDrill):
+		st.Status, st.Reason = "at-risk", "The last restore test couldn't finish: "+stoppedDrill.Error
 	case st.LastPassingDrill == nil:
 		if st.LastBackup == nil {
 			st.Status, st.Reason = "unproven", "No backup yet."
@@ -406,6 +410,8 @@ func (s *Server) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		src.ID, src.Name = id, existing.Name
+	} else {
+		src.ID = 0 // POST only creates; changes go through PUT and its checks
 	}
 	if u := currentUser(r); u == nil || u.Role != "admin" {
 		if err := operatorMayChange(existing, &src); err != nil {
@@ -976,6 +982,24 @@ func plural(n int, unit string) string {
 // server the item's secrets), or reads arbitrary local paths through rclone
 // can turn "set up backups" into control of the server, so it is admin-only.
 // Values that are unchanged from what an admin already saved are allowed.
+// drillStoppedSince reports a restore test that failed without recording a
+// proof, which is newer than the last proof.
+func drillStoppedSince(j *Job, last *ProofRow) bool {
+	if j.Finished == nil {
+		return false
+	}
+	if last == nil {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339Nano, last.Created)
+	return err == nil && j.Finished.After(t)
+}
+
+func retentionReduced(o, n retention.Policy) bool {
+	return n.KeepLast < o.KeepLast || n.KeepHourly < o.KeepHourly || n.KeepDaily < o.KeepDaily || n.KeepWeekly < o.KeepWeekly ||
+		n.KeepMonthly < o.KeepMonthly || n.KeepYearly < o.KeepYearly || n.KeepWithin < o.KeepWithin || n.KeepLastVerified < o.KeepLastVerified
+}
+
 func operatorMayChange(old *Source, src *Source) error {
 	var o source.Spec
 	if old != nil {
@@ -997,10 +1021,16 @@ func operatorMayChange(old *Source, src *Source) error {
 	if n.Drill.Command != o.Drill.Command {
 		return deny("custom restore-test commands")
 	}
+	if n.Drill.Image != o.Drill.Image {
+		return deny("which image a restore test uses")
+	}
 	if !reflect.DeepEqual(n.Drill.AppTest, o.Drill.AppTest) {
 		return deny("which app a restore test starts")
 	}
 	if old != nil {
+		if retentionReduced(old.Retention, src.Retention) {
+			return deny("keeping fewer backups")
+		}
 		if src.AgentID != old.AgentID {
 			return deny("which server an item runs on")
 		}
