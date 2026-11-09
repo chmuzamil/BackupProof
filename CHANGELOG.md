@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-11-10
+
+### Fixed
+
+- **MariaDB without the `mysql` commands now backs up and restores.** Newer MariaDB only ships `mariadb` and `mariadb-dump`, so these backups failed. BackupProof now uses whichever is installed, on the server and in containers.
+- **A missing program is now named as the problem,** instead of a bare "exit status 127".
+- **App tests now work for apps that don't run as root.** The restored copy keeps its backed-up owners and folder permissions, so the app can read its own data.
+
 ## [0.2.16] - 2026-11-09
 
 ### Security
