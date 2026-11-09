@@ -121,7 +121,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs/{id}", s.auth("auditor", s.handleGetJob))
 
 	mux.HandleFunc("GET /api/agents", s.auth("auditor", s.handleListAgents))
-	mux.HandleFunc("GET /api/agents/{id}/recovery-plan", s.auth("operator", s.handleRecoveryPlan))
+	mux.HandleFunc("GET /api/agents/{id}/recovery-plan", s.auth("admin", s.handleRecoveryPlan))
 	mux.HandleFunc("POST /api/agents/enroll-token", s.auth("admin", s.handleEnrollToken))
 	mux.HandleFunc("POST /api/agents/{id}/revoke", s.auth("admin", s.handleRevokeAgent))
 	mux.HandleFunc("DELETE /api/agents/{id}", s.auth("admin", s.handleRemoveAgent))
@@ -275,8 +275,6 @@ func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int
 	lastOK := s.store.LastJob(src.ID, "backup", "succeeded")
 	maxAge := time.Duration(src.ProofMaxAgeHours) * time.Hour
 	switch {
-	case st.LastDrill != nil && !st.LastDrill.Passed && appOnlyFailure(lastChecks(st.LastDrill)):
-		st.Status, st.Reason = "failing", "The data restored and passed its checks, but the app didn't come back up in the test. Open it to see what went wrong."
 	case st.LastDrill != nil && !st.LastDrill.Passed:
 		st.Status, st.Reason = "failing", "The last restore test failed, so this backup may not be usable. Open it to see what went wrong."
 	case lastFailed != nil && (lastOK == nil || lastFailed.ID > lastOK.ID):
@@ -294,6 +292,9 @@ func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int
 			st.Status, st.Reason = "at-risk", fmt.Sprintf("Last restore test was %s ago, so a new one is overdue.", humanDur(age))
 		} else {
 			st.Status, st.Reason = "proven", fmt.Sprintf("Restore tested %s ago.", humanDur(age))
+		}
+		if appTestFailed(lastChecks(st.LastPassingDrill)) {
+			st.Reason += " The data passed, but the app didn't come back up in that test."
 		}
 	}
 	return st

@@ -1,14 +1,16 @@
 package server
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/chmuzamil/backupproof/internal/discover"
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/source"
 )
 
-func TestAppOnlyFailure(t *testing.T) {
+func TestAppTestFailed(t *testing.T) {
 	ok := proof.Check{Name: "restore-from-storage", Passed: true}
 	for _, c := range []struct {
 		name   string
@@ -17,13 +19,31 @@ func TestAppOnlyFailure(t *testing.T) {
 	}{
 		{"app did not answer", []proof.Check{ok, {Name: "app-sandbox-start", Passed: true}, {Name: "app-http-status"}}, true},
 		{"restore failed", []proof.Check{{Name: "restore-from-storage"}}, false},
-		{"restore and app failed", []proof.Check{{Name: "content-root"}, {Name: "app-running"}}, false},
 		{"all passed", []proof.Check{ok, {Name: "app-http-status", Passed: true}}, false},
 		{"no checks", nil, false},
 	} {
-		if got := appOnlyFailure(c.checks); got != c.want {
+		if got := appTestFailed(c.checks); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// A failed app test raises its own alert and leaves the backup restore-tested.
+func TestAppTestFailureIsSeparate(t *testing.T) {
+	f := newPlanFixture(t)
+	failed := []proof.Check{{Name: "content-root", Passed: true}, {Name: "app-http-status", Detail: "HTTP 500"}}
+	f.addProof(t, f.source, "drill", "snap1", true, time.Now(), failed)
+	f.srv.appTestOutcome(&f.source, failed)
+	if !f.open(t, "app-test-failed") || f.open(t, "drill-failed") {
+		t.Fatal("a failed app test should raise only its own alert")
+	}
+	st := f.srv.sourceStatus(f.source, nil, nil)
+	if st.Status != "proven" || st.LastPassingDrill == nil || !strings.Contains(st.Reason, "app didn't come back up") {
+		t.Errorf("status %s, reason %q, last passing %+v", st.Status, st.Reason, st.LastPassingDrill)
+	}
+	f.srv.appTestOutcome(&f.source, []proof.Check{{Name: "content-root", Passed: true}, {Name: "app-http-status", Passed: true}})
+	if f.open(t, "app-test-failed") {
+		t.Error("a passing app test left the alert open")
 	}
 }
 

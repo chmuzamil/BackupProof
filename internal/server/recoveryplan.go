@@ -340,6 +340,9 @@ func (s *Server) planItem(src Source, r Repository, order int) (planItem, error)
 	}
 	if src.Spec.Drill.AppTest != nil {
 		item.AppTestState = "The app test is on for this item, so its restore tests also start the app in isolation."
+		if best != nil && appTestFailed(lastChecks(best)) {
+			item.AppTestState = "The app test is on for this item, and the app didn't come back up in that restore test. The data passed, but expect to fix the app after restoring it."
+		}
 	}
 	planSteps(&item, src, r, snap)
 	return item, nil

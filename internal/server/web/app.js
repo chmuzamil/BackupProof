@@ -397,6 +397,7 @@ const ALERT_WORDS = {
   'check-failed': 'Storage check failed', 'copy-failed': 'Copy to second storage failed',
   'rpo-missed': 'Data-loss limit passed', 'rto-missed': 'Restore-time limit passed',
   'copy-drill-failed': 'Restore test of second copy failed',
+  'app-test-failed': 'App test failed',
 };
 
 // --------------------------------------------------------------- widgets
@@ -1609,7 +1610,7 @@ async function pageSource(id) {
   const checks = dp.checks || [];
   const isApp = (c) => /^app-/.test(c.name || '');
   const appResults = checks.filter(isApp), appTestOn = !!(src.spec && src.spec.drill && src.spec.drill.appTest);
-  const onlyAppFailed = drill && !drill.passed && appResults.some((c) => !c.passed) && checks.every((c) => c.passed || isApp(c));
+  const appFailed = appResults.some((c) => !c.passed);
   const checkItem = (c) => h('li', null,
     h('span', { class: 'ico ' + (c.passed ? 'ok' : 'bad') }, mark(c.passed)),
     h('div', null, h('div', null, checkWords(c.name)), (!c.passed || c.name === 'database-dumps' || isApp(c)) && c.detail ? h('div', { class: 'detail' }, c.detail) : null),
@@ -1617,7 +1618,7 @@ async function pageSource(id) {
   const rootsMatch = dp.restoredRoot && dp.restoredRoot === dp.expectedRoot;
   const drillCard = card('What the last restore test checked', drill ? h('div', null,
     h('p', { class: 'muted' }, `The backup copy from ${day(dp.snapshotTime || drill.created)} was restored into a safe, separate place and checked. `,
-      drill.passed ? 'Everything passed.' : onlyAppFailed ? 'The data came back and passed its checks, but the app didn’t — see below.' : 'Something did not pass — see below.'),
+      appFailed ? 'The data came back and passed its checks, so this backup counts as restore-tested. The app didn’t come back up — see below.' : drill.passed ? 'Everything passed.' : 'Something did not pass — see below.'),
     checks.filter((c) => !isApp(c)).length ? h('ul', { class: 'checks' }, checks.filter((c) => !isApp(c)).map(checkItem)) : h('p', { class: 'muted' }, 'No checks were recorded.'),
     appResults.length ? [h('h3', null, 'Starting the app'),
       h('p', { class: 'muted small' }, 'Started on its own after the data passed: no outside network, no ports on the server, and nothing from the backup was run.'),
@@ -3252,7 +3253,7 @@ async function pageAgents() {
         h('dt', null, 'Version'), h('dd', { translate: 'no' }, a.version || '—'),
         h('dt', null, 'Key ID'), h('dd', null, h('code', { class: 'break' }, a.keyId || short(a.publicKey, 16))),
         h('dt', null, 'Connected'), h('dd', null, absTime(a.created)))),
-      canOperate() && !a.revoked ? h('div', { class: 'form-actions start' }, h('a', { class: 'btn sm', href: `#/agents/${a.id}/recovery-plan`, 'aria-label': 'Recovery plan for ' + a.name }, 'Recovery plan')) : null,
+      isAdmin() && !a.revoked ? h('div', { class: 'form-actions start' }, h('a', { class: 'btn sm', href: `#/agents/${a.id}/recovery-plan`, 'aria-label': 'Recovery plan for ' + a.name }, 'Recovery plan')) : null,
       isAdmin() && !a.revoked && !a.builtin ? h('div', { class: 'form-actions' }, btn('Disconnect', busy(async () => {
         if (!(await confirmDlg(`Disconnect “${a.name}”? It immediately loses access and must be connected again with a new code. Its past proofs stay valid.`, 'Disconnect'))) return;
         await post(`/agents/${a.id}/revoke`); toast('Server disconnected', 'ok'); reload();

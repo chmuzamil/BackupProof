@@ -132,8 +132,18 @@ func Run(ctx context.Context, rp *repo.Repo, s snapshot.WithID, spec source.Spec
 	}
 	res.Duration = time.Since(began)
 	res.FinishedAt = res.StartedAt.Add(res.Duration)
-	res.Passed = allPassed(res.Checks)
+	res.Passed = allPassed(dataChecks(res.Checks))
 	return res, nil
+}
+
+func dataChecks(checks []proof.Check) []proof.Check {
+	var out []proof.Check
+	for _, c := range checks {
+		if !proof.IsAppCheck(c.Name) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func allPassed(checks []proof.Check) bool {

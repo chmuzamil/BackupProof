@@ -138,6 +138,40 @@ func TestNoAppTestMeansNoDocker(t *testing.T) {
 	}
 }
 
+// An app that won't answer fails its own checks, not the restore test.
+func TestAppFailureLeavesTheRestoreTestPassed(t *testing.T) {
+	t.Cleanup(drill.UseFakeDocker(func(_ context.Context, _ int, args ...string) (string, string, error) {
+		switch args[0] {
+		case "inspect":
+			if strings.Contains(args[2], "State") {
+				return "true 0 false", "", nil
+			}
+			return "sha256:imageid", "", nil
+		case "exec":
+			return "oops", "BPPROBE 500 0.01", nil
+		}
+		return "", "", nil
+	}))
+	res, pred := backupAndDrill(t, appTest(), "index.html")
+	if !res.Passed {
+		t.Fatalf("a failed app test failed the restore test: %+v", res.Checks)
+	}
+	var p struct {
+		Passed bool          `json:"passed"`
+		Checks []proof.Check `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(pred), &p); err != nil {
+		t.Fatal(err)
+	}
+	failed := false
+	for _, c := range p.Checks {
+		failed = failed || (c.Name == "app-http-status" && !c.Passed)
+	}
+	if !p.Passed || !failed {
+		t.Errorf("the signed proof should pass and show the failed app check: %s", pred)
+	}
+}
+
 // The app only starts once the restore itself has passed.
 func TestAppTestSkippedWhenRestoreFails(t *testing.T) {
 	var calls []string

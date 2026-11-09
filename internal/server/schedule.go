@@ -224,21 +224,25 @@ func storageOnlyFailure(checks []proof.Check) bool {
 	return unreadable
 }
 
-// appOnlyFailure reports a restore test where the data restored and passed its
-// checks, and only starting the app failed. Those are the app-* checks, which
-// run after everything else has passed.
-func appOnlyFailure(checks []proof.Check) bool {
-	failed := false
+// appTestFailed reports a restore test in which the app didn't come back up.
+func appTestFailed(checks []proof.Check) bool {
 	for _, c := range checks {
-		if c.Passed {
-			continue
+		if !c.Passed && proof.IsAppCheck(c.Name) {
+			return true
 		}
-		if !strings.HasPrefix(c.Name, "app-") {
-			return false
-		}
-		failed = true
 	}
-	return failed
+	return false
+}
+
+// appTestOutcome raises or clears the app test's own alert after a restore test
+// that passed. The backup still counts as restore-tested either way.
+func (s *Server) appTestOutcome(src *Source, checks []proof.Check) {
+	id := src.ID
+	if appTestFailed(checks) {
+		s.alert("app-test-failed", &id, nil, fmt.Sprintf("%s: the data restored and passed its checks, so the backup still counts as restore-tested, but the app didn't come back up in the test.", src.Name))
+		return
+	}
+	s.resolve("app-test-failed", &id, nil)
 }
 
 // lastChecks reads the checks of a restore-test proof.

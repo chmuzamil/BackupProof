@@ -18,7 +18,8 @@ import (
 
 // The app test starts the restored application and checks it responds. It
 // runs after every other check of a restore test has passed, and reports as
-// ordinary app-* checks in the signed proof.
+// app-* checks in the signed proof. Those fail only the app test: the restore
+// test itself has already passed on the data.
 //
 // Restored data is untrusted, and a restored Compose file could mount the
 // host's disk or run privileged, so nothing from the restored tree is read for
