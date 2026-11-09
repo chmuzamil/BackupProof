@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Edit (advanced) on a Docker item** showed it as folders and files and wouldn't save it without a folder.
+- **Docker apps no longer vanish from a server's list** when a container is removed at the moment the list is read, for example as a restore test finishes.
 
 ## [0.2.14] - 2026-11-09
 

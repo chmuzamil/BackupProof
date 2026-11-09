@@ -208,10 +208,9 @@ func (inv *Inventory) collectDockerApps(ctx context.Context) {
 	facts := map[string][]containerFacts{}
 	used := map[string][]string{}
 	if f := strings.Fields(string(ids)); len(f) > 0 {
-		out, err := exec.CommandContext(ctx, "docker", append([]string{"inspect"}, f...)...).Output()
-		if err != nil {
-			return
-		}
+		// A container removed since the list was taken makes inspect exit with
+		// an error, but it still prints all the others.
+		out, _ := exec.CommandContext(ctx, "docker", append([]string{"inspect"}, f...)...).Output()
 		var cs []struct {
 			Name   string
 			Mounts []mountFacts
