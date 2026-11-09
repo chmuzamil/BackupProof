@@ -71,6 +71,8 @@ type DockerApp struct {
 	Standalone bool `json:"standalone"`
 	// Database is true when one of its containers runs a database image.
 	Database bool `json:"database"`
+	// Template is set when a built-in app-test template fits this app.
+	Template *TemplateHint `json:"template,omitempty"`
 }
 
 type DockerVolume struct {
@@ -203,6 +205,7 @@ func (inv *Inventory) collectDockerApps(ctx context.Context) {
 		return
 	}
 	apps := map[string]*DockerApp{}
+	facts := map[string][]containerFacts{}
 	used := map[string][]string{}
 	if f := strings.Fields(string(ids)); len(f) > 0 {
 		out, err := exec.CommandContext(ctx, "docker", append([]string{"inspect"}, f...)...).Output()
@@ -211,7 +214,7 @@ func (inv *Inventory) collectDockerApps(ctx context.Context) {
 		}
 		var cs []struct {
 			Name   string
-			Mounts []struct{ Type, Name, Source string }
+			Mounts []mountFacts
 			Config struct {
 				Image  string
 				Labels map[string]string
@@ -250,6 +253,7 @@ func (inv *Inventory) collectDockerApps(ctx context.Context) {
 			a.Volumes = append(a.Volumes, vols...)
 			a.Mounts = append(a.Mounts, mounts...)
 			a.Running = a.Running || c.State.Running
+			facts[key] = append(facts[key], containerFacts{Image: c.Config.Image, Mounts: c.Mounts})
 			img := strings.ToLower(c.Config.Image)
 			for _, db := range []string{"postgres", "postgis", "mysql", "mariadb", "mongo", "redis", "timescale"} {
 				if strings.Contains(img, db) {
@@ -258,7 +262,8 @@ func (inv *Inventory) collectDockerApps(ctx context.Context) {
 			}
 		}
 	}
-	for _, a := range apps {
+	for key, a := range apps {
+		a.Template = templateHint(facts[key])
 		sort.Strings(a.Containers)
 		a.Volumes = sortedUniq(a.Volumes)
 		a.Mounts = sortedUniq(a.Mounts)

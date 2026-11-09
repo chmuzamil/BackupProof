@@ -83,6 +83,10 @@ type DrillSpec struct {
 	RowCountTolerance float64 `json:"rowCountTolerance,omitempty"`
 	// SkipDumps turns off loading PostgreSQL dumps found inside file backups.
 	SkipDumps bool `json:"skipDumps,omitempty"`
+	// AppTest optionally starts the restored app in isolation after the other
+	// checks pass. Agents too old to know it ignore it, so their proofs simply
+	// have no app-* checks.
+	AppTest *AppTest `json:"appTest,omitempty"`
 }
 
 type Assertion struct {
@@ -130,6 +134,9 @@ func (s Spec) Validate() error {
 		}
 	default:
 		return fmt.Errorf("unknown source kind %q", s.Kind)
+	}
+	if s.Drill.AppTest != nil {
+		return s.Drill.AppTest.Validate(s.Kind)
 	}
 	return nil
 }

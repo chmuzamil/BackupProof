@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chmuzamil/backupproof/internal/backend"
+	"github.com/chmuzamil/backupproof/internal/discover"
 	"github.com/chmuzamil/backupproof/internal/engine"
 	"github.com/chmuzamil/backupproof/internal/errreport"
 	"github.com/chmuzamil/backupproof/internal/proof"
@@ -99,6 +101,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/dashboard", s.auth("auditor", s.handleDashboard))
 
+	mux.HandleFunc("GET /api/app-templates", s.auth("operator", s.handleAppTemplates))
 	mux.HandleFunc("GET /api/sources", s.auth("auditor", s.handleListSources))
 	mux.HandleFunc("POST /api/sources", s.auth("operator", s.handleSaveSource))
 	mux.HandleFunc("GET /api/sources/{id}", s.auth("auditor", s.handleGetSource))
@@ -118,6 +121,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs/{id}", s.auth("auditor", s.handleGetJob))
 
 	mux.HandleFunc("GET /api/agents", s.auth("auditor", s.handleListAgents))
+	mux.HandleFunc("GET /api/agents/{id}/recovery-plan", s.auth("admin", s.handleRecoveryPlan))
 	mux.HandleFunc("POST /api/agents/enroll-token", s.auth("admin", s.handleEnrollToken))
 	mux.HandleFunc("POST /api/agents/{id}/revoke", s.auth("admin", s.handleRevokeAgent))
 	mux.HandleFunc("DELETE /api/agents/{id}", s.auth("admin", s.handleRemoveAgent))
@@ -289,6 +293,9 @@ func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int
 		} else {
 			st.Status, st.Reason = "proven", fmt.Sprintf("Restore tested %s ago.", humanDur(age))
 		}
+		if appTestFailed(lastChecks(st.LastPassingDrill)) {
+			st.Reason += " The data passed, but the app didn't come back up in that test."
+		}
 	}
 	return st
 }
@@ -421,6 +428,10 @@ func (s *Server) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, _, err := s.store.Repository(src.RepoID); err != nil {
 		writeErr(w, 400, err)
+		return
+	}
+	if at := src.Spec.Drill.AppTest; at != nil && at.Template != "" && !discover.KnownTemplate(at.Template, at.TemplateVersion) {
+		writeErr(w, 400, errors.New("the app test names a template this dashboard doesn't have"))
 		return
 	}
 	// Secrets arriving in the spec are moved to the encrypted secret column.
@@ -933,6 +944,12 @@ func (s *Server) handlePutServerSettings(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, 200, map[string]any{"ok": true, "publicUrl": s.publicURL()})
 }
 
+// handleAppTemplates lists the built-in app-test templates, so the form can
+// show exactly what each one fills in.
+func (s *Server) handleAppTemplates(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, discover.Templates())
+}
+
 // humanDur renders durations the way people say them.
 func humanDur(d time.Duration) string {
 	switch {
@@ -955,7 +972,7 @@ func plural(n int, unit string) string {
 
 // operatorMayChange enforces what non-admin users may configure. Anything
 // that runs commands on a server (hooks, command sources, custom restore
-// checks), moves an item to a different server (which would hand that
+// checks, the image an app test starts), moves an item to a different server (which would hand that
 // server the item's secrets), or reads arbitrary local paths through rclone
 // can turn "set up backups" into control of the server, so it is admin-only.
 // Values that are unchanged from what an admin already saved are allowed.
@@ -979,6 +996,9 @@ func operatorMayChange(old *Source, src *Source) error {
 	}
 	if n.Drill.Command != o.Drill.Command {
 		return deny("custom restore-test commands")
+	}
+	if !reflect.DeepEqual(n.Drill.AppTest, o.Drill.AppTest) {
+		return deny("which app a restore test starts")
 	}
 	if old != nil {
 		if src.AgentID != old.AgentID {

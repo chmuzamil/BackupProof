@@ -231,6 +231,29 @@ Choose **Protect something → Docker app or volumes**. BackupProof lists your C
 
 Tick **Stop the containers during each backup** for apps with a database, so files are copied while nothing writes to them; the containers start again straight after. Volumes are read from Docker's folder where possible, or through a small `busybox` helper container (Docker Desktop).
 
+## App restore test
+
+A restore test proves the data came back. Turn on the app test under **Edit (advanced) → Start the app** and each restore test that passes also starts the app and checks it responds. It's optional, off by default, and only for administrators. The server running the test needs Docker.
+
+**What runs is what you name.** You give the image, the parts of the backup it gets and the port it listens on. Nothing from the backup is run or read for instructions. A restored Compose file can mount the server's disk or run privileged, so it's never used, and a Docker backup's Compose files and container settings can't be given to the test.
+
+**How it's isolated:**
+
+- Restored data is mounted read-only. A path you mark `writable` gets a throwaway copy or an empty temporary folder, never the restored files themselves.
+- No network: containers get only a private loopback, with no ports on the server. A database beside the app shares that loopback, so the app reaches it at `127.0.0.1`.
+- The same dropped capabilities, no-new-privileges, memory, CPU and process limits as the database restore tests. Containers are always removed afterwards, whether the test passed, failed, timed out or was cancelled.
+- Secrets are never stored in the item. Set them on the server that runs the test as variables starting with `BP_APPTEST_` (for example in the agent's systemd unit), and refer to one with `WORDPRESS_DB_PASSWORD=$BP_APPTEST_WP_DB_PASSWORD`. Response bodies and container logs are never kept in a proof.
+
+Results appear as ordinary checks in the signed proof, named `app-sandbox-start`, `app-running`, `app-database-running`, `app-http-status`, `app-body-text` and `app-response-time`. If they fail, only the app test has failed: the backup still counts as restore-tested, the item says the app didn't come back up, and you get a separate **App test failed** alert. An agent too old to know about the app test ignores it, so the item page says it didn't run.
+
+**Templates** fill in the form, and you see everything they'll run before saving: **WordPress (Docker)** and **Any web app**. A template can only fill in the fields above, so it can't give an app more access, and it never holds secrets. Its name and version are recorded in the proof. When BackupProof recognises WordPress in a Docker backup, it offers the template with the images and paths filled in.
+
+## Recovery plan
+
+Administrators can use **Servers → Recovery plan** to build a plan for one server to print or download ahead of time: what to restore and in what order, the newest backup that passed a restore test, how long it took, the storage and recovery kit you need, the exact dashboard and command-line steps, and what isn't covered. Steps a person must confirm, including DNS and firewall changes, are kept apart from what the restore test already checked automatically. It never includes passwords, a container's environment or `.env` contents. The same data is at `GET /api/agents/{id}/recovery-plan`.
+
+Plans also say plainly what recovery can't do yet: database restores from the dashboard go to the original server, Docker put-back restores volumes and mounted folders but not Compose files, and what to do if the dashboard itself is lost.
+
 ## API
 
 Create a token under **Settings → API tokens** and send it as `Authorization: Bearer bpt_…`. A token acts with its own role (never more than its owner's) and can't manage people, tokens or two-factor sign-in.

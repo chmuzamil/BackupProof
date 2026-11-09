@@ -371,6 +371,12 @@ const CHECK_WORDS = [
   [/^sandbox$/, 'A safe test environment is available'],
   [/^(locate-dump|locate-database)$/, 'Found the database backup'],
   [/^custom-verify-command$/, 'Your custom check'],
+  [/^app-sandbox-start$/, 'Started the app in a safe, separate place'],
+  [/^app-running$/, 'The app stayed running'],
+  [/^app-database-running$/, 'The app’s database stayed running'],
+  [/^app-http-status$/, 'The app answered'],
+  [/^app-body-text$/, 'The app’s answer contains the expected text'],
+  [/^app-response-time$/, 'The app answered quickly enough'],
 ];
 
 function checkWords(name) {
@@ -391,6 +397,7 @@ const ALERT_WORDS = {
   'check-failed': 'Storage check failed', 'copy-failed': 'Copy to second storage failed',
   'rpo-missed': 'Data-loss limit passed', 'rto-missed': 'Restore-time limit passed',
   'copy-drill-failed': 'Restore test of second copy failed',
+  'app-test-failed': 'App test failed',
 };
 
 // --------------------------------------------------------------- widgets
@@ -1059,6 +1066,7 @@ const ROUTES = [
   [/^\/sources\/(\d+)$/, (m) => pageSource(Number(m[1]))],
   [/^\/sources\/(\d+)\/restore$/, (m) => pageRestore(Number(m[1]))],
   [/^\/agents$/, pageAgents],
+  [/^\/agents\/(\d+)\/recovery-plan$/, (m) => pageRecoveryPlan(Number(m[1]))],
   [/^\/repositories$/, pageRepositories],
   [/^\/storage\/new$/, pageStorageNew],
   [/^\/proofs$/, pageProofs],
@@ -1600,14 +1608,22 @@ async function pageSource(id) {
   hero.setAttribute('aria-label', 'Status');
 
   const checks = dp.checks || [];
+  const isApp = (c) => /^app-/.test(c.name || '');
+  const appResults = checks.filter(isApp), appTestOn = !!(src.spec && src.spec.drill && src.spec.drill.appTest);
+  const appFailed = appResults.some((c) => !c.passed);
+  const checkItem = (c) => h('li', null,
+    h('span', { class: 'ico ' + (c.passed ? 'ok' : 'bad') }, mark(c.passed)),
+    h('div', null, h('div', null, checkWords(c.name)), (!c.passed || c.name === 'database-dumps' || isApp(c)) && c.detail ? h('div', { class: 'detail' }, c.detail) : null),
+    h('span', { class: 'muted small' }, c.durationMs ? durWords(c.durationMs) : ''));
   const rootsMatch = dp.restoredRoot && dp.restoredRoot === dp.expectedRoot;
   const drillCard = card('What the last restore test checked', drill ? h('div', null,
     h('p', { class: 'muted' }, `The backup copy from ${day(dp.snapshotTime || drill.created)} was restored into a safe, separate place and checked. `,
-      drill.passed ? 'Everything passed.' : 'Something did not pass — see below.'),
-    checks.length ? h('ul', { class: 'checks' }, checks.map((c) => h('li', null,
-      h('span', { class: 'ico ' + (c.passed ? 'ok' : 'bad') }, mark(c.passed)),
-      h('div', null, h('div', null, checkWords(c.name)), (!c.passed || c.name === 'database-dumps') && c.detail ? h('div', { class: 'detail' }, c.detail) : null),
-      h('span', { class: 'muted small' }, c.durationMs ? durWords(c.durationMs) : '')))) : h('p', { class: 'muted' }, 'No checks were recorded.'),
+      appFailed ? 'The data came back and passed its checks, so this backup counts as restore-tested. The app didn’t come back up — see below.' : drill.passed ? 'Everything passed.' : 'Something did not pass — see below.'),
+    checks.filter((c) => !isApp(c)).length ? h('ul', { class: 'checks' }, checks.filter((c) => !isApp(c)).map(checkItem)) : h('p', { class: 'muted' }, 'No checks were recorded.'),
+    appResults.length ? [h('h3', null, 'Starting the app'),
+      h('p', { class: 'muted small' }, 'Started on its own after the data passed: no outside network, no ports on the server, and nothing from the backup was run.'),
+      h('ul', { class: 'checks' }, appResults.map(checkItem))]
+      : appTestOn ? h('div', { class: 'banner warn' }, 'The app test is on, but this restore test didn’t run it. If the checks above passed and the server running the test is older than this dashboard, update that server. Otherwise it runs at the next restore test.') : null,
     tech(h('dl', { class: 'kv' },
       h('dt', null, 'Backup copy ID'), h('dd', null, h('code', { class: 'break' }, drill.snapshotId || '—')),
       h('dt', null, 'Restore time (RTO)'), h('dd', null, dur(rto)),
@@ -3237,6 +3253,7 @@ async function pageAgents() {
         h('dt', null, 'Version'), h('dd', { translate: 'no' }, a.version || '—'),
         h('dt', null, 'Key ID'), h('dd', null, h('code', { class: 'break' }, a.keyId || short(a.publicKey, 16))),
         h('dt', null, 'Connected'), h('dd', null, absTime(a.created)))),
+      isAdmin() && !a.revoked ? h('div', { class: 'form-actions start' }, h('a', { class: 'btn sm', href: `#/agents/${a.id}/recovery-plan`, 'aria-label': 'Recovery plan for ' + a.name }, 'Recovery plan')) : null,
       isAdmin() && !a.revoked && !a.builtin ? h('div', { class: 'form-actions' }, btn('Disconnect', busy(async () => {
         if (!(await confirmDlg(`Disconnect “${a.name}”? It immediately loses access and must be connected again with a new code. Its past proofs stay valid.`, 'Disconnect'))) return;
         await post(`/agents/${a.id}/revoke`); toast('Server disconnected', 'ok'); reload();
@@ -3329,16 +3346,201 @@ async function connectModal() {
   }, 3000);
 }
 
+// ------------------------------------------------------- recovery plan
+
+async function pageRecoveryPlan(id) {
+  const { plan, text } = await api(`/agents/${id}/recovery-plan`);
+  const bullets = (list) => h('ul', null, list.map((x) => h('li', null, x)));
+  const steps = (list) => h('ol', null, list.map((x) => h('li', null, x)));
+  const toDo = (list) => h('ul', { class: 'plan-todo' }, list.map((x) => h('li', null, h('span', { 'aria-hidden': 'true' }, '☐ '), x)));
+  const item = (it) => h('section', { class: 'card' },
+    h('h2', null, `${it.order}. ${it.name}`),
+    h('p', { class: 'muted' }, `${it.kind}. ${it.stage}.`),
+    h('dl', { class: 'kv' },
+      h('dt', null, 'Stored in'), h('dd', null, `${it.storage} (${it.storageWhat})`),
+      h('dt', null, 'Restore from'), h('dd', null, it.tested ? h('code', { class: 'break' }, it.snapshotId) : h('span', { class: 'fact-bad' }, 'No backup has passed a restore test')),
+      it.backupTime ? [h('dt', null, 'Taken'), h('dd', null, absTime(it.backupTime))] : null,
+      it.testedAt ? [h('dt', null, 'Tested'), h('dd', null, absTime(it.testedAt))] : null,
+      it.restoreMs != null ? [h('dt', null, 'Time to restore'), h('dd', null, durWords(it.restoreMs))] : null,
+      it.lastRestore ? [h('dt', null, 'Last real restore'), h('dd', null, absTime(it.lastRestore))] : null),
+    it.appTestState ? h('p', { class: 'hint' }, it.appTestState) : null,
+    h('h3', null, 'In the dashboard'), steps(it.uiSteps),
+    h('h3', null, 'From the command line'), h('pre', { class: 'plan-cli' }, it.cliSteps.join('\n')),
+    it.autoChecks.length ? [h('h3', null, 'Checked automatically by that restore test'), bullets(it.autoChecks)] : null,
+    h('h3', null, 'You need to confirm'), toDo(it.confirm),
+    it.notCovered.length ? [h('h3', null, 'Not covered'), bullets(it.notCovered)] : null);
+  return h('div', { class: 'plan' },
+    backLink('#/agents', 'Servers'),
+    pageHead(`Recovery plan: ${plan.server}`, `Made ${day(plan.generated)}. Print it or download it, and keep it away from this server. It holds no passwords.`),
+    h('div', { class: 'btns no-print' }, btn('Print', () => window.print(), 'primary'), btn('Download', () => download(`backupproof-recovery-plan-${plan.server.replace(/[^\w.-]+/g, '-')}.md`, text))),
+    plan.warnings.length ? h('div', { class: 'banner warn' }, h('strong', null, 'Fix these first'), bullets(plan.warnings)) : null,
+    card('Before you start', bullets(plan.beforeYouStart)),
+    card('Storage you need', h('ul', null, plan.storages.map((s) => h('li', null, h('strong', null, s.name), `: ${s.what}. ${s.note}`)))),
+    card('What to restore, in order', h('p', null, plan.orderNote), plan.items.length ? null : empty('Nothing on this server is protected yet.')),
+    plan.items.map(item),
+    card('DNS and firewall (you do these)', toDo(plan.dnsAndFirewall)),
+    card('Moving to another server', bullets(plan.anotherServer)),
+    card('Known gaps', bullets(plan.knownGaps)),
+    card('If the dashboard is lost too', steps(plan.lostDashboard)));
+}
+
 // -------------------------------------------- advanced (technical) form
 
 const KINDS = [['files', 'Folders & files'], ['postgres', 'PostgreSQL'], ['mysql', 'MySQL / MariaDB'], ['mongodb', 'MongoDB'], ['sqlite', 'SQLite file'], ['command', 'Output of a command']];
 const BACKUP_PRESETS = [['Every hour', '@hourly'], ['Every 6 hours', '@every 6h'], ['Every night', '0 2 * * *'], ['Every week', '0 3 * * 0']];
 const DRILL_PRESETS = [['Every day', '0 5 * * *'], ['Every week', '0 4 * * 0'], ['Every month', '0 4 1 * *']];
 
+// appTestSection is the part of the advanced form that starts the restored
+// app after a restore test. read() returns the settings, undefined when the
+// test is off, or false after showing an error on a field.
+function appTestSection(initial, templates, hint, expectPaths) {
+  const at = initial || {}, app = at.app || {}, db = at.database || {};
+  const mountsText = (ms) => (ms || []).map((m) => `${m.from} -> ${m.to}${m.writable ? ' writable' : ''}`).join('\n');
+  const envText = (es) => (es || []).map((e) => (e.secretEnv ? `${e.name}=$${e.secretEnv}` : `${e.name}=${e.value || ''}`)).join('\n');
+  const area = (name, value, placeholder) => h('textarea', { name, rows: 2, spellcheck: 'false', autocapitalize: 'off', placeholder }, value);
+  const on = checkbox('After a restore test passes, start the app and check that it responds', !!initial, 'Off unless you turn it on. Needs Docker on the server that runs the restore test.');
+  const f = {
+    image: input({ name: 'app-image', code: true, value: app.image || '', placeholder: 'wordpress:6-apache…', autocomplete: 'off' }),
+    port: input({ name: 'app-port', type: 'number', inputmode: 'numeric', min: 1, max: 65535, value: at.port || '', placeholder: '80…' }),
+    mounts: area('app-mounts', mountsText(app.mounts), 'docker/volumes/site_data -> /var/www/html…'),
+    tmpfs: area('app-tmpfs', (app.tmpfs || []).join('\n'), '/run/app…'),
+    env: area('app-env', envText(app.env), 'WORDPRESS_DB_HOST=127.0.0.1…'),
+    path: input({ name: 'app-path', code: true, value: at.path || '', placeholder: '/…' }),
+    status: input({ name: 'app-status', type: 'number', inputmode: 'numeric', min: 100, max: 599, value: at.expectStatus || '', placeholder: '200…' }),
+    host: input({ name: 'app-host', code: true, value: at.host || '', autocomplete: 'off', placeholder: 'www.example.com…' }),
+    text: input({ name: 'app-text', value: at.expectText || '', autocomplete: 'off' }),
+    maxMs: input({ name: 'app-max-ms', type: 'number', inputmode: 'numeric', min: 0, max: 60000, value: at.maxResponseMs || '' }),
+    start: input({ name: 'app-start', type: 'number', inputmode: 'numeric', min: 0, max: 900, value: at.startTimeoutSecs || '', placeholder: '120…' }),
+    dbImage: input({ name: 'app-db-image', code: true, value: db.image || '', placeholder: 'mariadb:11…', autocomplete: 'off' }),
+    dbMounts: area('app-db-mounts', mountsText(db.mounts), 'docker/volumes/db_data -> /var/lib/mysql writable…'),
+    dbTmpfs: area('app-db-tmpfs', (db.tmpfs || []).join('\n'), ''),
+    dbEnv: area('app-db-env', envText(db.env), ''),
+  };
+  let template = at.template ? { name: at.template, version: at.templateVersion } : null;
+  const FILL_IN = 'PATH-IN-BACKUP';
+  const tplNote = h('div');
+  const applyTemplate = (t) => {
+    const found = hint && hint.template === t.name ? hint : {};
+    const test = t.test, db = test.database;
+    const withData = (ms, from) => (ms || []).map((m) => ({ ...m, from: m.from || from || FILL_IN }));
+    template = { name: t.name, version: t.version };
+    on.cb.checked = true;
+    f.image.value = found.appImage || test.app.image || '';
+    f.port.value = test.port || '';
+    f.mounts.value = mountsText(withData(test.app.mounts, found.appFrom));
+    f.tmpfs.value = (test.app.tmpfs || []).join('\n');
+    f.env.value = envText(test.app.env);
+    f.path.value = test.path || '';
+    f.status.value = test.expectStatus || '';
+    f.host.value = test.host || '';
+    f.text.value = test.expectText || '';
+    f.maxMs.value = test.maxResponseMs || '';
+    f.start.value = test.startTimeoutSecs || '';
+    f.dbImage.value = db ? found.databaseImage || db.image || '' : '';
+    f.dbMounts.value = db ? mountsText(withData(db.mounts, found.databaseFrom)) : '';
+    f.dbTmpfs.value = db ? (db.tmpfs || []).join('\n') : '';
+    f.dbEnv.value = db ? envText(db.env) : '';
+    if (t.expectPaths && expectPaths && found.appFrom) {
+      const have = lines(expectPaths.value);
+      expectPaths.value = [...have, ...t.expectPaths.map((p) => `${found.appFrom}/${p}`).filter((p) => !have.includes(p))].join('\n');
+    }
+    fill(tplNote, h('p', { class: 'hint' }, t.summary), t.needs && t.needs.length ? h('ul', { class: 'hint' }, t.needs.map((n) => h('li', null, n))) : null,
+      found.appFrom ? h('p', { class: 'hint' }, `Filled in from what was found on this server: ${found.appImage}${found.databaseImage ? `, ${found.databaseImage}` : ''}.`) : null);
+    sync();
+  };
+  const tplSelect = templates.length ? select([['', 'Fill in by hand'], ...templates.map((t) => [t.name, `Template: ${t.title} (version ${t.version})`])], at.template || '', { name: 'app-template' }) : null;
+  if (tplSelect) {
+    tplSelect.addEventListener('change', () => {
+      const t = templates.find((x) => x.name === tplSelect.value);
+      if (t) applyTemplate(t); else { template = null; fill(tplNote); sync(); }
+    });
+  }
+  const parseMounts = (text) => {
+    const out = [];
+    for (const line of lines(text)) {
+      const m = /^(\S.*?)\s*->\s*(\S+?)(\s+writable)?$/.exec(line);
+      if (!m) return { out, bad: `Write each line as: path in the backup -> path in the container. “${line}” doesn’t fit.` };
+      if (m[1] === FILL_IN) return { out, bad: `Replace ${FILL_IN} with the path of that data inside the backup.` };
+      out.push({ from: m[1], to: m[2], ...(m[3] ? { writable: true } : {}) });
+    }
+    return { out };
+  };
+  const parseEnv = (text) => {
+    const out = [];
+    for (const line of lines(text)) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+      if (!m) return { out, bad: `Write each line as NAME=value. “${line}” doesn’t fit.` };
+      const ref = /^\$(\S+)$/.exec(m[2]);
+      out.push(ref ? { name: m[1], secretEnv: ref[1] } : { name: m[1], value: m[2] });
+    }
+    return { out };
+  };
+  const collect = (mounts, env, dbMounts, dbEnv) => {
+    const out = {
+      ...(template ? { template: template.name, templateVersion: template.version } : {}),
+      app: { image: f.image.value.trim(), mounts, tmpfs: lines(f.tmpfs.value), env },
+      port: num(f.port.value), path: f.path.value.trim(), host: f.host.value.trim(), expectStatus: num(f.status.value),
+      expectText: f.text.value, maxResponseMs: num(f.maxMs.value), startTimeoutSecs: num(f.start.value),
+    };
+    if (f.dbImage.value.trim()) out.database = { image: f.dbImage.value.trim(), mounts: dbMounts, tmpfs: lines(f.dbTmpfs.value), env: dbEnv };
+    return out;
+  };
+  const read = () => {
+    if (!on.cb.checked) return undefined;
+    if (!f.image.value.trim()) return fieldError(f.image, 'Name the image to start.');
+    if (!num(f.port.value)) return fieldError(f.port, 'Give the port the app listens on inside its container.');
+    const parsed = [[f.mounts, parseMounts], [f.env, parseEnv], [f.dbMounts, parseMounts], [f.dbEnv, parseEnv]].map(([ctl, parse]) => ({ ctl, ...parse(ctl.value) }));
+    const wrong = parsed.find((p) => p.bad);
+    if (wrong) return fieldError(wrong.ctl, wrong.bad);
+    if (!parsed[0].out.length) return fieldError(f.mounts, 'Give the app at least one part of the backup.');
+    return collect(...parsed.map((p) => p.out));
+  };
+  const preview = h('div', { class: 'banner info' });
+  const mountWords = (m) => h('li', null, 'Gives it ', h('code', null, m.from), ' at ', h('code', null, m.to), m.writable ? ' as a throwaway copy it can change' : ', read-only');
+  const envWords = (e) => h('li', null, 'Sets ', h('code', null, e.name), e.secretEnv ? [' from ', h('code', null, e.secretEnv), ' on the server'] : '');
+  const renderPreview = () => {
+    const a = collect(parseMounts(f.mounts.value).out, parseEnv(f.env.value).out, parseMounts(f.dbMounts.value).out, parseEnv(f.dbEnv.value).out);
+    const want = a.expectStatus || 200;
+    fill(preview,
+      h('strong', null, 'What will run'),
+      h('ul', null,
+        a.app.image ? h('li', null, 'Starts ', h('code', null, a.app.image), ' with its own start command. Nothing from the backup is run, including any Compose files.') : h('li', null, 'Name an image to start.'),
+        a.app.mounts.map(mountWords), a.app.tmpfs.map((p) => h('li', null, 'Gives it an empty temporary folder at ', h('code', null, p))), a.app.env.map(envWords),
+        a.database ? [h('li', null, 'Starts ', h('code', null, a.database.image), ' beside it, reachable only by the app at 127.0.0.1'), a.database.mounts.map(mountWords), a.database.tmpfs.map((p) => h('li', null, 'Gives the database an empty temporary folder at ', h('code', null, p))), a.database.env.map(envWords)] : null,
+        h('li', null, 'No outside network and no ports on the server. No extra privileges, and each container is limited to 2 GB of memory and 2 CPUs.'),
+        h('li', null, `Asks for ${a.path || '/'} on port ${a.port || '?'} from inside the test. Passes on status ${want}${a.expectText ? `, the text “${a.expectText}”` : ''}${a.maxResponseMs ? ` and an answer within ${a.maxResponseMs} ms` : ''}, within ${a.startTimeoutSecs || 120} seconds.`),
+        template ? h('li', null, `Based on the ${template.name} template, version ${template.version}.`) : null));
+  };
+  const body = h('div', null,
+    tplSelect ? [field('Start from', tplSelect, 'A template only fills in these fields. You can change anything before saving, and it can’t give the app more access.'), tplNote] : null,
+    h('div', { class: 'row' }, field('Image to start', f.image, 'Started as the restored app. You choose it; it is never taken from the backup.'), field('Port inside the container', f.port)),
+    field('Parts of the backup to give the app', f.mounts, 'One per line: path in the backup -> path in the container. Read-only; add “writable” for a throwaway copy the app can change.'),
+    h('div', { class: 'row' },
+      field('Empty temporary folders', f.tmpfs, 'One path inside the container per line.'),
+      field('Settings', f.env, 'NAME=value, one per line. Never write a password here: use NAME=$BP_APPTEST_SOMETHING and set that variable on the server that runs the test.')),
+    h('h3', null, 'What to check'),
+    h('div', { class: 'row' }, field('Address to ask for', f.path), field('Expected status', f.status), field('Host name to send', f.host, 'Optional, for apps that only answer to their own name.')),
+    h('div', { class: 'row' }, field('Text the answer must contain', f.text, 'Optional. Searched for in the first 1 MB.'), field('Slowest allowed answer (ms)', f.maxMs, 'Optional.'), field('Time to start up (seconds)', f.start)),
+    details('A database beside the app',
+      h('div', { class: 'row' }, field('Database image', f.dbImage, 'The same version as your server. The app reaches it at 127.0.0.1.')),
+      field('Parts of the backup to give it', f.dbMounts, 'Database files need “writable”, so they get a throwaway copy.'),
+      h('div', { class: 'row' }, field('Empty temporary folders', f.dbTmpfs), field('Settings', f.dbEnv))),
+    preview);
+  const sync = () => { body.classList.toggle('hidden', !on.cb.checked); renderPreview(); };
+  on.cb.addEventListener('change', sync);
+  body.addEventListener('input', renderPreview);
+  sync();
+  const useHint = hint && !initial && templates.find((t) => t.name === hint.template);
+  const el = h('div', null, h('h3', null, 'Start the app'),
+    useHint ? h('div', { class: 'banner info' }, `This looks like ${useHint.title}. `, btn('Use its template', () => { tplSelect.value = useHint.name; applyTemplate(useHint); }, 'sm')) : null,
+    on.el, body);
+  return { el, read };
+}
+
 async function pageSourceForm(id) {
   if (!canOperate()) return h('div', { class: 'banner warn' }, 'Your account can only view.');
-  const [agents, repos, existing] = await Promise.all([
-    api('/agents'), api('/repositories'), id ? api(`/sources/${id}`) : Promise.resolve(null),
+  const [agents, repos, existing, appTemplates] = await Promise.all([
+    api('/agents'), api('/repositories'), id ? api(`/sources/${id}`) : Promise.resolve(null), isAdmin() ? api('/app-templates') : Promise.resolve([]),
   ]);
   const src = existing ? existing.source : {
     name: '', spec: { kind: 'files', drill: {} }, backupCron: '0 2 * * *', drillCron: '0 4 * * 0',
@@ -3405,6 +3607,9 @@ async function pageSourceForm(id) {
   (dr.assertions || []).forEach(addAssert);
 
   const isDb = (k) => ['postgres', 'mysql', 'mongodb'].includes(k);
+  const serverInv = ((agents || []).find((a) => a.id === src.agentId) || {}).inventory;
+  const dockerApp = sp.docker && serverInv && (serverInv.dockerApps || []).find((a) => a.name === (sp.docker.project || (sp.docker.containers || [])[0]));
+  const appTest = appTestSection(dr.appTest, appTemplates || [], dockerApp && dockerApp.template, f.expectPaths);
   const kindBox = h('div');
   const addBtn = btn('+ Add check', () => addAssert().focus(), 'sm');
   const assertFs = h('div', null, h('h3', null, 'Your own database checks'),
@@ -3424,6 +3629,7 @@ async function pageSourceForm(id) {
       k === 'import' ? h('div', { class: 'banner info' }, `Imported from ${sp.import ? sp.import.format : 'another tool'} at ${sp.import ? repoUrl(sp.import.storage) : '—'}. To import from a different place, use Import.`) : null,
     ]);
     assertFs.classList.toggle('hidden', !(isDb(k) || k === 'sqlite') || k === 'mongodb');
+    appTest.el.classList.toggle('hidden', !['files', 'docker', 'import'].includes(k));
   };
   f.kind.addEventListener('change', renderKind);
 
@@ -3462,6 +3668,11 @@ async function pageSourceForm(id) {
         rowCountTolerance: num(f.tolerance.value),
         skipDumps: !f.testDumps.cb.checked,
       };
+      if (isAdmin()) { // only administrators choose what an app test starts
+        const at = ['files', 'docker', 'import'].includes(k) ? appTest.read() : undefined;
+        if (at === false) return;
+        if (at) spec.drill.appTest = at; else delete spec.drill.appTest;
+      }
       const body = {
         ...(id ? { id } : {}),
         name: spec.name,
@@ -3515,7 +3726,8 @@ async function pageSourceForm(id) {
     field('Files that must be present', f.expectPaths, 'One per line.'),
     h('div', { class: 'row' }, field('Test environment image', f.image), field('Your own check command', f.drillCommand)),
     f.testDumps.el,
-    assertFs),
+    assertFs,
+    isAdmin() ? appTest.el : null),
   err,
   h('div', { class: 'form-actions' },
     h('a', { class: 'btn', href: id ? `#/sources/${id}` : '#/protect' }, 'Cancel'),

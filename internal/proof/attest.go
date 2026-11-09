@@ -3,6 +3,7 @@ package proof
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -81,6 +82,13 @@ type Check struct {
 	Passed     bool   `json:"passed"`
 	Detail     string `json:"detail,omitempty"`
 	DurationMs int64  `json:"durationMs,omitempty"`
+}
+
+// IsAppCheck reports a check of the optional app test. These are recorded in
+// the proof but don't decide whether the restore test passed: an app that won't
+// start says nothing about whether its data came back.
+func IsAppCheck(name string) bool {
+	return strings.HasPrefix(name, "app-")
 }
 
 // DrillPredicate states that a snapshot was restored from storage into an

@@ -848,3 +848,9 @@ input[type=time] {
 .file-name .ico-svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted); }
 .picked { margin: 8px 0 0; overflow-wrap: anywhere; }
 .form-actions.start select { max-width: 320px; }
+.plan-cli { overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.plan-todo { list-style: none; padding-left: 0; }
+@media print {
+  .sidebar, .topbar, .no-print, .plan .back { display: none !important; }
+  .plan .card { break-inside: avoid; box-shadow: none; }
+}

@@ -328,6 +328,7 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 	} else if req.Kind == "drill" {
 		if passed {
 			s.resolve("drill-failed", &sid, nil)
+			s.appTestOutcome(src, pred.Checks)
 		} else {
 			if storageOnlyFailure(pred.Checks) {
 				// Storage wouldn't hand data over: nothing was found wrong with

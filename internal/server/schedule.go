@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"strings"
@@ -221,6 +222,36 @@ func storageOnlyFailure(checks []proof.Check) bool {
 		}
 	}
 	return unreadable
+}
+
+// appTestFailed reports a restore test in which the app didn't come back up.
+func appTestFailed(checks []proof.Check) bool {
+	for _, c := range checks {
+		if !c.Passed && proof.IsAppCheck(c.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+// appTestOutcome raises or clears the app test's own alert after a restore test
+// that passed. The backup still counts as restore-tested either way.
+func (s *Server) appTestOutcome(src *Source, checks []proof.Check) {
+	id := src.ID
+	if appTestFailed(checks) {
+		s.alert("app-test-failed", &id, nil, fmt.Sprintf("%s: the data restored and passed its checks, so the backup still counts as restore-tested, but the app didn't come back up in the test.", src.Name))
+		return
+	}
+	s.resolve("app-test-failed", &id, nil)
+}
+
+// lastChecks reads the checks of a restore-test proof.
+func lastChecks(p *ProofRow) []proof.Check {
+	var pred struct {
+		Checks []proof.Check `json:"checks"`
+	}
+	_ = json.Unmarshal(p.Predicate, &pred)
+	return pred.Checks
 }
 
 // retryDrillSoon brings the item's next restore test forward to within the

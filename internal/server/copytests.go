@@ -112,6 +112,7 @@ func (s *Server) copyDrillLease(job *Job, src *Source, lease *protocol.Lease) er
 		return err
 	}
 	lease.Kind, lease.SnapshotID, lease.ExpectedRoot = "drill", p.SnapshotID, p.Root
+	lease.Source.Drill.AppTest = nil // this test is about the second storage, not the app
 	lease.Repository, lease.RepoID, lease.Password, lease.Creds = repo.Backend, repo.ID, sec.Password, sec.Credentials
 	return nil
 }

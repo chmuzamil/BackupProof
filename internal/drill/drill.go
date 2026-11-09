@@ -126,14 +126,33 @@ func Run(ctx context.Context, rp *repo.Repo, s snapshot.WithID, spec source.Spec
 				return strings.TrimSpace(lastLine(out)), err
 			})
 		}
+		if spec.Drill.AppTest != nil && allPassed(res.Checks) {
+			appChecks(ctx, r, dir, spec, opts.WorkDir)
+		}
 	}
 	res.Duration = time.Since(began)
 	res.FinishedAt = res.StartedAt.Add(res.Duration)
-	res.Passed = len(res.Checks) > 0
-	for _, c := range res.Checks {
-		res.Passed = res.Passed && c.Passed
-	}
+	res.Passed = allPassed(dataChecks(res.Checks))
 	return res, nil
+}
+
+func dataChecks(checks []proof.Check) []proof.Check {
+	var out []proof.Check
+	for _, c := range checks {
+		if !proof.IsAppCheck(c.Name) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func allPassed(checks []proof.Check) bool {
+	for _, c := range checks {
+		if !c.Passed {
+			return false
+		}
+	}
+	return len(checks) > 0
 }
 
 func lastLine(s string) string {
