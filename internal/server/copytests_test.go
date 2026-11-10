@@ -166,3 +166,62 @@ func TestCopyTestAlertsAreSeparate(t *testing.T) {
 		t.Error("a passed copy test left its alert open")
 	}
 }
+
+// A copy's cleanup can remove the copy a test is reading, so the two never
+// overlap, and a test that waited checks the newest copy when it starts.
+func TestCopyAndCopyTestDontOverlap(t *testing.T) {
+	f := newCopyFixture(t)
+	st := f.srv.store
+	f.addCopy(t, "repo-2", "copy-1", "root-1")
+	test, err := f.srv.queueCopyDrill(&f.source, "schedule", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyJob, err := st.EnqueueJobParams("copy", f.source.ID, f.source.AgentID, "after-backup", map[string]string{"snapshotId": "snap-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec("UPDATE jobs SET state='running' WHERE id=?", copyJob); err != nil {
+		t.Fatal(err)
+	}
+	drillAgent := f.source.DrillAgent()
+	if j, _ := st.LeaseJob(drillAgent, time.Minute, true); j != nil {
+		t.Fatalf("job %d (%s) started while a copy was running", j.ID, j.Kind)
+	}
+
+	// The copy finishes with a new copy; the waiting test starts on it.
+	f.addCopy(t, "repo-2", "copy-2", "root-2")
+	if _, err := st.db.Exec("UPDATE jobs SET state='succeeded' WHERE id=?", copyJob); err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.LeaseJob(drillAgent, time.Minute, true)
+	if err != nil || job == nil || job.ID != test {
+		t.Fatalf("the test didn't start after the copy: %+v, %v", job, err)
+	}
+	lease, err := f.srv.buildLease(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.SnapshotID != "copy-2" || lease.ExpectedRoot != "root-2" {
+		t.Fatalf("tested %s (%s), want the newest copy", lease.SnapshotID, lease.ExpectedRoot)
+	}
+	pred, _ := json.Marshal(proof.DrillPredicate{RepoID: "repo-2", ExpectedRoot: "root-2"})
+	if _, err := f.srv.checkCopyDrill(job, &proof.Statement{Predicate: pred}, "copy-2"); err != nil {
+		t.Errorf("the proof of the copy that was tested was refused: %v", err)
+	}
+
+	// And a new copy waits while the test runs.
+	next, err := st.EnqueueJobParams("copy", f.source.ID, f.source.AgentID, "after-backup", map[string]string{"snapshotId": "snap-3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j, _ := st.LeaseJob(f.source.AgentID, time.Minute, true); j != nil {
+		t.Fatalf("job %d (%s) started while the copy test was running", j.ID, j.Kind)
+	}
+	if _, err := st.db.Exec("UPDATE jobs SET state='succeeded' WHERE id=?", test); err != nil {
+		t.Fatal(err)
+	}
+	if j, _ := st.LeaseJob(f.source.AgentID, time.Minute, true); j == nil || j.ID != next {
+		t.Fatalf("the copy didn't start after the test: %+v", j)
+	}
+}

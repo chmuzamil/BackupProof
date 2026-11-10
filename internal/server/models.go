@@ -392,15 +392,19 @@ func (s *Store) EnqueueJob(kind string, sourceID, agentID int64, trigger string)
 // LeaseJob hands the oldest queued job for agentID to that agent.
 // Outside the server's time window only jobs started by a person (or the
 // first test after a first backup) are handed out; scheduled ones wait.
+// A copy and a restore test of the copies of the same item never run at once:
+// the copy's cleanup can remove the backup the test is reading.
 func (s *Store) LeaseJob(agentID int64, lease time.Duration, windowOpen bool) (*Job, error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	var id int64
-	q := "SELECT id FROM jobs WHERE agent_id=? AND state='queued'"
+	q := `SELECT j.id FROM jobs j WHERE j.agent_id=? AND j.state='queued'
+		AND NOT (j.kind IN ('copy','copy-drill') AND EXISTS (SELECT 1 FROM jobs o WHERE o.source_id=j.source_id AND o.state='running'
+			AND o.kind = CASE j.kind WHEN 'copy' THEN 'copy-drill' ELSE 'copy' END))`
 	if !windowOpen {
-		q += " AND trigger <> 'schedule'"
+		q += " AND j.trigger <> 'schedule'"
 	}
-	err := s.db.QueryRow(q+" ORDER BY id LIMIT 1", agentID).Scan(&id)
+	err := s.db.QueryRow(q+" ORDER BY j.id LIMIT 1", agentID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

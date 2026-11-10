@@ -65,6 +65,16 @@ func (s *Store) EnqueueJobParams(kind string, sourceID, agentID int64, trigger s
 	return res.LastInsertId()
 }
 
+// SetJobParams replaces what a job was asked to do.
+func (s *Store) SetJobParams(id int64, params any) error {
+	b, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec("UPDATE jobs SET params=? WHERE id=?", string(b), id)
+	return err
+}
+
 func (s *Store) JobParams(id int64) (json.RawMessage, error) {
 	var p sql.NullString
 	if err := s.db.QueryRow("SELECT params FROM jobs WHERE id=?", id).Scan(&p); err != nil {

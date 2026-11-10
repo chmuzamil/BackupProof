@@ -21,7 +21,7 @@ const (
 	copyTestEvery = 30 * 24 * time.Hour
 )
 
-// copyDrillParams pins what a job tests when it's queued, so a copy that lands
+// copyDrillParams pins what a job tests when it starts, so a copy that lands
 // while the test runs can't change what its proof has to match.
 type copyDrillParams struct {
 	RepoID     int64  `json:"repoId"`
@@ -43,19 +43,7 @@ func (s *Server) queueCopyDrill(src *Source, trigger string, now time.Time) (int
 	if err != nil {
 		return 0, err
 	}
-	notCopied := errors.New("nothing has been copied to the second storage yet")
-	last := s.store.LastProof(src.ID, "copy", true)
-	if last == nil || repo.RepoID == "" {
-		return 0, notCopied
-	}
-	var pred struct {
-		RepoID string `json:"repoId"`
-	}
-	// The newest copy may be in a storage this item no longer uses.
-	if err := json.Unmarshal(last.Predicate, &pred); err != nil || pred.RepoID != repo.RepoID {
-		return 0, notCopied
-	}
-	snapshotID, root, err := s.proofRoot(last)
+	snapshotID, root, err := s.newestCopy(src, repo)
 	if err != nil {
 		return 0, err
 	}
@@ -89,6 +77,23 @@ func (s *Server) scheduleCopyTests(now time.Time, sources []Source) {
 	}
 }
 
+// newestCopy is the item's newest copy in repo, its second storage.
+func (s *Server) newestCopy(src *Source, repo *Repository) (snapshotID, root string, err error) {
+	notCopied := errors.New("nothing has been copied to the second storage yet")
+	last := s.store.LastProof(src.ID, "copy", true)
+	if last == nil || repo.RepoID == "" {
+		return "", "", notCopied
+	}
+	var pred struct {
+		RepoID string `json:"repoId"`
+	}
+	// The newest copy may be in a storage this item no longer uses.
+	if err := json.Unmarshal(last.Predicate, &pred); err != nil || pred.RepoID != repo.RepoID {
+		return "", "", notCopied
+	}
+	return s.proofRoot(last)
+}
+
 func (s *Server) copyDrillParams(jobID int64) (copyDrillParams, error) {
 	var p copyDrillParams
 	raw, err := s.store.JobParams(jobID)
@@ -110,6 +115,14 @@ func (s *Server) copyDrillLease(job *Job, src *Source, lease *protocol.Lease) er
 	repo, sec, err := s.store.Repository(p.RepoID)
 	if err != nil {
 		return err
+	}
+	// A copy made while the test waited may have replaced the one it was
+	// queued for, so it tests whatever is newest now.
+	if id, root, err := s.newestCopy(src, repo); err == nil && id != p.SnapshotID {
+		p.SnapshotID, p.Root = id, root
+		if err := s.store.SetJobParams(job.ID, p); err != nil {
+			return err
+		}
 	}
 	lease.Kind, lease.SnapshotID, lease.ExpectedRoot = "drill", p.SnapshotID, p.Root
 	lease.Source.Drill.AppTest = nil // this test is about the second storage, not the app
