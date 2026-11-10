@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-11-10
+
+### Fixed
+
+- **A restore test of a second copy no longer fails because a copy job removed the backup it was about to test.** The two now take turns for each item, and the test picks the newest copy when it starts. Before, this could raise a false "That copy may not be usable" alert that stayed open until the next test, up to 30 days later.
+
 ## [0.2.18] - 2026-11-10
 
 ### Added
