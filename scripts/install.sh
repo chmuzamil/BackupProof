@@ -13,18 +13,26 @@
 #                       or 127.0.0.1:8420 with --domain)
 #   --public-url URL    address other servers use to reach the dashboard
 #   --uninstall         stop and remove the service and binary (data is kept)
+#   --allow-unsigned    install a release from before signing began (0.2.19
+#                       and earlier), checked against its checksums only
+#
+# The download is checked against SHA256SUMS, and SHA256SUMS against its
+# minisign signature with the key below, using minisign or OpenSSL.
 #
 # Running it again upgrades BackupProof in place and keeps your data and the
 # --listen and --public-url settings of the existing installation.
 set -eu
 
 REPO="chmuzamil/BackupProof"
+# The release signing key. It must match scripts/minisign.pub; see docs/SIGNING.md.
+PUBKEY="RWRly8aRYNCgH9tGKiHFNc/OOjepBOEJRxdoAHdPUDunJbBeHvlyq7EX"
 VERSION="latest"
 LISTEN=""
 PUBLIC_URL=""
 DOMAIN=""
 EMAIL=""
 UNINSTALL=0
+ALLOW_UNSIGNED=0
 BIN=/usr/local/bin/backupproof
 
 while [ $# -gt 0 ]; do
@@ -35,13 +43,55 @@ while [ $# -gt 0 ]; do
     --domain) DOMAIN="$2"; shift 2 ;;
     --email) EMAIL="$2"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
-    -h|--help) sed -n '2,20p' "$0" 2>/dev/null || true; exit 0 ;;
+    --allow-unsigned) ALLOW_UNSIGNED=1; shift ;;
+    -h|--help) sed -n '2,25p' "$0" 2>/dev/null || true; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+
+# --- signature check (tested by scripts/test-signature.sh) ---
+# verify_signature FILE SIGFILE KEY checks a minisign signature, in either the
+# legacy (Ed) or the prehashed (ED) format, and its trusted comment. It returns
+# 0 when valid, 1 when not, and 2 when neither minisign nor OpenSSL is here.
+verify_signature() {
+  if command -v minisign >/dev/null 2>&1; then
+    minisign -Vqm "$1" -x "$2" -P "$3" >/dev/null 2>&1 && return 0 || return 1
+  fi
+  command -v openssl >/dev/null 2>&1 || return 2
+  vs=$(mktemp -d) || return 1
+  vs_check "$1" "$2" "$3" "$vs" && vs_rc=0 || vs_rc=$?
+  rm -rf "$vs"
+  return $vs_rc
+}
+vs_check() {
+  printf '%s' "$3" | openssl base64 -d -A > "$4/pk" 2>/dev/null || return 1
+  sed -n 2p "$2" | tr -d '\r' | openssl base64 -d -A > "$4/sig" 2>/dev/null || return 1
+  sed -n 4p "$2" | tr -d '\r' | openssl base64 -d -A > "$4/global" 2>/dev/null || return 1
+  vs_tc=$(sed -n 3p "$2" | tr -d '\r')
+  case "$vs_tc" in "trusted comment: "*) vs_tc=${vs_tc#trusted comment: } ;; *) return 1 ;; esac
+  [ "$(wc -c < "$4/pk")" -eq 42 ] && [ "$(wc -c < "$4/sig")" -eq 74 ] && [ "$(wc -c < "$4/global")" -eq 64 ] || return 1
+  [ "$(head -c 2 "$4/pk")" = Ed ] || return 1
+  # The signature must name this key.
+  [ "$(od -An -tx1 -j2 -N8 "$4/pk")" = "$(od -An -tx1 -j2 -N8 "$4/sig")" ] || return 1
+  # An Ed25519 public key in the DER form OpenSSL reads.
+  printf '\060\052\060\005\006\003\053\145\160\003\041\000' > "$4/pk.der"
+  tail -c 32 "$4/pk" >> "$4/pk.der"
+  tail -c 64 "$4/sig" > "$4/sig64"
+  case "$(head -c 2 "$4/sig")" in
+    Ed) cp "$1" "$4/msg" ;;
+    ED) openssl dgst -blake2b512 -binary "$1" > "$4/msg" || return 1 ;;
+    *) return 1 ;;
+  esac
+  openssl pkeyutl -verify -pubin -keyform DER -inkey "$4/pk.der" -rawin -in "$4/msg" -sigfile "$4/sig64" >/dev/null 2>&1 || return 1
+  # The trusted comment is signed together with the signature.
+  { cat "$4/sig64"; printf '%s' "$vs_tc"; } > "$4/comment"
+  openssl pkeyutl -verify -pubin -keyform DER -inkey "$4/pk.der" -rawin -in "$4/comment" -sigfile "$4/global" >/dev/null 2>&1 || return 1
+  return 0
+}
+# --- end signature check ---
 
 [ "$(id -u)" = 0 ] || fail "please run with sudo (the installer creates a system service)."
 
@@ -111,6 +161,21 @@ fetch "$BASE/$NAME" "$TMP/$NAME"
 fetch "$BASE/SHA256SUMS" "$TMP/SHA256SUMS"
 
 say "Checking the download…"
+sigcode=$(curl -sSL --retry 3 -o "$TMP/SHA256SUMS.minisig" -w '%{http_code}' "$BASE/SHA256SUMS.minisig" 2>/dev/null) || sigcode=000
+case $sigcode in 200|404) ;; *) fail "could not download the release signature (HTTP $sigcode)" ;; esac
+if [ "$sigcode" = 200 ]; then
+  rc=0
+  verify_signature "$TMP/SHA256SUMS" "$TMP/SHA256SUMS.minisig" "$PUBKEY" || rc=$?
+  case $rc in
+    0) say "Signature is valid (release key $(printf '%s' "$PUBKEY" | cut -c1-12)…)." ;;
+    2) fail "can't check the release signature: install OpenSSL or minisign, then run this again" ;;
+    *) fail "the release signature doesn't match; the download may have been tampered with" ;;
+  esac
+elif [ "$ALLOW_UNSIGNED" = 1 ]; then
+  say "This release has no signature; checking it against its checksums only (--allow-unsigned)."
+else
+  fail "this release has no signature. Releases up to 0.2.19 weren't signed: add --allow-unsigned to install one anyway"
+fi
 # sha256sum writes "<hash>  name" or "<hash> *name" (binary mode)
 EXPECTED=$(grep -E "[ *]$NAME\$" "$TMP/SHA256SUMS" | awk '{print $1}')
 [ -n "$EXPECTED" ] || fail "no checksum for $NAME in SHA256SUMS"

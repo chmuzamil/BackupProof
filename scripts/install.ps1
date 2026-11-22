@@ -15,6 +15,8 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $Repo = "chmuzamil/BackupProof"
+# The release signing key. It must match scripts/minisign.pub; see docs/SIGNING.md.
+$PubKey = "RWRly8aRYNCgH9tGKiHFNc/OOjepBOEJRxdoAHdPUDunJbBeHvlyq7EX"
 $Dir = Join-Path $env:ProgramFiles "BackupProof"
 $Data = Join-Path $env:ProgramData "BackupProof\server"
 $Exe = Join-Path $Dir "backupproof.exe"
@@ -49,6 +51,22 @@ try {
   Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile (Join-Path $tmp "SHA256SUMS")
 
   Write-Host "Checking the download..."
+  # Windows has no built-in way to check an Ed25519 signature, so the signature
+  # is checked when minisign is installed (winget install jedisct1.minisign).
+  $sums = Join-Path $tmp "SHA256SUMS"
+  $sig = "$sums.minisig"
+  $signed = $true
+  try { Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS.minisig" -OutFile $sig } catch { $signed = $false }
+  $minisign = Get-Command minisign -ErrorAction SilentlyContinue
+  if ($signed -and $minisign) {
+    & $minisign.Source -Vqm $sums -x $sig -P $PubKey | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "The release signature doesn't match; the download may have been tampered with." }
+    Write-Host "Signature is valid."
+  } elseif ($signed) {
+    Write-Warning "minisign isn't installed, so only the checksums were checked. To check the signature too, see https://backupproof.dev/security/#signing"
+  } else {
+    Write-Warning "This release has no signature (releases up to 0.2.19 weren't signed); checking its checksums only."
+  }
   $line = Get-Content (Join-Path $tmp "SHA256SUMS") | Where-Object { $_ -match "[\s*]$([regex]::Escape($name))$" } | Select-Object -First 1
   if (-not $line) { throw "No checksum for $name in SHA256SUMS." }
   $expected = ($line -split "\s+")[0].ToLower()
