@@ -112,6 +112,7 @@ You can also change the address later under **Settings**. Options always go afte
 | `--listen ADDR` | `-Listen ADDR` | Address and port to listen on (default `0.0.0.0:8420`; `127.0.0.1:8420` with `--domain`) |
 | `--version vX.Y.Z` | `-Version vX.Y.Z` | Install a specific release |
 | `--uninstall` | `-Uninstall` | Remove the service and program; your data is kept |
+| `--allow-unsigned` | | Install a release from before signing began (0.2.19 and earlier), checked against its checksums only |
 
 Re-running the installer upgrades BackupProof in place and keeps your data. On Linux and macOS it also keeps the address and listen settings, so you don't need to repeat the options.
 
@@ -139,7 +140,16 @@ Agents connect **outbound only** over HTTPS. Backup data goes straight from each
 
 ### Manual download
 
-Binaries for Linux, macOS and Windows (amd64 and arm64) and `SHA256SUMS` are attached to every [release](https://github.com/chmuzamil/BackupProof/releases). Run `backupproof server` to start the dashboard, or `backupproof help` for everything else.
+Binaries for Linux, macOS and Windows (amd64 and arm64), `SHA256SUMS` and its signature `SHA256SUMS.minisig` are attached to every [release](https://github.com/chmuzamil/BackupProof/releases). Run `backupproof server` to start the dashboard, or `backupproof help` for everything else.
+
+To check a download before running it, verify the signature with the [release key](scripts/minisign.pub), then the checksum:
+
+```bash
+minisign -Vm SHA256SUMS -P "$(sed -n 2p minisign.pub)"
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+The installers do this themselves. See [Release signing](docs/SIGNING.md) for Windows, macOS and how the key is kept.
 
 ### Build from source
 
@@ -372,6 +382,7 @@ Cloud storage sometimes refuses a request for a while (HTTP 500 or 503). BackupP
 - **Alert secrets.** Bot tokens, routing keys and passwords for alert channels are never sent back to the browser.
 - **Built-in agent.** It never backs up, imports from, or stores into the server's own data folder, even when asked to protect `/` or `C:\`.
 - **Restores.** All writes go through an `os.Root` confined to the restore folder, and symlinks are created last, so a crafted snapshot can't write outside it.
+- **Releases.** `SHA256SUMS` is signed with an offline-held minisign key, and the installer checks the signature before installing. See [Release signing](docs/SIGNING.md).
 - **Web.** Strict CSP (`default-src 'self'`), `X-Frame-Options: DENY`, no third-party assets.
 - **Error reports.** Off by default; see [Error reporting](#error-reporting-optional) for what an opted-in report can contain.
 - **Restore-test sandboxes.** `--network none`, memory, CPU and PID limits, `no-new-privileges`, data on tmpfs, restored files mounted read-only, and the image recorded by digest.
@@ -380,6 +391,7 @@ Cloud storage sometimes refuses a request for a while (HTTP 500 or 503). BackupP
 ## Documentation
 
 - [Getting started](docs/GETTING-STARTED.md): plain-language guide for non-technical users
+- [Release signing](docs/SIGNING.md): verifying downloads, and how the signing key is kept and replaced
 - [Example item settings](examples/): PostgreSQL, MySQL in Docker, WordPress, SQLite, MongoDB, Docker Compose apps
 - [Research notes](docs/RESEARCH.md): market and technical research behind the design
 - [Changelog](CHANGELOG.md)

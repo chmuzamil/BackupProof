@@ -52,3 +52,14 @@ jobs:
           for p in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
             GOOS=${p%/*} GOARCH=${p#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/backupproof
           done
+
+  # The installer checks release signatures with minisign or OpenSSL; this
+  # tests that check against signatures made by real minisign.
+  signature:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install minisign
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+      - name: signature check in install.sh
+        run: sh scripts/test-signature.sh
