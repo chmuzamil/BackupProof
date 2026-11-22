@@ -6,9 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-11-23
+
 ### Security
 
-- **Releases are signed.** `SHA256SUMS`, which lists every binary and both installers, is signed with a minisign key held offline and published in `scripts/minisign.pub`, on the website and with each release. `install.sh` checks the signature itself with minisign or OpenSSL and stops if it's missing or wrong; `--allow-unsigned` installs a release from before signing began. `install.ps1` checks it when minisign is installed. See `docs/SIGNING.md`.
+- **Releases are signed.** `SHA256SUMS`, which lists every binary and both installers, is signed with a minisign key held offline and published in `scripts/minisign.pub`, on the website and with each release. `install.sh` checks the signature itself with minisign or OpenSSL and stops if it's missing or wrong; `--allow-unsigned` installs a release from before signing began. `install.ps1` checks it when minisign is installed. See `docs/SIGNING.md`. The release key's ID is `1FA0D06091C6CB65`.
+- **Built with Go 1.27.4,** which fixes a vulnerability in Go's HTTP server (GO-2026-6859). Earlier releases were built with Go 1.27.3.
+
+### Changed
+
+- **The evidence summary from `backupproof proof verify-pack` says "statements"**, the word used everywhere else, instead of "attestations".
 
 ## [0.2.19] - 2026-11-10
 
