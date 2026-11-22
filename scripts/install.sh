@@ -25,7 +25,7 @@ set -eu
 
 REPO="chmuzamil/BackupProof"
 # The release signing key. It must match scripts/minisign.pub; see docs/SIGNING.md.
-PUBKEY="PLACEHOLDER-NO-RELEASE-KEY-YET"
+PUBKEY="RWRly8aRYNCgH9tGKiHFNc/OOjepBOEJRxdoAHdPUDunJbBeHvlyq7EX"
 VERSION="latest"
 LISTEN=""
 PUBLIC_URL=""

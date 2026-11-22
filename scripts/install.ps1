@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $Repo = "chmuzamil/BackupProof"
 # The release signing key. It must match scripts/minisign.pub; see docs/SIGNING.md.
-$PubKey = "PLACEHOLDER-NO-RELEASE-KEY-YET"
+$PubKey = "RWRly8aRYNCgH9tGKiHFNc/OOjepBOEJRxdoAHdPUDunJbBeHvlyq7EX"
 $Dir = Join-Path $env:ProgramFiles "BackupProof"
 $Data = Join-Path $env:ProgramData "BackupProof\server"
 $Exe = Join-Path $Dir "backupproof.exe"
