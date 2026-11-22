@@ -840,7 +840,7 @@ func cmdProof(ctx context.Context, args []string) error {
 				fail++
 			}
 		}
-		fmt.Printf("evidence %s – %s: %d attestations (%d pass, %d fail), ledger #%d–#%d\n",
+		fmt.Printf("evidence %s – %s: %d statements (%d pass, %d fail), ledger #%d–#%d\n",
 			pack.From.Format("2006-01-02"), pack.To.Format("2006-01-02"), len(pack.Proofs), pass, fail, firstSeq(pack.Ledger), lastSeq(pack.Ledger))
 		for _, e := range errs {
 			fmt.Println("  ✗", e)
