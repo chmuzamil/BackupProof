@@ -391,6 +391,7 @@ Cloud storage sometimes refuses a request for a while (HTTP 500 or 503). BackupP
 ## Documentation
 
 - [Getting started](docs/GETTING-STARTED.md): plain-language guide for non-technical users
+- [Proof compatibility](docs/COMPATIBILITY.md): which old proofs keep verifying, and how CI checks it
 - [Release signing](docs/SIGNING.md): verifying downloads, and how the signing key is kept and replaced
 - [Example item settings](examples/): PostgreSQL, MySQL in Docker, WordPress, SQLite, MongoDB, Docker Compose apps
 - [Research notes](docs/RESEARCH.md): market and technical research behind the design
