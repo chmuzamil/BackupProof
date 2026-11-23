@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-11-24
+
 ### Security
 
 - **`proof verify-pack` now checks the readable parts of an evidence pack against the signed statements.** Before, each proof's pass or fail, its item and kind, and the per-item summary were listed beside the signed statements but not checked, so an edited pack could show a failed restore test as passed and still verify. Timestamps in a pack are now checked too.
