@@ -136,3 +136,24 @@ func isPgCustomDump(p string) bool {
 	}
 	return string(head) == "PGDMP"
 }
+
+// pgDumpArchiveMajor returns the oldest PostgreSQL major version whose
+// pg_restore reads the custom-format dump at p, from the archive version in its
+// header ("PGDMP", major, minor, revision), or 0 if it can't tell. Archive
+// 1.15 came with PostgreSQL 16 and 1.16 with 17; each later minor is assumed to
+// be one more major.
+func pgDumpArchiveMajor(p string) int {
+	f, err := os.Open(p)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	head := make([]byte, 8)
+	if _, err := io.ReadFull(f, head); err != nil || string(head[:5]) != "PGDMP" || head[5] != 1 {
+		return 0
+	}
+	if minor := int(head[6]); minor >= 15 {
+		return minor + 1
+	}
+	return 0
+}

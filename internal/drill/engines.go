@@ -65,6 +65,23 @@ func intMeta(s snapshot.WithID, key string) int {
 	return 0
 }
 
+// postgresDrillMajor picks the PostgreSQL major version for the restore test.
+// pg_restore can't read a dump from a newer pg_dump, so it is the newer of the
+// server's version and pg_dump's. Snapshots made before pg_dump's version was
+// recorded fall back to the dump file's archive version.
+func postgresDrillMajor(s snapshot.WithID, dump string) int {
+	major := intMeta(s, "serverMajor")
+	dumpMajor := intMeta(s, "pgDumpMajor")
+	if dumpMajor == 0 {
+		dumpMajor = pgDumpArchiveMajor(dump)
+	}
+	major = max(major, dumpMajor)
+	if major == 0 {
+		major = 17
+	}
+	return major
+}
+
 func postgresChecks(ctx context.Context, r *runner, dir string, s snapshot.WithID, spec source.Spec) {
 	dump, err := findStream(dir, "postgres")
 	if !r.check("locate-dump", func() (string, error) { return filepath.Base(dump), err }) {
@@ -72,11 +89,7 @@ func postgresChecks(ctx context.Context, r *runner, dir string, s snapshot.WithI
 	}
 	image := spec.Drill.Image
 	if image == "" {
-		major := intMeta(s, "serverMajor")
-		if major == 0 {
-			major = 17
-		}
-		image = fmt.Sprintf("postgres:%d", major)
+		image = fmt.Sprintf("postgres:%d", postgresDrillMajor(s, dump))
 	}
 	if !DockerAvailable(ctx) {
 		r.check("sandbox", func() (string, error) { return "", fmt.Errorf("docker is required for PostgreSQL drills") })

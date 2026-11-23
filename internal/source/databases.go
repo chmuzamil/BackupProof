@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -41,6 +42,9 @@ func PostgresDumpArgs(s Spec) []string {
 	return args
 }
 
+// pgVersionRe reads the major version from "pg_dump (PostgreSQL) 17.2".
+var pgVersionRe = regexp.MustCompile(`\(PostgreSQL\) (\d+)`)
+
 func backupPostgres(ctx context.Context, s Spec, b *engine.Builder, log engine.Logger) (map[string]any, error) {
 	meta := map[string]any{"database": s.Database}
 	// Server version and per-table row estimates for drill reconciliation.
@@ -58,6 +62,15 @@ func backupPostgres(ctx context.Context, s Spec, b *engine.Builder, log engine.L
 			}
 			meta["tables"] = parseCounts(lines[1:])
 			meta["countsExact"] = false
+		}
+	}
+	// pg_dump's own version: a dump from a newer pg_dump needs a restore test
+	// image at least that new.
+	if out, err := runOutput(toolCmd(ctx, s, nil, "pg_dump", "--version")); err == nil {
+		if m := pgVersionRe.FindStringSubmatch(out); m != nil {
+			if v, err := strconv.Atoi(m[1]); err == nil {
+				meta["pgDumpMajor"] = v
+			}
 		}
 	}
 	log("dumping PostgreSQL database %s", s.Database)

@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`proof verify-pack` now checks the readable parts of an evidence pack against the signed statements.** Before, each proof's pass or fail, its item and kind, and the per-item summary were listed beside the signed statements but not checked, so an edited pack could show a failed restore test as passed and still verify. Timestamps in a pack are now checked too.
 
+### Fixed
+
+- **A PostgreSQL restore test no longer fails when `pg_dump` is newer than the database server.** The test ran on the server's PostgreSQL version, whose `pg_restore` can't read a dump from a newer `pg_dump` ("unsupported version in file header"), so a good backup was reported as failed. Backups now record `pg_dump`'s version and the test uses the newer of the two; for earlier backups it reads the version from the dump itself.
+
+### Added
+
+- **Compatibility policy and tests.** Every proof made by BackupProof 0.2.0 or later keeps verifying with newer versions: backups and restore tests from the command-line tool and the dashboard, second-copy proofs, evidence packs and RFC 3161 timestamps. CI checks this on every change against proofs made by each release. See `docs/COMPATIBILITY.md`.
+
 ## [0.2.20] - 2026-11-23
 
 ### Security
