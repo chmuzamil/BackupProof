@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_PASSWORD: compat-fixture-db
           POSTGRES_DB: shop
@@ -60,6 +60,9 @@ jobs:
         env:
           PGPASSWORD: compat-fixture-db
         run: |
+          # pg_dump here must not be newer than the server, or the restore test
+          # (which uses the server's version) can't read the dump.
+          pg_dump --version
           psql -h 127.0.0.1 -U postgres -d shop -c "CREATE TABLE orders (id serial PRIMARY KEY, total int);"
           psql -h 127.0.0.1 -U postgres -d shop -c "INSERT INTO orders (total) SELECT g * 10 FROM generate_series(1, 20) g;"
       - name: make fixtures

@@ -192,7 +192,8 @@ func run(url, work, out, pg string) error {
 		if _, err := a.do("POST", fmt.Sprintf("/api/sources/%d/run", id), map[string]string{"kind": kind}, &r); err != nil {
 			return err
 		}
-		return waitIdle(a)
+		// Only this job and what it queued count; earlier failures are already recorded.
+		return waitIdle(a, r.JobID)
 	}
 	// An older release may not support everything; what it couldn't do is
 	// recorded in the manifest instead of stopping the run.
@@ -265,8 +266,9 @@ func run(url, work, out, pg string) error {
 	return os.WriteFile(filepath.Join(out, "manifest.json"), append(man, '\n'), 0o644)
 }
 
-// waitIdle waits until no job is queued or running.
-func waitIdle(a *client) error {
+// waitIdle waits until no job is queued or running, then reports a failure of
+// job first or any job queued after it.
+func waitIdle(a *client, first int64) error {
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
 		time.Sleep(time.Second)
@@ -282,7 +284,7 @@ func waitIdle(a *client) error {
 		}
 		if !busy {
 			for _, j := range jobs {
-				if j.State == "failed" {
+				if j.ID >= first && j.State == "failed" {
 					return fmt.Errorf("job %d (%s) failed: %s", j.ID, j.Kind, j.Error)
 				}
 			}
