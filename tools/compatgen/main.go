@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -163,8 +164,10 @@ func run(url, work, out, pg string) error {
 		if len(p) != 5 {
 			return errors.New("-postgres needs host:port:user:password:database")
 		}
-		var port int
-		fmt.Sscan(p[1], &port)
+		port, err := strconv.Atoi(p[1])
+		if err != nil {
+			return fmt.Errorf("-postgres port: %w", err)
+		}
 		items = append(items, item{"postgres", map[string]any{"kind": "postgres", "host": p[0], "port": port, "user": p[2], "database": p[4],
 			"drill": map[string]any{"assertions": []map[string]string{{"name": "orders present", "sql": "SELECT count(*) = 20 FROM orders"}}}},
 			map[string]string{"password": p[3]}})
