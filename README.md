@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="BackupProof: backups you can prove" width="100%">
+  <a href="https://backupproof.dev"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
+    <img src="docs/assets/banner-light.png" alt="BackupProof: backups you can prove. Self-hosted backups for servers, apps and databases, every one restore-tested and recorded as signed proof. backupproof.dev" width="100%">
+  </picture></a>
 </p>
 
 <p align="center">
