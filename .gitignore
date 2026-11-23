@@ -6,3 +6,4 @@
 .claude/
 .code-review-graph/
 .serena/
+!internal/*/testdata/compat/**/*.bundle.json

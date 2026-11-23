@@ -1,0 +1,39 @@
+{
+  "format": "backupproof-bundle/v1",
+  "envelope": {
+    "payloadType": "application/vnd.in-toto+json",
+    "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJzdWJqZWN0IjpbeyJuYW1lIjoiYmFja3VwcHJvb2Y6M2ViZTFiOWQxNzdiMTE1MmQ2NDQ5NmFjYzUyZTZjYTMvc25hcHNob3QvYzJmOGU2M2NlNjI2ZDE4MWEwYzkxYTVjNzA0ZjBhYmRmNDI4NzIxZWY3OGY0N2FlMTMxNmUxMjczMzM0YTkyYSIsImRpZ2VzdCI6eyJibGFrZTMiOiJiNDVkYzM5ZTM0YmJkMWEyYzgyZTE2NjkyZTQzNjk4YmQ2YWQ1Y2U1Mzg5OWRhNjg4OTI2ZThhOGY4Zjc5MWI0In19XSwicHJlZGljYXRlVHlwZSI6Imh0dHBzOi8vYmFja3VwcHJvb2YuZGV2L2F0dGVzdGF0aW9uL3Jlc3RvcmUtZHJpbGwvdjEiLCJwcmVkaWNhdGUiOnsicmVwb0lkIjoiM2ViZTFiOWQxNzdiMTE1MmQ2NDQ5NmFjYzUyZTZjYTMiLCJzbmFwc2hvdElkIjoiYzJmOGU2M2NlNjI2ZDE4MWEwYzkxYTVjNzA0ZjBhYmRmNDI4NzIxZWY3OGY0N2FlMTMxNmUxMjczMzM0YTkyYSIsInNvdXJjZSI6ImZpbGVzIiwia2luZCI6ImZpbGVzIiwic25hcHNob3RUaW1lIjoiMjAyNi0xMS0yM1QwNTozNjoxNi45NTI1MjMwNFoiLCJleHBlY3RlZFJvb3QiOiJiNDVkYzM5ZTM0YmJkMWEyYzgyZTE2NjkyZTQzNjk4YmQ2YWQ1Y2U1Mzg5OWRhNjg4OTI2ZThhOGY4Zjc5MWI0IiwicmVzdG9yZWRSb290IjoiYjQ1ZGMzOWUzNGJiZDFhMmM4MmUxNjY5MmU0MzY5OGJkNmFkNWNlNTM4OTlkYTY4ODkyNmU4YThmOGY3OTFiNCIsInZlcmlmaWVyIjoiY29tcGF0LWZpeHR1cmVzIiwic2FuZGJveCI6Imhvc3QtZmlsZXN5c3RlbSIsInN0YXJ0ZWRBdCI6IjIwMjYtMTEtMjNUMDU6MzY6MTcuMDUyOTczNDk5WiIsImZpbmlzaGVkQXQiOiIyMDI2LTExLTIzVDA1OjM2OjE3LjA1NDI0NzAzN1oiLCJydG9NcyI6MSwicmVzdG9yZWRCeXRlcyI6NDgsImNoZWNrcyI6W3sibmFtZSI6InJlc3RvcmUtZnJvbS1zdG9yYWdlIiwicGFzc2VkIjp0cnVlLCJkZXRhaWwiOiIyIGZpbGVzLCA0OCBieXRlcywgZXZlcnkgY2h1bmsgYXV0aGVudGljYXRlZCBhbmQgZXZlcnkgZmlsZSBoYXNoIHZlcmlmaWVkIn0seyJuYW1lIjoiY29udGVudC1yb290IiwicGFzc2VkIjp0cnVlLCJkZXRhaWwiOiJNZXJrbGUgcm9vdCBvZiA2IHJlc3RvcmVkIGVudHJpZXMgbWF0Y2hlcyB0aGUgc25hcHNob3QgKGI0NWRjMzllMzRiYmQxYTLigKYpIn1dLCJwYXNzZWQiOnRydWUsImVuZ2luZSI6ImJhY2t1cHByb29mLzAuMi45In19",
+    "signatures": [
+      {
+        "keyid": "bp:82ccbd6b2d03cd25",
+        "sig": "lRCnAKLJeA38xXH5VMPYRJ/dP1qcdORNJe5ufTs1HvfghjCCYI4GC/3NXQ5TsJBY7qh7zmqO11r+vbRl7wHmBA=="
+      }
+    ]
+  },
+  "ledger": [
+    {
+      "seq": 2,
+      "time": "2026-11-23T05:36:17.055813135Z",
+      "kind": "drill",
+      "subject": "c2f8e63ce626d181a0c91a5c704f0abdf428721ef78f47ae1316e1273334a92a",
+      "envelopeDigest": "e92d84d589d81a2d767fe2fd97e26120be80c90cdff9acbd7db0f4e2c55b3625",
+      "prev": "a06dfe000e245295821f367799c6b80d7967d3acc08b65f9e6540b9fbaf00511",
+      "hash": "14c77384f7f56f290ddd35329ba05f1e93600e23b1b16a00d8e5ba8c265a5449"
+    }
+  ],
+  "checkpoint": {
+    "origin": "backupproof-cli@compat-fixtures",
+    "seq": 2,
+    "head": "14c77384f7f56f290ddd35329ba05f1e93600e23b1b16a00d8e5ba8c265a5449",
+    "time": "2026-11-23T05:36:17.353356561Z",
+    "keyid": "bp:82ccbd6b2d03cd25",
+    "sig": "j8QPSQ535zvCFKhP2SnBJ6U5guSleX/KFcPJ2i5JUaRkoHAsbFBO61vcc9x/8bnMGvJYQeJYwBx+kdr3AZAxAw=="
+  },
+  "keys": [
+    {
+      "name": "cli@compat-fixtures",
+      "keyid": "bp:82ccbd6b2d03cd25",
+      "public": "zRYQj8I1G7T3gakqLqE4aG0wsQWKkNhVKvRpAEMMDkU="
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "format": "backupproof-bundle/v1",
+  "envelope": {
+    "payloadType": "application/vnd.in-toto+json",
+    "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJzdWJqZWN0IjpbeyJuYW1lIjoiYmFja3VwcHJvb2Y6NzE0MTg0YzBkODNiZjNmZDcwMmViYmY5N2M0NDIyNjIvc25hcHNob3QvODBhNzU0OGU2YjBlN2FjNDc5NGZiM2FlZjFkNzkyZGI0NmFkY2EzMjAxZWM5ZjViMTBlNmE4NTExMjBhMzhkMSIsImRpZ2VzdCI6eyJibGFrZTMiOiJiNDVkYzM5ZTM0YmJkMWEyYzgyZTE2NjkyZTQzNjk4YmQ2YWQ1Y2U1Mzg5OWRhNjg4OTI2ZThhOGY4Zjc5MWI0In19XSwicHJlZGljYXRlVHlwZSI6Imh0dHBzOi8vYmFja3VwcHJvb2YuZGV2L2F0dGVzdGF0aW9uL2JhY2t1cC92MSIsInByZWRpY2F0ZSI6eyJyZXBvSWQiOiI3MTQxODRjMGQ4M2JmM2ZkNzAyZWJiZjk3YzQ0MjI2MiIsInNuYXBzaG90SWQiOiI4MGE3NTQ4ZTZiMGU3YWM0Nzk0ZmIzYWVmMWQ3OTJkYjQ2YWRjYTMyMDFlYzlmNWIxMGU2YTg1MTEyMGEzOGQxIiwic291cmNlIjoiZmlsZXMiLCJraW5kIjoiZmlsZXMiLCJob3N0IjoiY29tcGF0LWZpeHR1cmVzIiwidGltZSI6IjIwMjYtMTEtMjNUMDU6MzU6NTMuNDI3MzQwNTM1WiIsImVudHJpZXMiOjYsImJ5dGVzIjo0OCwiZHVyYXRpb25NcyI6NCwic3RvcmFnZSI6eyJsb2NhdGlvbiI6Ii90bXAvdG1wLndlaFpPS0dFZ0ovcmVwby12MC4yLjIifSwiZW5naW5lIjoiYmFja3VwcHJvb2YvMC4yLjIifX0=",
+    "signatures": [
+      {
+        "keyid": "bp:d6a246eab2772506",
+        "sig": "kKD5snMpz7rKL2VxI/3MyjfhDgEDBDz98UOam6T9vO2YyLTi1a5jONY5hdpDEJGpWfSB4lJRQ7Pq0oJbyRUABA=="
+      }
+    ]
+  },
+  "ledger": [
+    {
+      "seq": 1,
+      "time": "2026-11-23T05:35:53.428611391Z",
+      "kind": "backup",
+      "subject": "80a7548e6b0e7ac4794fb3aef1d792db46adca3201ec9f5b10e6a851120a38d1",
+      "envelopeDigest": "dcfbd37c1d92650292ca0c72963d830c171eaea61785c2e3571b369c3ae9cdbb",
+      "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+      "hash": "16f14fc79ad43167c8a0ff60a0bd6dfe54ad8e369e73c8e15423fd82cf9a7ba5"
+    },
+    {
+      "seq": 2,
+      "time": "2026-11-23T05:35:53.534513151Z",
+      "kind": "drill",
+      "subject": "80a7548e6b0e7ac4794fb3aef1d792db46adca3201ec9f5b10e6a851120a38d1",
+      "envelopeDigest": "e87e22529535c0f6c9fce4695cc68a98b5ae908433bf5f1a6b3709a1ea64b793",
+      "prev": "16f14fc79ad43167c8a0ff60a0bd6dfe54ad8e369e73c8e15423fd82cf9a7ba5",
+      "hash": "181c7d6c03642218f1b3402b92b3bd8efd6d93909c797c14d17a9ae6c8da38bc"
+    }
+  ],
+  "checkpoint": {
+    "origin": "backupproof-cli@compat-fixtures",
+    "seq": 2,
+    "head": "181c7d6c03642218f1b3402b92b3bd8efd6d93909c797c14d17a9ae6c8da38bc",
+    "time": "2026-11-23T05:35:53.738797289Z",
+    "keyid": "bp:d6a246eab2772506",
+    "sig": "ohQPN9/Qq8GwMz+kfT6jSjWBU+Zqv+hjs8yKPpagbXTajQ0X/hSgTKoHgmf5jxLmM7MBwEvKFagHa696etcCCA=="
+  },
+  "keys": [
+    {
+      "name": "cli@compat-fixtures",
+      "keyid": "bp:d6a246eab2772506",
+      "public": "Y56ve1kS18ztj9t76Mz6V6Si0nKELGLZ8HC3zdQGK/8="
+    }
+  ]
+}
