@@ -1,0 +1,17 @@
+{
+  "categories": [
+    "backup/files",
+    "backup/postgres",
+    "backup/sqlite",
+    "copy/files",
+    "drill/files",
+    "drill/postgres",
+    "drill/sqlite",
+    "evidence",
+    "timestamp"
+  ],
+  "problems": [
+    "files copy-drill: POST /api/sources/1/run: HTTP 400: {\"error\":\"kind must be backup, drill or check\"}"
+  ],
+  "proofs": 10
+}
