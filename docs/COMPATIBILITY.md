@@ -29,6 +29,14 @@ they are.
 
 ## How it's tested
 
+Dashboard proofs are tested the same way: `tools/compatgen` drives each
+release's dashboard and built-in agent over its HTTP API (a folder with a second
+copy, an SQLite file and a PostgreSQL database), and
+`TestDashboardProofsFromEarlierReleasesStillVerify` checks every bundle, its
+timestamp and the evidence pack from `internal/server/testdata/compat/<tag>/`.
+Each fixture's `manifest.json` lists what that release produced.
+
+
 `internal/proof/testdata/compat/<tag>/` holds proofs made by that release's own
 command-line tool, with `key.txt`, the public key that signed them.
 `TestProofsFromEarlierReleasesStillVerify` checks each one with the current code

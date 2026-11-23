@@ -202,6 +202,21 @@ func TestFleetBackupDrillEvidence(t *testing.T) {
 	if errs := server.VerifyPack(&pack, trusted); len(errs) > 0 {
 		t.Fatalf("evidence pack: %v", errs)
 	}
+	// The readable fields beside each signed statement can't be edited unnoticed.
+	for name, edit := range map[string]func(p *server.EvidencePack){
+		"a result":       func(p *server.EvidencePack) { p.Proofs[0].Passed = !p.Proofs[0].Passed },
+		"a summary":      func(p *server.EvidencePack) { p.Summary[0].DrillsFailed++ },
+		"an item name":   func(p *server.EvidencePack) { p.Proofs[0].Source = "other" },
+		"a proof's kind": func(p *server.EvidencePack) { p.Proofs[0].Kind = "copy" },
+	} {
+		raw, _ := json.Marshal(pack)
+		var tampered server.EvidencePack
+		_ = json.Unmarshal(raw, &tampered)
+		edit(&tampered)
+		if errs := server.VerifyPack(&tampered, trusted); len(errs) == 0 {
+			t.Errorf("evidence pack with %s changed still verifies", name)
+		}
+	}
 	if len(pack.Summary) != 1 || pack.Summary[0].DrillsPassed != 1 {
 		t.Fatalf("summary: %+v", pack.Summary)
 	}

@@ -316,9 +316,88 @@ func (s *Server) handleEvidenceReport(w http.ResponseWriter, r *http.Request) {
 	reportTmpl.Execute(w, pack)
 }
 
-// VerifyPack checks an evidence pack offline: every envelope signature, the
-// ledger chain, that each proof is the ledger entry it claims to be, and the
-// signed checkpoint.
+// packRowMatches checks the readable fields of a pack row against its signed
+// statement, so editing them (turning a failed restore test into a pass, say)
+// is caught.
+func packRowMatches(p PackProof) error {
+	st, err := proof.ParseStatement(p.Envelope)
+	if err != nil {
+		return err
+	}
+	want := map[string]string{"backup": proof.PredicateBackup, "drill": proof.PredicateDrill,
+		copyDrillKind: proof.PredicateDrill, "copy": proof.PredicateCopy}[p.Kind]
+	if want == "" || st.PredicateType != want {
+		return fmt.Errorf("listed as %q but the signed statement is %s", p.Kind, st.PredicateType)
+	}
+	var pred struct {
+		Source     string `json:"source"`
+		SnapshotID string `json:"snapshotId"`
+		Passed     *bool  `json:"passed"`
+	}
+	if err := json.Unmarshal(st.Predicate, &pred); err != nil {
+		return err
+	}
+	if pred.Source != p.Source || pred.SnapshotID != p.SnapshotID {
+		return errors.New("its item or backup differs from the signed statement")
+	}
+	passed := true // backups and copies are recorded only when they succeed
+	if st.PredicateType == proof.PredicateDrill {
+		passed = pred.Passed != nil && *pred.Passed
+	}
+	if p.Passed != passed {
+		return fmt.Errorf("listed as passed=%v but the signed statement says passed=%v", p.Passed, passed)
+	}
+	return nil
+}
+
+// packSummaryMatches recounts the per-item summary from the proof rows, which
+// packRowMatches has tied to their signed statements.
+func packSummaryMatches(pack *EvidencePack) []string {
+	type count struct{ backups, drills, passed, failed, stamped int }
+	got := map[string]*count{}
+	for _, p := range pack.Proofs {
+		c := got[p.Source]
+		if c == nil {
+			c = &count{}
+			got[p.Source] = c
+		}
+		if p.Timestamp != nil {
+			c.stamped++
+		}
+		switch p.Kind {
+		case "backup":
+			c.backups++
+		case "drill":
+			c.drills++
+			if p.Passed {
+				c.passed++
+			} else {
+				c.failed++
+			}
+		}
+	}
+	var errs []string
+	for _, s := range pack.Summary {
+		c := got[s.Source]
+		if c == nil {
+			c = &count{}
+		}
+		if s.Backups != c.backups || s.Drills != c.drills || s.DrillsPassed != c.passed || s.DrillsFailed != c.failed || s.Timestamped != c.stamped {
+			errs = append(errs, fmt.Sprintf("summary for %q doesn't match its proofs", s.Source))
+		}
+		delete(got, s.Source)
+	}
+	for name := range got {
+		errs = append(errs, fmt.Sprintf("summary leaves out %q", name))
+	}
+	sort.Strings(errs)
+	return errs
+}
+
+// VerifyPack checks an evidence pack offline: every envelope signature and
+// timestamp, the ledger chain, that each proof is the ledger entry it claims
+// to be, that the readable fields and summary match the signed statements, and
+// the signed checkpoint.
 func VerifyPack(pack *EvidencePack, trusted []proof.PublicKey) []string {
 	var errs []string
 	if len(trusted) == 0 {
@@ -332,14 +411,31 @@ func VerifyPack(pack *EvidencePack, trusted []proof.PublicKey) []string {
 		bySeq[e.Seq] = e
 	}
 	for _, p := range pack.Proofs {
+		if p.Envelope == nil {
+			errs = append(errs, fmt.Sprintf("proof at ledger #%d has no signed statement", p.LedgerSeq))
+			continue
+		}
 		if _, err := p.Envelope.Verify(trusted); err != nil {
 			errs = append(errs, fmt.Sprintf("proof at ledger #%d: %v", p.LedgerSeq, err))
+			continue
 		}
 		e, ok := bySeq[p.LedgerSeq]
 		if !ok || e.EnvelopeDigest != p.Envelope.Digest() {
 			errs = append(errs, fmt.Sprintf("proof at ledger #%d is not the recorded ledger entry", p.LedgerSeq))
 		}
+		// Kind, item, backup and result are listed beside the statement for
+		// reading; they must say what the signed statement says.
+		if err := packRowMatches(p); err != nil {
+			errs = append(errs, fmt.Sprintf("proof at ledger #%d: %v", p.LedgerSeq, err))
+		}
+		if p.Timestamp != nil {
+			env, _ := json.Marshal(p.Envelope)
+			if _, err := p.Timestamp.Verify(env, nil); err != nil {
+				errs = append(errs, fmt.Sprintf("proof at ledger #%d: timestamp: %v", p.LedgerSeq, err))
+			}
+		}
 	}
+	errs = append(errs, packSummaryMatches(pack)...)
 	if pack.Checkpoint != nil && len(pack.Ledger) > 0 {
 		last := pack.Ledger[len(pack.Ledger)-1]
 		if err := pack.Checkpoint.Verify(trusted); err != nil {

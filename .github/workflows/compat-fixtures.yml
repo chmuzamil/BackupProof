@@ -1,8 +1,9 @@
 name: compat-fixtures
 
-# Makes proofs with each release's own command-line tool, on a runner renamed
+# Makes proofs with each release's own code, on a runner renamed
 # compat-fixtures so no real machine name ends up in them. Run it by hand after
-# a release, then commit the artifact under internal/proof/testdata/compat/.
+# a release, then commit the artifacts under internal/proof/testdata/compat/
+# (command-line tool) and internal/server/testdata/compat/ (dashboard).
 # See docs/COMPATIBILITY.md.
 on:
   workflow_dispatch:
@@ -15,7 +16,7 @@ permissions:
   contents: read
 
 jobs:
-  fixtures:
+  cli:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -33,4 +34,39 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: compat-fixtures
+          path: compat
+
+  dashboard:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: compat-fixture-db
+          POSTGRES_DB: shop
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: generic host name
+        run: sudo hostnamectl set-hostname compat-fixtures && hostname
+      - name: database to protect
+        env:
+          PGPASSWORD: compat-fixture-db
+        run: |
+          psql -h 127.0.0.1 -U postgres -d shop -c "CREATE TABLE orders (id serial PRIMARY KEY, total int);"
+          psql -h 127.0.0.1 -U postgres -d shop -c "INSERT INTO orders (total) SELECT g * 10 FROM generate_series(1, 20) g;"
+      - name: make fixtures
+        env:
+          TAGS: ${{ inputs.tags }}
+        run: sh scripts/compat-dashboard.sh "$TAGS" compat 127.0.0.1:5432:postgres:compat-fixture-db:shop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compat-dashboard
           path: compat
