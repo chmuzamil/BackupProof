@@ -951,26 +951,21 @@ function renderCodeStep(challenge) {
 
 function verLabel() { const v = String(S.status.version).replace(/^backupproof\//, ''); return /^\d/.test(v) ? 'v' + v : v; }
 
-// markSvg is the BackupProof mark, the same shield and check as backupproof.dev.
+// markSvg is the BackupProof mark, the same receipt and seal as backupproof.dev.
 function markSvg() {
   const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 72 88');
-  svg.setAttribute('class', 'mark');
-  svg.setAttribute('aria-hidden', 'true');
-  const shield = document.createElementNS(NS, 'path');
-  shield.setAttribute('d', 'M36 0 70 12v28c0 22-15 39-34 46C17 79 2 62 2 40V12Z');
-  shield.setAttribute('class', 'mark-shield');
-  const check = document.createElementNS(NS, 'path');
-  check.setAttribute('d', 'm21 43 11 11 20-22');
-  check.setAttribute('class', 'mark-check');
-  svg.append(shield, check);
+  const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+  const svg = el('svg', { viewBox: '0 0 32 32', class: 'mark', 'aria-hidden': 'true' });
+  svg.append(
+    el('path', { d: 'M7 3h18v22.5l-3 2.5-3-2.5-3 2.5-3-2.5-3 2.5-3-2.5z', fill: 'none', stroke: 'currentColor', 'stroke-width': '2.4', 'stroke-linejoin': 'round' }),
+    el('path', { d: 'M11 10h10M11 15h10M11 20h5', stroke: 'currentColor', 'stroke-width': '2.4', 'stroke-linecap': 'round' }),
+    el('circle', { cx: '23', cy: '23', r: '6.2', fill: 'currentColor' }));
   return svg;
 }
 
 // brand is the logo; with href it links there (Home, inside the dashboard).
 function brand(href) {
-  const kids = [h('span', { class: 'brand-mark' }, markSvg()), h('span', null, 'Backup', h('span', { class: 'brand-accent' }, 'Proof'))];
+  const kids = [h('span', { class: 'brand-mark' }, markSvg()), h('span', null, 'BackupProof')];
   return href
     ? h('a', { class: 'brand', href, translate: 'no', 'aria-label': 'BackupProof, go to Home' }, kids)
     : h('div', { class: 'brand', translate: 'no' }, kids);

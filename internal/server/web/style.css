@@ -39,8 +39,7 @@
   --ink-text: #c9d4ee;
   --ink-muted: #8e9cbd;
   --ink-accent: #8fb0ff;
-  --mark: #3d6bff;
-  --mark-check: #ffffff;
+  --mark: #2a52d6;
   --verdict-bg: var(--ink);
   --radius: 12px;
   --radius-sm: 7px;
@@ -91,8 +90,7 @@
   --ink-2: #13224a;
   --ink-line: #1c2c55;
   --verdict-bg: #13234a;
-  --mark: #8fb0ff;
-  --mark-check: #0e1a33;
+  --mark: #93b1ff;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -129,8 +127,7 @@
     --ink-2: #13224a;
     --ink-line: #1c2c55;
     --verdict-bg: #13234a;
-    --mark: #8fb0ff;
-    --mark-check: #0e1a33;
+    --mark: #93b1ff;
     color-scheme: dark;
   }
 }
@@ -213,13 +210,8 @@ button, a, summary, label, select, input[type=checkbox], .choice, .tab, .picker-
 a.brand:hover { text-decoration: none; }
 .sidebar .brand, .topbar .brand { color: #fff; }
 .brand-mark { display: inline-flex; }
-.mark { width: 22px; height: 27px; display: block; }
-.mark-shield { fill: var(--mark); }
-.mark-check { fill: none; stroke: var(--mark-check); stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; }
-.sidebar .mark-shield, .topbar .mark-shield { fill: var(--ink-accent); }
-.sidebar .mark-check, .topbar .mark-check { stroke: var(--ink); }
-.brand-accent { color: var(--accent); }
-.sidebar .brand-accent, .topbar .brand-accent { color: var(--ink-accent); }
+.mark { width: 26px; height: 26px; display: block; color: var(--mark); }
+.sidebar .mark, .topbar .mark { color: #93b1ff; }
 .nav { display: flex; flex-direction: column; padding: 16px 12px; gap: 2px; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
 .nav a {
   color: var(--ink-text); padding: 9px 12px; border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center;
