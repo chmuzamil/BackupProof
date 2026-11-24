@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.23] - 2026-11-24
+
 ### Fixed
 
 - **Stopping the agent is a clean exit.** `systemctl stop` or a restart made the agent exit with an error, so systemd logged it as failed on every upgrade and reboot.
