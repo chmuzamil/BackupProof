@@ -1,0 +1,16 @@
+{
+  "categories": [
+    "backup/files",
+    "backup/postgres",
+    "backup/sqlite",
+    "copy-drill/files",
+    "copy/files",
+    "drill/files",
+    "drill/postgres",
+    "drill/sqlite",
+    "evidence",
+    "timestamp"
+  ],
+  "problems": null,
+  "proofs": 12
+}
