@@ -183,8 +183,9 @@ func New(dir string) (*Agent, error) {
 	return &Agent{dir: dir, st: st, key: key, c: &client{base: st.Server, token: st.Token, http: &http.Client{Timeout: 60 * time.Second}}}, nil
 }
 
-// Run polls for work until ctx is cancelled. Network errors back off and
-// retry; the agent never exits because the server is temporarily away.
+// Run polls for work until ctx is cancelled, then returns nil: being asked to
+// stop (systemctl stop, Ctrl-C) is a clean exit, not a failure. Network errors
+// back off and retry; the agent never exits because the server is temporarily away.
 func (a *Agent) Run(ctx context.Context) error {
 	fmt.Printf("agent %s (#%d) polling %s\n", a.st.Name, a.st.AgentID, a.st.Server)
 	a.docker = drill.DockerAvailable(ctx)
@@ -195,6 +196,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		var lease protocol.Lease
 		code, err := a.c.post(ctx, "/api/agent/poll", protocol.PollRequest{Version: engine.Version, Docker: a.docker}, &lease)
 		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			if code == http.StatusUnauthorized {
 				return errors.New("server rejected this agent (revoked?): " + err.Error())
 			}
@@ -214,7 +218,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		a.execute(ctx, &lease)
 	}
-	return ctx.Err()
+	return nil
 }
 
 // clearLeftovers removes what a job killed outright couldn't, which can be a
