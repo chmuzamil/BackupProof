@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.22] - 2026-11-24
+
+### Changed
+
+- **The dashboard has the new BackupProof logo,** the receipt mark from backupproof.dev, on the sign-in page, in the sidebar and as the browser-tab icon. The name now reads plain "BackupProof".
+
 ## [0.2.21] - 2026-11-24
 
 ### Security
