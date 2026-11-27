@@ -56,9 +56,24 @@ func DefaultKDF() (KDFParams, error) {
 	return KDFParams{Algo: "argon2id", Time: 3, Memory: 64 * 1024, Threads: 4, Salt: salt}, nil
 }
 
+// Limits on the key derivation settings a key file may ask for. The settings
+// come from the storage, so without limits a planted key file could crash
+// (argon2 panics on zero rounds) or exhaust any server that opens it. The
+// defaults are 3 rounds, 64 MiB and 4 threads.
+const (
+	maxKDFTime    = 16
+	minKDFMemory  = 8 * 1024    // KiB
+	maxKDFMemory  = 1024 * 1024 // KiB: 1 GiB
+	maxKDFThreads = 16
+)
+
 func (p KDFParams) Derive(password []byte) ([]byte, error) {
 	if p.Algo != "argon2id" {
 		return nil, fmt.Errorf("unsupported kdf %q", p.Algo)
+	}
+	if p.Time < 1 || p.Time > maxKDFTime || p.Memory < minKDFMemory || p.Memory > maxKDFMemory ||
+		p.Threads < 1 || p.Threads > maxKDFThreads || len(p.Salt) < 8 || len(p.Salt) > 64 {
+		return nil, errors.New("the key file's key derivation settings are out of range")
 	}
 	return argon2.IDKey(password, p.Salt, p.Time, p.Memory, p.Threads, 32), nil
 }
