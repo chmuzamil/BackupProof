@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-27
+
 ### Security
 
 - **A damaged or planted key file in storage can no longer crash or exhaust a server that opens it.** The key derivation settings come from the storage's key files; zero rounds made every agent opening that storage crash, and huge memory or round counts could exhaust it. They are now limited (1 to 16 rounds, 8 MiB to 1 GiB, 1 to 16 threads), which every storage BackupProof made fits. Found by the new fuzz tests. Exploiting it needed write access to the storage.
