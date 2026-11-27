@@ -3997,8 +3997,8 @@ async function pageSettings() {
   const parts = [pageHead('Settings')];
   if (isAdmin()) {
     const [notify, tsa, users, st] = await Promise.all([api('/settings/notify'), api('/settings/tsa'), api('/users'), api('/status', { noAuthRedirect: true })]);
-    const [tokens, dash, repos] = await Promise.all([api('/tokens').catch(() => []), api('/settings/dashboard-backup').catch(() => null), api('/repositories').catch(() => [])]);
-    parts.push(serverCard(st || {}), dashboardBackupCard(dash || {}, repos || []), notifyCard(notify || {}), usersCard(users || []), tokensCard(tokens || []), tsaCard(tsa || { urls: [] }));
+    const [tokens, dash, repos, tlog] = await Promise.all([api('/tokens').catch(() => []), api('/settings/dashboard-backup').catch(() => null), api('/repositories').catch(() => []), api('/settings/transparency').catch(() => null)]);
+    parts.push(serverCard(st || {}), dashboardBackupCard(dash || {}, repos || []), notifyCard(notify || {}), usersCard(users || []), tokensCard(tokens || []), tsaCard(tsa || { urls: [] }), tlog ? transparencyCard(tlog) : null);
   }
   parts.push(twoFactorCard(), passwordCard());
   return settingsGuard(h('div', null, parts));
@@ -4057,6 +4057,49 @@ function dashboardBackupCard(st, repos) {
     st.repoId ? btn('Back up now', busy(async () => { await post('/settings/dashboard-backup/run'); toast('Dashboard backup started. It takes a minute.', 'ok'); }, 'Starting…'), '', { disabled: !!st.running }) : null,
     offsite.length ? h('button', { type: 'submit', class: 'btn primary' }, 'Save') : null));
   return card('Dashboard backup', form);
+}
+
+// transparencyCard: the proof ledger as a transparency log, and the witnesses
+// on other machines that cosign it, so the history can't be rewritten unseen.
+function transparencyCard(t) {
+  const witnessText = (t.witnesses || []).map((w) => `${w.url} ${w.key}`).join('\n');
+  const area = h('textarea', { name: 'witnesses', rows: 3, spellcheck: 'false', autocapitalize: 'off', placeholder: 'https://witness.example.com witness.example.com+1a2b3c4d+BA…' }, witnessText);
+  const pub = checkbox('Anyone can read the log without signing in', !!t.public, 'It holds only hashes of ledger entries, never names or contents. Leave it off to let only accounts and API tokens read it.');
+  const copyable = (v) => h('code', { class: 'break' }, v);
+  const status = (t.witnesses || []).map((w) => h('li', null, h('code', null, w.key.split('+')[0]), ': ',
+    w.lastError ? h('span', { class: 'fact-bad' }, w.lastError) : w.cosigned ? `cosigned ${plural(w.size, 'entry').replace('entrys', 'entries')}, ${rel(w.cosigned)}` : 'not asked yet'));
+  const form = h('form', {
+    novalidate: true,
+    onsubmit: busy(async (e) => {
+      e.preventDefault();
+      clearErrors(form);
+      const witnesses = [];
+      for (const line of lines(area.value)) {
+        const [url, key, ...extra] = line.split(/\s+/);
+        if (!url || !key || extra.length || !/^https?:\/\//.test(url)) return fieldError(area, `Write each witness as its address, a space, then its key. “${line}” doesn’t fit.`);
+        witnesses.push({ url, key });
+      }
+      await put('/settings/transparency', { public: pub.cb.checked, witnesses });
+      S.dirty = false;
+      toast('Transparency log settings saved', 'ok');
+      reload();
+    }),
+  },
+  h('p', { class: 'muted' }, 'Every proof and action is an entry in the ledger. The ledger is also a transparency log: a signed checkpoint of all of it that witnesses on other machines cosign, but only if it extends what they saw before. So the history can’t be quietly rewritten, or shown differently to different people.'),
+  h('dl', { class: 'kv' },
+    h('dt', null, 'Log'), h('dd', null, copyable(t.origin), ` · ${plural(t.size, 'entry').replace('entrys', 'entries')}`),
+    h('dt', null, 'Log key'), h('dd', null, copyable(t.logKey))),
+  field('Witnesses', area, 'One per line: its address, a space, then its key. Run one on a machine you don’t otherwise use for this (see below).'),
+  status.length ? h('ul', { class: 'small' }, status) : null,
+  pub.el,
+  details('Run a witness, and check the log',
+    h('p', null, 'On another machine, install BackupProof and run a witness that trusts this log’s key:'),
+    h('pre', { class: 'plan-cli' }, `backupproof witness --name witness.example.com --log '${t.logKey}'`),
+    h('p', null, 'Put it behind HTTPS and add its address and the key it prints above. An auditor checks the log, its witnesses, and that a proof is in it with:'),
+    h('pre', { class: 'plan-cli' }, `backupproof proof verify-log --url ${location.origin}/log --log-key '${t.logKey}' --witness '<witness key>' --bundle proof.bundle.json`)),
+  t.checkpoint ? details('Latest checkpoint', h('pre', { class: 'plan-cli' }, t.checkpoint)) : null,
+  h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Save')));
+  return card('Transparency log', form);
 }
 
 // notifyCard: every alert channel, and the weekly summary. Secrets are never

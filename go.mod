@@ -16,6 +16,7 @@ require (
 	github.com/pkg/sftp v1.13.12
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.59.0
+	golang.org/x/mod v0.43.0
 	golang.org/x/sys v0.50.0
 	lukechampine.com/blake3 v1.5.2
 	modernc.org/sqlite v1.63.0

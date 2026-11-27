@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **The proof ledger is a transparency log** in the C2SP format (tlog-tiles, signed-note checkpoints): `/log/checkpoint` and `/log/tile/...` on the dashboard, for signed-in auditors and API tokens, or anyone if you choose. It publishes only hashes of ledger entries. Existing ledgers are added on first start.
+- **Witnesses.** `backupproof witness` runs a witness on another machine. It cosigns the dashboard's checkpoints (C2SP tlog-witness, timestamped Ed25519 cosignatures), but only checkpoints that extend the last one it saw, checked with a consistency proof. Add witnesses under **Settings → Transparency log**; the dashboard asks each one to cosign every new checkpoint.
+- **`backupproof proof verify-log`** checks the log's signature and every witness's cosignature, that the log still extends a checkpoint you saved before (`--since`), and that a proof bundle's ledger entry is in the log (`--bundle`), from tiles each checked against the signed root. A dashboard that rewrote or forked its history fails all three.
+
 ### Security
 
 - **A damaged or planted key file in storage can no longer crash or exhaust a server that opens it.** The key derivation settings come from the storage's key files; zero rounds made every agent opening that storage crash, and huge memory or round counts could exhaust it. They are now limited (1 to 16 rounds, 8 MiB to 1 GiB, 1 to 16 threads), which every storage BackupProof made fits. Found by the new fuzz tests. Exploiting it needed write access to the storage.
