@@ -28,10 +28,13 @@ type SessionRequest struct {
 	Signature []byte `json:"signature"`
 }
 
-// SessionResponse is the session token and when it stops working.
+// SessionResponse is the session token and when it stops working. ExpiresIn
+// is the same in seconds from now, so an agent whose clock differs from the
+// dashboard's still renews in time (missing from 0.5.0 dashboards).
 type SessionResponse struct {
-	Token   string    `json:"token"`
-	Expires time.Time `json:"expires"`
+	Token     string    `json:"token"`
+	Expires   time.Time `json:"expires"`
+	ExpiresIn int64     `json:"expiresIn,omitempty"`
 }
 
 type EnrollResponse struct {

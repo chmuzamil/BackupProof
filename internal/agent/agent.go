@@ -67,11 +67,21 @@ type client struct {
 	mu         sync.Mutex
 	session    string
 	expires    time.Time
-	noSessions bool // the dashboard is older than 0.5
+	noSessions bool             // the dashboard is older than 0.5
+	now        func() time.Time // the clock; nil is time.Now (tests change it)
 }
 
-// renewBefore is how long before a session ends a new one is started.
-const renewBefore = 10 * time.Minute
+func (c *client) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// renewBefore is how long before a session ends a new one is started: a
+// third of a 15-minute session, so a request never goes out on a session
+// about to end. A session that ends early anyway is renewed on the 401.
+const renewBefore = 5 * time.Minute
 
 // authToken is the token to send: a live session, a new one, or the
 // long-lived token with a dashboard that has no sessions.
@@ -81,10 +91,10 @@ func (c *client) authToken(ctx context.Context) (string, error) {
 	if c.key == nil || c.noSessions || c.token == "" {
 		return c.token, nil
 	}
-	if c.session != "" && time.Until(c.expires) > renewBefore {
+	if c.session != "" && c.expires.Sub(c.clock()) > renewBefore {
 		return c.session, nil
 	}
-	at := time.Now().Unix()
+	at := c.clock().Unix()
 	req := protocol.SessionRequest{Time: at, Signature: ed25519.Sign(c.key.Private, sessionMessage(c.agentID, at))}
 	var resp protocol.SessionResponse
 	code, err := c.raw(ctx, "/api/agent/session", c.token, req, &resp)
@@ -96,6 +106,10 @@ func (c *client) authToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	c.session, c.expires = resp.Token, resp.Expires
+	if resp.ExpiresIn > 0 {
+		// Count from this machine's clock, not the dashboard's.
+		c.expires = c.clock().Add(time.Duration(resp.ExpiresIn) * time.Second)
+	}
 	return c.session, nil
 }
 

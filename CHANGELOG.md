@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **An interrupted storage upgrade is safe to run again.** The upgrade writes the new index first and the format version last, so a crash or timeout leaves the storage on v1 and fully usable. Running it again now first checks index files an interrupted run left behind and deletes any that are cut off or list chunks deleted since, for example by a prune in between. Before, a re-run kept them, and new backups could then skip uploading a chunk the storage no longer had. Running the upgrade on storage that's already v2 does nothing.
 - **Nothing else uses a storage while the dashboard upgrades it.** Jobs that back up to it or copy to it wait in the queue until the upgrade ends, and the upgrade doesn't start while one is running or the dashboard is backing itself up there.
 
+### Changed
+
+- **Agent sessions last 15 minutes instead of an hour,** so a stolen session token is useful for at most 15 minutes. Agents renew a session 5 minutes before it ends, counting from their own clock (the dashboard now also says how long a session lasts), so a clock that differs from the dashboard's by a few minutes doesn't matter; a session that ends early anyway is renewed on the spot. 0.5.0 agents keep working: they renew sooner than they need to.
+
 ### Added
 
 - **An alert when a witness stops cosigning.** A witness that has failed for 15 minutes raises the `witness-failed` alert, sent like any other, and it resolves itself on the next cosignature.

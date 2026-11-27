@@ -17,12 +17,12 @@ import (
 
 // Short-lived agent sessions. An agent from 0.5 on proves it holds its own
 // signing key (the one its proofs are signed with) to get a token that lasts
-// an hour, and uses that. From its first session on, its long-lived token is
+// 15 minutes, and uses that. From its first session on, its long-lived token is
 // accepted only to start a session, so a copy of that token is useless
 // without the key. Agents older than 0.5 keep using their long-lived token.
 
 const (
-	agentSessionTTL  = time.Hour
+	agentSessionTTL  = 15 * time.Minute
 	agentSessionSkew = 5 * time.Minute
 )
 
@@ -70,7 +70,7 @@ func (s *Server) handleAgentSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err)
 		return
 	}
-	writeJSON(w, 200, protocol.SessionResponse{Token: session, Expires: expires})
+	writeJSON(w, 200, protocol.SessionResponse{Token: session, Expires: expires, ExpiresIn: int64(agentSessionTTL / time.Second)})
 }
 
 func bearer(r *http.Request) (string, bool) {
