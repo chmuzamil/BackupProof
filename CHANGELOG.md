@@ -6,12 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-27
+
 ### Added
 
 - **The proof ledger is a transparency log** in the C2SP format (tlog-tiles, signed-note checkpoints): `/log/checkpoint` and `/log/tile/...` on the dashboard, for signed-in auditors and API tokens, or anyone if you choose. It publishes only hashes of ledger entries. Existing ledgers are added on first start.
 - **Witnesses.** `backupproof witness` runs a witness on another machine. It cosigns the dashboard's checkpoints (C2SP tlog-witness, timestamped Ed25519 cosignatures), but only checkpoints that extend the last one it saw, checked with a consistency proof. Add witnesses under **Settings → Transparency log**; the dashboard asks each one to cosign every new checkpoint.
 - **Short-lived agent sessions.** An agent proves it holds its own signing key (the one its proofs are signed with) to get a session that lasts an hour, and renews it before it ends. From an agent's first session, its long-lived token is only accepted to start a session, so a copy of that token is useless without the agent's key. Revoking an agent ends its sessions. Agents older than 0.5 keep using their long-lived token.
 - **`backupproof proof verify-log`** checks the log's signature and every witness's cosignature, that the log still extends a checkpoint you saved before (`--since`), and that a proof bundle's ledger entry is in the log (`--bundle`), from tiles each checked against the signed root. A dashboard that rewrote or forked its history fails all three.
+
+## [0.4.0] - 2026-11-27
 
 ### Security
 
