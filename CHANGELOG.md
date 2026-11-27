@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Free-space check before every restore test.** The test checks the server has room for the restored backup plus 1 GB before it starts, instead of failing partway.
 - **Database test memory setting** under the item's restore test settings, for a database that needs more (or less) than the automatic choice.
+- **Storage reliability tests.** Prune stopped after each of its first deletes, two machines backing up into one storage at once, a backup resumed after a failed upload, and prune during a storage outage: in each, every backup still restores byte for byte and a full check finds nothing missing.
+- **Fuzz tests** for the code that reads chunks, storage settings and keys, backup file paths, proofs and evidence packs, run on every change.
+- **A scale test** (`BP_SCALE=1000000 go test -run TestIndexScale ./internal/repo/`) that measures what a backup does first on large storage: list every chunk. At a million chunks that is 1,000 list requests before each backup.
 - **Storage compatibility tests.** A small storage written by each release's own command-line tool is kept in the repository, and CI checks the current version still opens it, restores both of its backups byte for byte, passes a full check and adds new backups to it.
 
 ## [0.2.23] - 2026-11-24

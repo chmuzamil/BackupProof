@@ -63,3 +63,29 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign
       - name: signature check in install.sh
         run: sh scripts/test-signature.sh
+
+  # Feeds random and damaged input to the code that reads storage, backup
+  # file lists, proofs and evidence packs. The seed inputs also run in every
+  # go test; this explores beyond them for a short while on each change.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: fuzz
+        run: |
+          set -e
+          for t in FuzzOpenBlob:./internal/repo FuzzOpenStorage:./internal/repo \
+                   FuzzSafeRelPath:./internal/snapshot FuzzCleanPath:./internal/snapshot \
+                   FuzzVerifyBundle:./internal/proof FuzzParsePublicKey:./internal/proof \
+                   FuzzVerifyPack:./internal/server; do
+            go test -run '^$' -fuzz "^${t%%:*}\$" -fuzztime 45s "${t#*:}"
+          done
+      - name: keep what failed
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-failures
+          path: "**/testdata/fuzz/**"
