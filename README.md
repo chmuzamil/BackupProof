@@ -29,6 +29,16 @@ One static binary is the dashboard server, the agent for each protected server, 
   <a href="https://github.com/chmuzamil/BackupProof/releases/latest"><b>Download</b></a>
 </p>
 
+## New in 0.5 and 0.6
+
+- **Check a proof in your browser** at [backupproof.dev/verify](https://backupproof.dev/verify/). The same verifier as the CLI, compiled to WebAssembly, runs on your own computer; nothing is uploaded.
+- **Transparency log and witnesses.** The proof ledger is published as a C2SP transparency log. Witnesses on other machines cosign it, so the dashboard can't quietly rewrite its history. You get an alert if a witness stops cosigning.
+- **App tests follow redirects, including to HTTPS,** so sites that force HTTPS can be tested.
+- **WordPress template v3** with options for a moved sign-in page, a REST API that's off, and HTTPS. It's tested against real WordPress in four setups.
+- **Short server sessions.** Servers prove they hold their key to get 15-minute sessions, so a copied token is useless.
+- **Safer storage upgrade.** An interrupted v1 to v2 upgrade can simply be run again.
+- **[Threat model](docs/THREAT-MODEL.md) and [audit scope](docs/AUDIT-SCOPE.md)** for security reviewers.
+
 ## Demo
 
 **Try the dashboard:** [demo.backupproof.dev](https://demo.backupproof.dev), username `demo`, password `backupproof-demo`. It protects a made-up bakery (website, documents and an order database) with real scheduled backups, restore tests and signed proofs. The account is read-only and the demo is rebuilt with fresh made-up data every day.
@@ -190,7 +200,7 @@ S3 with Object Lock: `--repo 's3://bucket/vault?endpoint=https://s3.eu-central-0
 | **Restores** | From the dashboard: pick a signed backup, browse its files, **download a selection as a zip**, or restore on a server: back where it came from (owners and permissions kept), into a new folder, or onto another server. Databases restore into a new database or replace the original. Docker volumes are put back exactly, and mounted folders where they came from. |
 | **Stores** | An encrypted, deduplicating, content-addressed repository on a local disk, any S3-compatible service (with optional **S3 Object Lock**), or SFTP with a pinned host key. A **second copy** of every backup can go to another storage (3-2-1), with its own signed proof. Weekly **health checks** re-read a sample of the stored data and chart each storage's size. |
 | **Proves** | Scheduled **restore tests** restore a backup into an empty folder or a `--network none` database container. Checks per data type:<br>• All data: the restored bytes must reproduce the snapshot's Merkle root.<br>• PostgreSQL: `amcheck` with `heapallindexed`.<br>• MySQL/MariaDB: `CHECK TABLE`.<br>• MongoDB: `validate(full)`.<br>• SQLite: `integrity_check`.<br>• Databases: row counts reconciled against counts captured at backup time.<br>• PostgreSQL dumps found inside file backups are loaded into a test database.<br>• Your own SQL assertions and commands. |
-| **Attests** | Each backup and restore test, pass *or fail*, becomes an [in-toto](https://in-toto.io) statement in a DSSE envelope, signed with the agent's Ed25519 key. It is optionally timestamped by an RFC 3161 TSA and appended to a hash-chained ledger with signed checkpoints. |
+| **Attests** | Each backup and restore test, pass *or fail*, becomes an [in-toto](https://in-toto.io) statement in a DSSE envelope, signed with the agent's Ed25519 key. It is optionally timestamped by an RFC 3161 TSA and appended to a hash-chained ledger with signed checkpoints, published as a **transparency log** that **witnesses** on other machines cosign. |
 | **Watches** | A dead-man's-switch watchdog alerts on what *didn't* happen: overdue backups, stale proofs and silent servers, and again when it's fixed. Alerts go to email, Slack, Discord, Mattermost, **Microsoft Teams, Telegram, ntfy, Gotify, Pushover and PagerDuty** (incidents resolve automatically), plus a **weekly summary email**. The server can ping an external heartbeat URL. |
 | **Controls** | Per-server **upload and download speed limits**, a **time window** for scheduled jobs, and **parallel transfers** that adapt to the link (4–32 at once, within a memory cap). **Two-factor sign-in** (authenticator app, recovery codes), **API tokens** for scripts, and an **Activity** page listing who did what. |
 | **Imports** | Existing backups are fetched, decrypted and converted into restore-tested copies that keep their original dates: **GPG / OpenSSL / age** encrypted files in a bucket or folder (archives can be unpacked), **restic** (reusing `/etc/restic/env`), **Kopia**, **BorgBackup**, and files on **Google Drive, Dropbox, OneDrive** and 70+ services via rclone. |
@@ -341,6 +351,8 @@ Verify offline, without the repository password and without trusting the server:
 backupproof proof verify drill.bundle.json --key bpkey1:server@backup:… --key bpkey1:agent:web-01:… --require-timestamp
 backupproof proof verify-pack evidence.json --key …
 ```
+
+Or check a bundle in the browser at [backupproof.dev/verify](https://backupproof.dev/verify/): the same verifier, compiled to WebAssembly, running on your computer.
 
 ## Repository format (v2)
 
