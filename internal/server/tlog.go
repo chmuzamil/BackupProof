@@ -82,10 +82,10 @@ func (s *Server) handleWitnessHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if len(failing) > 0 {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprintf(w, "failing: %d of %d witnesses haven't cosigned for %s\n", len(failing), len(ws), witnessGrace)
+		_, _ = fmt.Fprintf(w, "failing: %d of %d witnesses haven't cosigned for %s\n", len(failing), len(ws), witnessGrace)
 		return
 	}
-	fmt.Fprintf(w, "ok: %d witnesses\n", len(ws))
+	_, _ = fmt.Fprintf(w, "ok: %d witnesses\n", len(ws))
 }
 
 var tlogMu sync.Mutex // one checkpoint round at a time
