@@ -4,7 +4,9 @@
 //
 //	config                 plaintext: format, version, repo id, chunker params
 //	keys/<id>              password slots wrapping the master keys (argon2id)
-//	data/<id[:2]>/<id>     content blobs, keyed-BLAKE3 named, zstd + XChaCha20-Poly1305
+//	data/<id[:2]>/<id>     v1: one content blob per object, keyed-BLAKE3 named, zstd + XChaCha20-Poly1305
+//	packs/<id[:2]>/<id>    v2: many sealed blobs in one object, then a sealed list of them (pack.go)
+//	index/<id>             v2: encrypted lists of which pack holds each blob, one per backup
 //	snapshots/<id>         encrypted snapshot records
 //	proofs/<hash>.json     signed attestations (DSSE); public, contain no file names
 //
@@ -33,8 +35,16 @@ import (
 )
 
 const (
-	FormatName    = "backupproof-repo"
-	FormatVersion = 1
+	FormatName = "backupproof-repo"
+	// FormatVersion is the newest storage format this version reads and
+	// writes. v1 stores each blob as its own object; v2 packs blobs and keeps
+	// an index, so a backup doesn't have to list every blob (pack.go).
+	FormatVersion = 2
+	// DefaultVersion is the format new storage gets.
+	DefaultVersion = 2
+	// blobVersion prefixes every sealed blob. It is the same in v1 and v2:
+	// a blob inside a pack is sealed exactly as a v1 blob object.
+	blobVersion byte = 1
 )
 
 type Config struct {
@@ -53,14 +63,38 @@ type Repo struct {
 	enc    *zstd.Encoder
 	dec    *zstd.Decoder
 	mu     sync.Mutex
-	index  map[bpcrypto.ID]struct{}
+	index  map[bpcrypto.ID]struct{} // v1: blobs a backup may reuse; v2: blobs claimed by this writer
 	loaded bool
+
+	// v2 (pack.go): where each blob is, kept compact for very large storage,
+	// what a backup may not reuse, and packs written but not yet indexed.
+	locs      map[bpcrypto.ID]blobLoc
+	packIDs   []bpcrypto.ID // blobLoc.pack-1 indexes this
+	packNum   map[bpcrypto.ID]uint32
+	skipPacks map[uint32]bool
+	skipBlobs map[bpcrypto.ID]bool
+	locsOnce  sync.Mutex // serialises loading the index for reads
+	locsRead  bool
+	packMu    sync.Mutex
+	cur       *packBuf
+	done      []PackRecord
+	packSem   chan struct{}
+	cacheDir  string
 }
 
 var ErrNotARepo = errors.New("no BackupProof repository at this location (run init first)")
 
-// Init creates a new repository protected by password.
+// Init creates a new repository protected by password, in the default format.
 func Init(ctx context.Context, be backend.Backend, password []byte, params chunker.Params) (*Repo, error) {
+	return InitVersion(ctx, be, password, params, DefaultVersion)
+}
+
+// InitVersion creates a repository in a chosen format: 1 for storage that
+// agents older than 0.4 must still write to, 2 otherwise.
+func InitVersion(ctx context.Context, be backend.Backend, password []byte, params chunker.Params, version int) (*Repo, error) {
+	if version < 1 || version > FormatVersion {
+		return nil, fmt.Errorf("unknown storage format v%d", version)
+	}
 	if _, err := be.Get(ctx, "config"); err == nil {
 		return nil, errors.New("a repository already exists at this location")
 	}
@@ -71,7 +105,7 @@ func Init(ctx context.Context, be backend.Backend, password []byte, params chunk
 	if _, err := rand.Read(idb); err != nil {
 		return nil, err
 	}
-	cfg := Config{Format: FormatName, Version: FormatVersion, ID: hex.EncodeToString(idb), Created: time.Now().UTC(), Chunker: params}
+	cfg := Config{Format: FormatName, Version: version, ID: hex.EncodeToString(idb), Created: time.Now().UTC(), Chunker: params}
 	mk, err := bpcrypto.NewMasterKeys()
 	if err != nil {
 		return nil, err
@@ -162,7 +196,8 @@ func newRepo(be backend.Backend, cfg Config, mk *bpcrypto.MasterKeys) (*Repo, er
 	if err != nil {
 		return nil, err
 	}
-	return &Repo{be: be, cfg: cfg, keys: mk, gear: chunker.GearTable(mk.Seed), enc: enc, dec: dec, index: map[bpcrypto.ID]struct{}{}}, nil
+	return &Repo{be: be, cfg: cfg, keys: mk, gear: chunker.GearTable(mk.Seed), enc: enc, dec: dec, index: map[bpcrypto.ID]struct{}{},
+		locs: map[bpcrypto.ID]blobLoc{}, packNum: map[bpcrypto.ID]uint32{}, skipPacks: map[uint32]bool{}, skipBlobs: map[bpcrypto.ID]bool{}, packSem: make(chan struct{}, packUploads), cacheDir: defaultCacheDir(cfg.ID)}, nil
 }
 
 func (r *Repo) Config() Config                { return r.cfg }
@@ -195,11 +230,11 @@ func (r *Repo) seal(kind string, id bpcrypto.ID, plain []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte{FormatVersion}, ct...), nil
+	return append([]byte{blobVersion}, ct...), nil
 }
 
 func (r *Repo) open(kind string, id bpcrypto.ID, raw []byte) ([]byte, error) {
-	if len(raw) < 1 || raw[0] != FormatVersion {
+	if len(raw) < 1 || raw[0] != blobVersion {
 		return nil, fmt.Errorf("%s %s: unknown blob version", kind, id.Short())
 	}
 	inner, err := r.keys.Open(raw[1:], []byte(kind+"/"+id.String()))
@@ -220,6 +255,9 @@ func (r *Repo) open(kind string, id bpcrypto.ID, raw []byte) ([]byte, error) {
 
 // LoadIndex lists all data blobs so that dedup checks are in-memory.
 func (r *Repo) LoadIndex(ctx context.Context) error {
+	if r.cfg.Version >= 2 {
+		return r.loadIndexV2(ctx)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.loaded {
@@ -288,8 +326,20 @@ func (r *Repo) SavePruneMarks(ctx context.Context, marks map[string]int64) error
 func (r *Repo) HasBlob(id bpcrypto.ID) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, ok := r.index[id]
-	return ok
+	return r.hasLocked(id)
+}
+
+// hasLocked: the blob is stored (or being stored by this writer) and may be
+// reused. Call with r.mu held.
+func (r *Repo) hasLocked(id bpcrypto.ID) bool {
+	if _, ok := r.index[id]; ok {
+		return true
+	}
+	if r.cfg.Version < 2 || !r.loaded {
+		return false
+	}
+	loc, ok := r.locs[id]
+	return ok && !r.skipPacks[loc.pack] && !r.skipBlobs[id]
 }
 
 // PutBlob stores plain data and returns its ID and the number of bytes
@@ -305,7 +355,7 @@ func (r *Repo) PutBlobID(ctx context.Context, id bpcrypto.ID, plain []byte) (bpc
 	// content upload it once. A failed upload releases the claim and the
 	// error aborts the snapshot, so no snapshot can reference a missing blob.
 	r.mu.Lock()
-	if _, ok := r.index[id]; ok {
+	if r.hasLocked(id) {
 		r.mu.Unlock()
 		return id, 0, nil
 	}
@@ -313,7 +363,11 @@ func (r *Repo) PutBlobID(ctx context.Context, id bpcrypto.ID, plain []byte) (bpc
 	r.mu.Unlock()
 	sealed, err := r.seal("data", id, plain)
 	if err == nil {
-		err = r.put(ctx, DataKey(id), sealed)
+		if r.cfg.Version >= 2 {
+			err = r.addToPack(ctx, id, sealed)
+		} else {
+			err = r.put(ctx, DataKey(id), sealed)
+		}
 	}
 	if err != nil {
 		r.mu.Lock()
@@ -351,6 +405,9 @@ func (r *Repo) GetBlob(ctx context.Context, id bpcrypto.ID) ([]byte, error) {
 // FetchBlob downloads a blob without opening it, so downloading and
 // decrypting can run in separate stages.
 func (r *Repo) FetchBlob(ctx context.Context, id bpcrypto.ID) ([]byte, error) {
+	if r.cfg.Version >= 2 {
+		return r.fetchV2(ctx, id, false)
+	}
 	raw, err := r.get(ctx, DataKey(id))
 	if err != nil {
 		return nil, fmt.Errorf("blob %s: %w", id, err)
@@ -438,6 +495,8 @@ func (r *Repo) PutPublic(ctx context.Context, key string, data []byte) error {
 	return r.be.Put(ctx, key, data)
 }
 
+// Close releases the repository. Blobs written since the last Flush (which
+// snapshot.Save does) are left unindexed, for prune to clear.
 func (r *Repo) Close() error {
 	r.enc.Close()
 	r.dec.Close()

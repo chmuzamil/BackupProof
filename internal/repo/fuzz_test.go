@@ -16,7 +16,9 @@ func fuzzRepo(f *testing.F) (*Repo, backend.Backend) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	r, err := Init(context.Background(), be, []byte("fuzz password"), chunker.Params{Min: 4 << 10, Avg: 16 << 10, Max: 64 << 10})
+	// v1 stores each blob as its own object, which the fuzz targets read
+	// directly; a blob inside a pack is sealed exactly the same way.
+	r, err := InitVersion(context.Background(), be, []byte("fuzz password"), chunker.Params{Min: 4 << 10, Avg: 16 << 10, Max: 64 << 10}, 1)
 	if err != nil {
 		f.Fatal(err)
 	}

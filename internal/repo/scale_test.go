@@ -2,8 +2,10 @@ package repo
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/chmuzamil/backupproof/internal/chunker"
 	"os"
 	"runtime"
 	"strconv"
@@ -69,3 +71,66 @@ func TestIndexScale(t *testing.T) {
 		n, took.Round(time.Millisecond), (after.HeapAlloc-before.HeapAlloc)>>20, store.pages,
 		(time.Duration(store.pages) * 50 * time.Millisecond).Round(time.Second), (time.Duration(store.pages) * 100 * time.Millisecond).Round(time.Second))
 }
+
+// The same measurement for format v2: a backup reads index files instead of
+// listing every blob. BP_SCALE blobs are written into index files of 100,000
+// (as many backups, or one prune, would leave them), then loaded fresh.
+//
+//	BP_SCALE=1000000 go test -run TestIndexScaleV2 -v ./internal/repo/
+func TestIndexScaleV2(t *testing.T) {
+	n, _ := strconv.Atoi(os.Getenv("BP_SCALE"))
+	if n <= 0 {
+		t.Skip("set BP_SCALE to a chunk count to run")
+	}
+	t.Setenv("BP_NO_CACHE", "1")
+	ctx := context.Background()
+	be, err := backend.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Init(ctx, be, []byte("scale test password"), chunkerParamsForScale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id bpcrypto.ID
+	var pack bpcrypto.ID
+	files := 0
+	for start := 0; start < n; start += 100000 {
+		var blobs []PackEntry
+		for i := start; i < min(start+100000, n); i++ {
+			rand.Read(id[:]) // real blob names are random-looking, and don't compress
+			if i%16 == 0 {
+				rand.Read(pack[:])
+			}
+			blobs = append(blobs, PackEntry{ID: id, Off: int64(i%16) << 20, Len: 1 << 20})
+		}
+		if _, err := r.WriteIndex(ctx, IndexFile{Packs: []PackRecord{{ID: pack, Blobs: blobs}}}); err != nil {
+			t.Fatal(err)
+		}
+		files++
+	}
+	var size int64
+	_ = be.List(ctx, "index/", func(o backend.ObjectInfo) error { size += o.Size; return nil })
+
+	fresh, err := Open(ctx, be, []byte("scale test password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	if err := fresh.LoadIndex(ctx); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	if len(fresh.locs) != n {
+		t.Fatalf("indexed %d of %d", len(fresh.locs), n)
+	}
+	t.Logf("%d chunks in %d index files (%d MB stored, cached after the first read): loaded in %s here, %d MB of memory held, 1 list request and %d downloads to a cloud service the first time, 1 list request after that",
+		n, files, size>>20, took.Round(time.Millisecond), (after.HeapAlloc-before.HeapAlloc)>>20, files)
+}
+
+var chunkerParamsForScale = chunker.Params{Min: 512 << 10, Avg: 1 << 20, Max: 8 << 20}

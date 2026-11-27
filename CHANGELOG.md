@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Storage format v2: packs and an index.** New chunks are packed about 16 MB to an object, and each backup writes a small index of where its chunks are. A backup now starts by reading the index instead of listing every chunk: at a million chunks (about 1 TB) that is 1 list request plus 10 downloads the first time, then 1 list request, instead of 1,000 list requests every time, with the same memory (about 80 MB). Each chunk inside a pack is sealed and checked exactly as before, and each pack ends with a sealed list of its contents.
+- **Local index cache.** Index files are cached on the server that reads them (`BP_CACHE_DIR`, or the user's cache folder), so only new ones are downloaded.
+- **Prune for packed storage** deletes packs no backup needs, rewrites packs that are mostly unneeded, clears packs left by backups that didn't finish, and folds the index files into one, with the same mark-first, delete-later delay as before. The new index is written before anything is deleted.
+- **`backupproof upgrade`** and **Storage → Upgrade to v2** move existing storage to v2 without copying anything: its chunks stay where they are and are listed once into the index. The dashboard offers it only when every server using that storage runs 0.4 or later.
+- **New storage is v2** when every server that uses it runs 0.4 or later, and v1 otherwise, so older agents keep working. `backupproof init --format 1` makes v1 storage.
+
+### Changed
+
+- Storage backends read byte ranges (S3 `Range`, SFTP and local `ReadAt`, `rclone cat --offset`), to read one chunk out of a pack.
+
 ## [0.3.0] - 2026-11-27
 
 ### Fixed

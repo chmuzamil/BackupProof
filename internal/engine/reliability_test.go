@@ -257,7 +257,8 @@ func TestBackupResumesAfterFailedUpload(t *testing.T) {
 	fastRetries(t)
 	ctx := context.Background()
 	fs := newFakeStore(t)
-	r, err := repo.Init(ctx, fs, []byte("correct horse battery"), testParams)
+	// v1: the fake store fails blob uploads by object; pack_test.go covers v2.
+	r, err := repo.InitVersion(ctx, fs, []byte("correct horse battery"), testParams, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

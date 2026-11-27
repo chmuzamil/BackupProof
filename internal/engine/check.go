@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/chmuzamil/backupproof/internal/backend"
@@ -38,8 +37,11 @@ type CheckResult struct {
 	CorruptBlobs    int   `json:"corruptBlobs"` // read, but failed the integrity check
 	// UnreadableBlobs couldn't be read at all (storage errors, timeouts),
 	// even when tried again at the end: their data is unknown, not damaged.
-	UnreadableBlobs int      `json:"unreadableBlobs,omitempty"`
-	Errors          []string `json:"errors,omitempty"`
+	UnreadableBlobs int `json:"unreadableBlobs,omitempty"`
+	// Packs and OrphanPacks count v2 packs, and those no index lists yet.
+	Packs       int      `json:"packs,omitempty"`
+	OrphanPacks int      `json:"orphanPacks,omitempty"`
+	Errors      []string `json:"errors,omitempty"`
 }
 
 // UnreadablePause is how long a check waits before reading again the
@@ -157,16 +159,8 @@ func References(ctx context.Context, r *repo.Repo, snaps []snapshot.WithID) (map
 	return refs, errs
 }
 
-func storedBlobs(ctx context.Context, r *repo.Repo) (map[bpcrypto.ID]backend.ObjectInfo, error) {
-	stored := map[bpcrypto.ID]backend.ObjectInfo{}
-	err := r.Backend().List(ctx, "data/", func(o backend.ObjectInfo) error {
-		name := o.Key[strings.LastIndex(o.Key, "/")+1:]
-		if id, err := bpcrypto.ParseID(name); err == nil {
-			stored[id] = o
-		}
-		return nil
-	})
-	return stored, err
+func storedBlobs(ctx context.Context, r *repo.Repo) (map[bpcrypto.ID]repo.StoredBlob, error) {
+	return r.StoredBlobs(ctx)
 }
 
 // Check verifies repository structure and optionally reads back data.
@@ -190,10 +184,39 @@ func Check(ctx context.Context, r *repo.Repo, opts CheckOptions) (CheckResult, e
 	if err != nil {
 		return res, err
 	}
-	res.StoredBlobs = len(stored)
-	for _, o := range stored {
-		res.StoredBytes += o.Size
+	if r.Config().Version >= 2 {
+		// The index says which pack holds each blob; a pack that is gone
+		// takes its blobs with it. Packs no index lists are left over from
+		// backups that didn't finish, for prune to clear.
+		packs, err := r.Packs(ctx)
+		if err != nil {
+			return res, err
+		}
+		indexed := map[bpcrypto.ID]bool{}
+		var zero bpcrypto.ID
+		for id, sb := range stored {
+			if sb.Pack == zero {
+				res.StoredBytes += sb.Size
+				continue
+			}
+			indexed[sb.Pack] = true
+			if _, ok := packs[sb.Pack]; !ok {
+				delete(stored, id)
+			}
+		}
+		for id, o := range packs {
+			res.StoredBytes += o.Size
+			if !indexed[id] {
+				res.OrphanPacks++
+			}
+		}
+		res.Packs = len(packs)
+	} else {
+		for _, o := range stored {
+			res.StoredBytes += o.Size
+		}
 	}
+	res.StoredBlobs = len(stored)
 	for id := range refs {
 		if _, ok := stored[id]; !ok {
 			if _, done := counted[id]; !done {

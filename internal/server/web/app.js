@@ -2387,6 +2387,35 @@ function healthLine(stats) {
     ` · ${plural(last.missing, 'missing piece')}, ${plural(last.corrupt, 'damaged piece')}. Run a restore test and check the storage provider.`);
 }
 
+// formatLine shows a storage's format and, for v1, offers the upgrade to v2
+// (packs and an index), which every server using it must be able to read.
+function formatLine(r) {
+  const box = h('div', { class: 'small format-line' });
+  const show = async () => {
+    const st = await api(`/repositories/${r.id}/format`).catch(() => null);
+    if (!st || !st.version) { fill(box); return; }
+    if (st.version >= 2) { fill(box, h('span', { class: 'muted' }, 'Storage format v2 (packed)')); return; }
+    if (st.upgrade === 'running') { fill(box, h('span', { class: 'muted' }, 'Upgrading to format v2… This page updates when it’s done.')); setTimeout(() => { if (document.body.contains(box)) show(); }, 5000); return; }
+    const parts = [h('span', { class: 'muted' }, 'Storage format v1. ')];
+    if (st.upgrade === 'failed') parts.push(h('span', { class: 'fact-bad' }, `The upgrade failed: ${st.error}. `));
+    if (!isAdmin()) parts.push(h('span', { class: 'muted' }, 'An administrator can upgrade it to v2, which is faster for large storage.'));
+    else if (st.tooOld && st.tooOld.length) parts.push(h('span', { class: 'muted' }, `Upgrading to v2 makes large storage faster. First update ${joinWords(st.tooOld)} to 0.4 or later.`));
+    else parts.push(btn('Upgrade to v2', busy(async () => {
+      const ok = await confirmDlg(h('div', null,
+        h('p', null, `“${r.name}” moves to storage format v2: new backups are packed into larger files and listed in an index, so they start quickly however big the storage grows.`),
+        h('p', null, 'Existing backups stay where they are and nothing is copied. Servers older than 0.4 can’t use the storage afterwards; every server using it now is up to date.')),
+      'Upgrade', { title: 'Upgrade this storage?' });
+      if (!ok) return;
+      await post(`/repositories/${r.id}/upgrade`);
+      toast('Upgrade started. It lists the stored data once, which can take a while for large storage.', 'ok');
+      show();
+    }, 'Starting…'), 'sm'));
+    fill(box, ...parts);
+  };
+  show();
+  return box;
+}
+
 async function pageRepositories() {
   const [repos0, sources, stats] = await Promise.all([api('/repositories'), api('/sources').catch(() => []), api('/repositories/stats').catch(() => ({}))]);
   const repos = repos0 || [];
@@ -2436,6 +2465,7 @@ async function pageRepositories() {
           usedBy(r.id).length
             ? h('p', { class: 'hint' }, 'To remove this storage, first remove the items that use it.')
             : btn('Remove', busy(() => removeRepo(r)), 'sm danger quiet', { 'aria-label': `Remove storage ${r.name}` })) : null,
+        formatLine(r),
         tech(h('dl', { class: 'kv' },
           h('dt', null, 'Address'), h('dd', null, h('code', { class: 'break' }, repoUrl(r.backend))),
           h('dt', null, 'Storage ID'), h('dd', null, h('code', { class: 'break' }, r.repoId || 'created on first backup')),

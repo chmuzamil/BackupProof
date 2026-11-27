@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -183,3 +184,14 @@ func (r *Rclone) Delete(ctx context.Context, key string) error {
 
 func (r *Rclone) Location() string { return "rclone:" + r.remote }
 func (r *Rclone) Close() error     { return nil }
+
+func (r *Rclone) GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error) {
+	b, err := r.run(ctx, nil, "cat", "--offset", strconv.FormatInt(offset, 10), "--count", strconv.FormatInt(length, 10), r.full(key))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) != length {
+		return nil, fmt.Errorf("reading %s: got %d bytes at %d, wanted %d", key, len(b), offset, length)
+	}
+	return b, nil
+}

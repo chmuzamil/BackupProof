@@ -340,13 +340,15 @@ backupproof proof verify drill.bundle.json --key bpkey1:server@backup:… --key 
 backupproof proof verify-pack evidence.json --key …
 ```
 
-## Repository format (v1)
+## Repository format (v2)
 
 | Object | Contents |
 |---|---|
 | `config` | Format, version, repository ID, chunker parameters (plaintext, no secrets). |
 | `keys/<id>` | Password slots. Argon2id (t=3, 64 MiB, p=4) derives a KEK, which wraps random master keys with XChaCha20-Poly1305. Add a break-glass slot with `key-add`. |
-| `data/<id[:2]>/<id>` | Chunks from FastCDC (512 KiB / 1 MiB / 8 MiB, gear table derived from a secret seed). Each chunk is zstd-compressed and sealed with XChaCha20-Poly1305 (random 192-bit nonce, AAD = object name). The ID is BLAKE3 keyed by a MAC key over the plaintext and is re-checked on every read. |
+| `packs/<id[:2]>/<id>` | v2: chunks from FastCDC (512 KiB / 1 MiB / 8 MiB, gear table derived from a secret seed), about 16 MB of them per pack. Each chunk is zstd-compressed and sealed with XChaCha20-Poly1305 (random 192-bit nonce, AAD = `data/<chunk ID>`). The chunk ID is BLAKE3 keyed by a MAC key over the plaintext and is re-checked on every read. A pack ends with a sealed list of its chunks and their offsets, and is named by the keyed hash of all its bytes. |
+| `index/<id>` | v2: encrypted lists of which pack holds each chunk, one per backup; prune folds them into one. Cached locally. |
+| `data/<id[:2]>/<id>` | v1: one sealed chunk per object, as above. Storage upgraded from v1 keeps these where they are, listed in the index. |
 | `snapshots/<id>` | Encrypted snapshot record: source, host, time, Merkle root, stats, database metadata, and the IDs of the chunked manifest. |
 | `proofs/<digest>.json` | Signed attestations (public; they contain hashes and counts, never file names or data). |
 
@@ -409,7 +411,7 @@ What BackupProof doesn't do yet, or does with a limit worth knowing:
 
 - **Database restore tests** load the database into memory when it is up to about 1 GB loaded (4 GB container limit), and onto a throwaway disk volume when larger (2 GB limit). A database needing more memory than that fails its restore test with a message saying the test ran out of room; raise **Database test memory** for that item.
 - **Every restore test downloads the whole newest backup.** From storage that charges for downloads (Amazon S3, Google Cloud Storage) that costs money each time; each item's page shows the estimate. Run tests on a server next to the storage, test less often, or use storage with free downloads.
-- **Very large storage.** Every backup first lists every chunk in storage. At a million chunks (about 1 TB) that is 1,000 list requests and around 80 MB of memory before the backup starts. Pack files, planned below, remove this.
+- **Very large storage** in format v1 lists every chunk before each backup (1,000 list requests at a million chunks). Format v2, the default for new storage from 0.4, reads a small index instead; upgrade older storage under **Storage**.
 - **App tests** check up to 11 addresses of the restored app over HTTP. They can't sign in or click through it.
 - **Recovering a lost dashboard** needs its own backup turned on (**Settings → Dashboard backup**). Without it, backups still restore from the command line, but accounts, items, schedules and the proof history are gone.
 - **Databases** are backed up as logical dumps. Point-in-time recovery and physical backups aren't supported yet.
@@ -426,7 +428,6 @@ What BackupProof doesn't do yet, or does with a limit worth knowing:
 
 ## Roadmap
 
-- **0.4:** storage format v2 with pack files and a local index cache, so large storage doesn't list every chunk before each backup, and `backupproof upgrade` to move existing storage to it
 - **0.5:** short-lived agent identities (mTLS), transparency-log (C2SP tlog-tiles) checkpoints co-signed by outside witnesses, and an easier way for an auditor to check proofs without an account
 - Later, as people ask: PostgreSQL point-in-time recovery and MySQL physical backups, MSSQL and Redis, Object Lock retention extension during maintenance, Kubernetes volumes, Windows VSS snapshots, single sign-on (OIDC/LDAP)
 

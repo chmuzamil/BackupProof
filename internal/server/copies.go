@@ -55,7 +55,8 @@ func (s *Server) copyLease(job *Job, src *Source, lease *protocol.Lease) error {
 		return err
 	}
 	lease.SnapshotID, lease.ExpectedRoot = p.SnapshotID, root
-	lease.Copy = &protocol.CopyTarget{Repository: repo.Backend, RepoID: repo.ID, Password: sec.Password, Creds: sec.Credentials}
+	lease.Copy = &protocol.CopyTarget{Repository: repo.Backend, RepoID: repo.ID, Password: sec.Password, Creds: sec.Credentials,
+		StorageFormat: s.newStorageFormat(repo.ID)}
 	return nil
 }
 

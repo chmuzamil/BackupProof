@@ -9,8 +9,12 @@ reading the old one, and moving to the new one is a separate step you run.
 
 ## Storage
 
-The storage format is versioned (v1 since 0.2.0; see the README). Storage
-written by any release from 0.2.0 on must, with the current version:
+The storage format is versioned: v1 from 0.2.0, v2 (packs and an index) from
+0.4.0; see the README. Every version reads both, and `backupproof upgrade`
+moves v1 storage to v2 in place. Versions before 0.4 can't read v2, so the
+dashboard creates v2 storage, and offers the upgrade, only when every server
+using it runs 0.4 or later. Storage written by any release from 0.2.0 on must,
+with the current version:
 
 - open with its password;
 - restore every backup in it byte for byte, with the restored files matching

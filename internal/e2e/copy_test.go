@@ -138,14 +138,19 @@ func TestSecondCopy(t *testing.T) {
 	}
 
 	// Damage in the second storage fails only the copy's test.
-	err = filepath.WalkDir(filepath.Join(dir, "offsite", "data"), func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
+	for _, sub := range []string{"data", "packs"} { // v1 blob objects, v2 packs
+		err = filepath.WalkDir(filepath.Join(dir, "offsite", sub), func(path string, d os.DirEntry, err error) error {
+			if os.IsNotExist(err) {
+				return filepath.SkipDir
+			}
+			if err != nil || d.IsDir() {
+				return err
+			}
+			return os.WriteFile(path, []byte("damaged"), 0o644)
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return os.WriteFile(path, []byte("damaged"), 0o644)
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	runCopyTest()
 	a.do("GET", fmt.Sprintf("/api/sources/%d", src.ID), nil, &after)

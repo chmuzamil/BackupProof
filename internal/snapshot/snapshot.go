@@ -168,7 +168,12 @@ func ReadManifest(ctx context.Context, r *repo.Repo, s *Snapshot) ([]*Entry, err
 	return entries, nil
 }
 
+// Save stores a snapshot record. It first makes sure every blob written for it
+// is stored and indexed (v2), so a saved snapshot never points at nothing.
 func Save(ctx context.Context, r *repo.Repo, s *Snapshot) (bpcrypto.ID, error) {
+	if err := r.Flush(ctx); err != nil {
+		return bpcrypto.ID{}, err
+	}
 	return r.PutJSON(ctx, "snapshots", s)
 }
 

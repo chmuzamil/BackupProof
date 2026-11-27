@@ -60,6 +60,10 @@ type Lease struct {
 	// chunk data held in memory. Agents older than 0.2.4 ignore them.
 	Concurrency int   `json:"concurrency,omitempty"`
 	MaxInflight int64 `json:"maxInflight,omitempty"`
+	// StorageFormat is the format to create the storage in if it doesn't
+	// exist yet: 2 only when every server using it reads v2. Missing (an
+	// older dashboard) means 1.
+	StorageFormat int `json:"storageFormat,omitempty"`
 	// Restore is set for "restore" and "restore-db" jobs.
 	Restore *Restore `json:"restore,omitempty"`
 	// Copy is the second storage for "copy" jobs (SnapshotID is the backup to copy).
@@ -71,6 +75,8 @@ type CopyTarget struct {
 	RepoID     int64               `json:"repositoryId"`
 	Password   string              `json:"password"`
 	Creds      backend.Credentials `json:"credentials"`
+	// StorageFormat is as Lease.StorageFormat, for the second storage.
+	StorageFormat int `json:"storageFormat,omitempty"`
 }
 
 // Restore says what to restore and where. The backup is SnapshotID, which

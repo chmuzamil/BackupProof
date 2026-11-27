@@ -183,6 +183,16 @@ func New(dir string) (*Agent, error) {
 	return &Agent{dir: dir, st: st, key: key, c: &client{base: st.Server, token: st.Token, http: &http.Client{Timeout: 60 * time.Second}}}, nil
 }
 
+// storageFormat is the format to create storage in: what the dashboard asked
+// for, or v1 when it didn't say (a dashboard older than 0.4, whose other
+// servers may not read v2).
+func storageFormat(asked int) int {
+	if asked >= 1 && asked <= repo.FormatVersion {
+		return asked
+	}
+	return 1
+}
+
 // dockerAvailable is replaced by tests that don't need Docker's answer.
 var dockerAvailable = drill.DockerAvailable
 
@@ -365,7 +375,7 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 	r, err := repo.Open(ctx, be, []byte(lease.Password))
 	if errors.Is(err, repo.ErrNotARepo) && lease.Kind == "backup" {
 		jl.Logf("initializing new repository at %s", be.Location())
-		r, err = repo.Init(ctx, be, []byte(lease.Password), chunker.DefaultParams)
+		r, err = repo.InitVersion(ctx, be, []byte(lease.Password), chunker.DefaultParams, storageFormat(lease.StorageFormat))
 	}
 	if err != nil {
 		be.Close()
