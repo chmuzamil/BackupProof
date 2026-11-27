@@ -32,6 +32,11 @@ func TestRunStopsCleanly(t *testing.T) {
 	defer srv.Close()
 	defer close(release) // runs first, so Close isn't left waiting on the poll
 
+	// Asking Docker can take up to 10 seconds on a CI runner; it isn't what's tested.
+	oldDocker := dockerAvailable
+	dockerAvailable = func(context.Context) bool { return false }
+	t.Cleanup(func() { dockerAvailable = oldDocker })
+
 	a := &Agent{dir: t.TempDir(), st: &State{Server: srv.URL, Name: "test"}, c: &client{base: srv.URL, http: srv.Client()}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

@@ -183,12 +183,15 @@ func New(dir string) (*Agent, error) {
 	return &Agent{dir: dir, st: st, key: key, c: &client{base: st.Server, token: st.Token, http: &http.Client{Timeout: 60 * time.Second}}}, nil
 }
 
+// dockerAvailable is replaced by tests that don't need Docker's answer.
+var dockerAvailable = drill.DockerAvailable
+
 // Run polls for work until ctx is cancelled, then returns nil: being asked to
 // stop (systemctl stop, Ctrl-C) is a clean exit, not a failure. Network errors
 // back off and retry; the agent never exits because the server is temporarily away.
 func (a *Agent) Run(ctx context.Context) error {
 	fmt.Printf("agent %s (#%d) polling %s\n", a.st.Name, a.st.AgentID, a.st.Server)
-	a.docker = drill.DockerAvailable(ctx)
+	a.docker = dockerAvailable(ctx)
 	a.clearLeftovers()
 	go a.reportInventory(ctx)
 	backoff := time.Second

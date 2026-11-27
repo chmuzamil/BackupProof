@@ -9,8 +9,9 @@ import (
 
 func TestTestsPerMonth(t *testing.T) {
 	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	for cron, want := range map[string]int{"0 4 * * 0": 4, "0 3 * * *": 30, "manual": 0, "0 2 1 * *": 1} {
-		if got := testsPerMonth(cron, now); got != want && !(cron == "0 4 * * 0" && got == 5) {
+	// 1 November 2026 is a Sunday: the 30 days hold 5 Sunday mornings.
+	for cron, want := range map[string]int{"0 4 * * 0": 5, "0 3 * * *": 30, "manual": 0, "0 2 1 * *": 1} {
+		if got := testsPerMonth(cron, now); got != want {
 			t.Errorf("%q: %d tests, want %d", cron, got, want)
 		}
 	}
