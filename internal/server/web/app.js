@@ -3928,8 +3928,8 @@ async function pageSettings() {
   const parts = [pageHead('Settings')];
   if (isAdmin()) {
     const [notify, tsa, users, st] = await Promise.all([api('/settings/notify'), api('/settings/tsa'), api('/users'), api('/status', { noAuthRedirect: true })]);
-    const tokens = await api('/tokens').catch(() => []);
-    parts.push(serverCard(st || {}), notifyCard(notify || {}), usersCard(users || []), tokensCard(tokens || []), tsaCard(tsa || { urls: [] }));
+    const [tokens, dash, repos] = await Promise.all([api('/tokens').catch(() => []), api('/settings/dashboard-backup').catch(() => null), api('/repositories').catch(() => [])]);
+    parts.push(serverCard(st || {}), dashboardBackupCard(dash || {}, repos || []), notifyCard(notify || {}), usersCard(users || []), tokensCard(tokens || []), tsaCard(tsa || { urls: [] }));
   }
   parts.push(twoFactorCard(), passwordCard());
   return settingsGuard(h('div', null, parts));
@@ -3954,6 +3954,40 @@ function serverCard(st) {
   field('Address other servers use to reach this dashboard', u, 'For example https://backup.example.com or http://192.168.1.20:8420. Used in the “Connect a server” commands.'),
   h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'btn primary' }, 'Save address')));
   return card('Dashboard address', form);
+}
+
+// dashboardBackupCard: the dashboard backs up its own accounts, items,
+// schedules, proof history and keys, so a lost dashboard server can be rebuilt.
+function dashboardBackupCard(st, repos) {
+  const offsite = repos.filter((r) => r.backend && r.backend.type !== 'local');
+  const choice = select([['0', 'Off'], ...offsite.map((r) => [String(r.id), r.name])], String(st.repoId || 0), { name: 'dashboard-backup-storage' });
+  const state = st.repoId
+    ? (st.lastError ? h('div', { class: 'banner bad' }, 'The last try failed: ' + st.lastError)
+      : st.last ? h('p', null, h('span', { class: 'pill ok' }, 'On'), ' Last backed up ' + rel(st.last) + '.')
+        : h('p', null, h('span', { class: 'pill' }, 'On'), ' The first backup runs within a minute.'))
+    : h('div', { class: 'banner warn' }, 'Off. If this server is lost, accounts, items, schedules and the proof history are lost with it. Your backups themselves stay safe in their storage and can still be restored from the command line.');
+  const form = h('form', {
+    novalidate: true,
+    onsubmit: busy(async (e) => {
+      e.preventDefault();
+      await put('/settings/dashboard-backup', { repoId: Number(choice.value) });
+      S.dirty = false;
+      toast(Number(choice.value) ? 'Dashboard backup turned on' : 'Dashboard backup turned off', 'ok');
+      reload();
+    }),
+  },
+  h('p', { class: 'muted' }, 'Once a day, the dashboard backs up its own data — accounts, items, schedules, the proof history and its keys — to a storage you choose, with a signed proof like any other backup. It keeps the newest 14.'),
+  state,
+  offsite.length ? field('Storage for the dashboard’s backup', choice, 'Choose storage that isn’t on this server. Its recovery kit can then rebuild the whole dashboard, including the passwords it holds for your other storage, so keep that kit safe.')
+    : h('p', { class: 'hint' }, 'Add cloud storage or another server under Storage first: a folder on this server would be lost with it.'),
+  details('How to rebuild a lost dashboard',
+    h('p', null, 'On the new server, install BackupProof, then with the storage’s recovery kit:'),
+    h('pre', { class: 'plan-cli' }, 'export BP_PASSWORD=<password from the recovery kit>\n# and the storage’s access keys, as in the recovery kit\nbackupproof server restore-dashboard --repo <storage address> --data /var/lib/backupproof'),
+    h('p', null, 'Then start the dashboard and point its address at the new server. Connected servers reconnect by themselves.')),
+  h('div', { class: 'form-actions' },
+    st.repoId ? btn('Back up now', busy(async () => { await post('/settings/dashboard-backup/run'); toast('Dashboard backup started. It takes a minute.', 'ok'); }, 'Starting…'), '', { disabled: !!st.running }) : null,
+    offsite.length ? h('button', { type: 'submit', class: 'btn primary' }, 'Save') : null));
+  return card('Dashboard backup', form);
 }
 
 // notifyCard: every alert channel, and the weekly summary. Secrets are never

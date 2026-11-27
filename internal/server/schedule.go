@@ -119,6 +119,7 @@ func (s *Server) tick(now time.Time) {
 	s.watchdog(now, sources)
 	s.scheduleChecks(now, sources)
 	s.scheduleCopyTests(now, sources)
+	s.scheduleDashboardBackup(now)
 	s.maybeSendWeeklyReport(now)
 	s.heartbeat()
 }

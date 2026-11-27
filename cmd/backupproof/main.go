@@ -63,6 +63,10 @@ Locked out of the dashboard (run on the server, with access to its data folder):
   backupproof admin reset-2fa      [--data DIR] USERNAME   turn off two-factor sign-in
   (DIR defaults to BP_DATA, or /var/lib/backupproof when that exists)
 
+Rebuild a lost dashboard from the backup it makes of itself (Settings → Dashboard backup):
+  backupproof server restore-dashboard --repo REPO --data DIR [--list] [BACKUP]
+                       into an empty DIR; password from BP_PASSWORD (the storage's recovery kit)
+
 Proofs:
   backupproof proof list   --repo REPO
   backupproof proof export --repo REPO DIGEST_PREFIX [-o bundle.json]
@@ -274,6 +278,9 @@ func loadSpec(path, name string, paths []string) (source.Spec, error) {
 // --- server & agent --------------------------------------------------------------
 
 func cmdServer(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "restore-dashboard" {
+		return cmdRestoreDashboard(ctx, args[1:])
+	}
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	data := fs.String("data", envOr("BP_DATA", "./backupproof-data"), "data directory")
 	listen := fs.String("listen", envOr("BP_LISTEN", ":8420"), "listen address")
@@ -295,6 +302,52 @@ func cmdServer(ctx context.Context, args []string) error {
 		return fmt.Errorf("closing server: %w", cerr)
 	}
 	return runErr
+}
+
+// cmdRestoreDashboard rebuilds a lost dashboard from the backup it made of
+// itself: backupproof server restore-dashboard --repo STORAGE --data DIR [BACKUP]
+func cmdRestoreDashboard(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("server restore-dashboard", flag.ExitOnError)
+	data := fs.String("data", envOr("BP_DATA", "/var/lib/backupproof"), "empty folder for the dashboard's data")
+	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "storage holding the dashboard's backup")
+	list := fs.Bool("list", false, "list the dashboard backups in the storage and stop")
+	if err := fs.Parse(reorder(args)); err != nil {
+		return err
+	}
+	if *repoURL == "" {
+		return errors.New("usage: backupproof server restore-dashboard --repo STORAGE --data DIR [BACKUP-ID]  (password from BP_PASSWORD, the storage's recovery kit)")
+	}
+	r, _, err := openRepo(ctx, *repoURL)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	if *list {
+		backups, err := server.DashboardBackups(ctx, r)
+		if err != nil {
+			return err
+		}
+		for _, b := range backups {
+			fmt.Printf("%s  %s  %s\n", b.ID.Short(), b.Time.Local().Format("2006-01-02 15:04"), b.Host)
+		}
+		if len(backups) == 0 {
+			fmt.Println("No dashboard backups in this storage.")
+		}
+		return nil
+	}
+	res, err := server.RestoreDashboard(ctx, r, *data, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Restored the dashboard from backup %s (made %s by %s) into %s.\n",
+		res.SnapshotID[:12], res.Info.Time.Local().Format("2006-01-02 15:04"), res.Info.Version, *data)
+	if res.SecretFromEnv && os.Getenv("BP_SECRET_KEY") == "" {
+		fmt.Println("The old server took its secret key from BP_SECRET_KEY, so it isn't in the backup. Set BP_SECRET_KEY to the same value before starting the dashboard.")
+		return nil
+	}
+	fmt.Printf("%d accounts, %d items, %d proof ledger entries; the ledger's hash chain checks out.\n", res.Users, res.Items, res.LedgerEntries)
+	fmt.Println("Next: start the dashboard with this --data folder, and point its address (DNS) at this server. Connected servers reconnect by themselves once the address reaches it.")
+	return nil
 }
 
 func envOr(k, def string) string {

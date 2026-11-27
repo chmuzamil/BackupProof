@@ -152,6 +152,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings/tsa", s.auth("auditor", s.handleGetTSA))
 	mux.HandleFunc("PUT /api/settings/tsa", s.auth("admin", s.handlePutTSA))
 	mux.HandleFunc("PUT /api/settings/server", s.auth("admin", s.handlePutServerSettings))
+	mux.HandleFunc("GET /api/settings/dashboard-backup", s.auth("admin", s.handleGetDashboardBackup))
+	mux.HandleFunc("PUT /api/settings/dashboard-backup", s.auth("admin", s.handleSetDashboardBackup))
+	mux.HandleFunc("POST /api/settings/dashboard-backup/run", s.auth("admin", s.handleRunDashboardBackup))
 
 	mux.HandleFunc("GET /api/users", s.auth("admin", s.handleListUsers))
 	mux.HandleFunc("POST /api/users", s.auth("admin", s.handleCreateUser))
