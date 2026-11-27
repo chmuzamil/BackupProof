@@ -3,7 +3,8 @@ name: compat-fixtures
 # Makes proofs with each release's own code, on a runner renamed
 # compat-fixtures so no real machine name ends up in them. Run it by hand after
 # a release, then commit the artifacts under internal/proof/testdata/compat/
-# (command-line tool) and internal/server/testdata/compat/ (dashboard).
+# (command-line tool), internal/server/testdata/compat/ (dashboard) and
+# internal/repo/testdata/compat/ (the storage the command-line tool wrote).
 # See docs/COMPATIBILITY.md.
 on:
   workflow_dispatch:
@@ -30,11 +31,15 @@ jobs:
       - name: make fixtures
         env:
           TAGS: ${{ inputs.tags }}
-        run: sh scripts/compat-fixtures.sh "$TAGS" compat
+        run: sh scripts/compat-fixtures.sh "$TAGS" compat compat-repos
       - uses: actions/upload-artifact@v7
         with:
           name: compat-fixtures
           path: compat
+      - uses: actions/upload-artifact@v7
+        with:
+          name: compat-repos
+          path: compat-repos
 
   dashboard:
     runs-on: ubuntu-latest

@@ -89,6 +89,22 @@ func Run(ctx context.Context, rp *repo.Repo, s snapshot.WithID, spec source.Spec
 		defer RemoveLeftover(dir)
 	}
 
+	// A restore that can't fit would fail partway and look like a bad backup,
+	// so check the space first and say plainly when it's the server.
+	need := uint64(max(s.Stats.Bytes, 0)) + drillDiskReserve
+	if free, ok := drillFreeBytes(dir); ok {
+		if !r.check("disk-space", func() (string, error) {
+			if free < need {
+				return "", fmt.Errorf("the restore needs about %s free on this server and %s is free: a limit of this server, %s. Free some space or run restore tests on another server", humanBytes(need), humanBytes(free), NotTheBackup)
+			}
+			return fmt.Sprintf("%s free, about %s needed", humanBytes(free), humanBytes(need)), nil
+		}) {
+			res.Duration = time.Since(began)
+			res.FinishedAt = res.StartedAt.Add(res.Duration)
+			return res, nil
+		}
+	}
+
 	restored := r.check("restore-from-storage", func() (string, error) {
 		rr, err := engine.Restore(ctx, rp, s.Snapshot, dir, engine.RestoreOptions{Owners: spec.Drill.AppTest != nil, Log: opts.Log})
 		res.RestoredBytes = rr.Bytes
@@ -289,4 +305,45 @@ func findStream(dir, prefix string) (string, error) {
 		return "", fmt.Errorf("no %s dump in snapshot", prefix)
 	}
 	return found, nil
+}
+
+// NotTheBackup ends the detail of a check that failed because the server
+// running the restore test ran out of memory or disk. The dashboard looks for
+// it to tell the owner nothing was found wrong with the backup.
+const NotTheBackup = "not a fault in the backup"
+
+// LimitOnlyFailure reports a restore test whose every failed check failed for
+// lack of memory or disk on the server running it.
+func LimitOnlyFailure(checks []proof.Check) bool {
+	failed := false
+	for _, c := range checks {
+		if c.Passed {
+			continue
+		}
+		if !strings.Contains(c.Detail, NotTheBackup) {
+			return false
+		}
+		failed = true
+	}
+	return failed
+}
+
+// drillDiskReserve is the free space a restore test leaves on top of the
+// restored data, for the database's own files and the server itself.
+const drillDiskReserve = uint64(1 << 30)
+
+// drillFreeBytes is replaced by the tests.
+var drillFreeBytes = freeBytes
+
+func humanBytes(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := uint64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }

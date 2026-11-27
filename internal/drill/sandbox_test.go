@@ -121,16 +121,20 @@ func TestSandboxRunsDatabaseImages(t *testing.T) {
 		ready []string
 		write []string
 	}{
-		{"postgres", SandboxOptions{Image: "postgres:17", DataTmpfs: "/var/lib/postgresql", Env: map[string]string{"POSTGRES_HOST_AUTH_METHOD": "trust"}},
+		{"postgres", SandboxOptions{Image: "postgres:17", DataDir: pgData, Env: map[string]string{"POSTGRES_HOST_AUTH_METHOD": "trust", "PGDATA": pgData}},
 			[]string{"psql", "-h", "127.0.0.1", "-U", "postgres", "-Atc", "select 1"},
 			[]string{"psql", "-h", "127.0.0.1", "-U", "postgres", "-At", "-c", "create table t(a int)", "-c", "insert into t values (1)", "-c", "select count(*) from t"}},
-		{"mariadb", SandboxOptions{Image: "mariadb:11", DataTmpfs: "/var/lib/mysql", Env: map[string]string{"MARIADB_ALLOW_EMPTY_ROOT_PASSWORD": "1"}},
+		// A large database's data goes on a disk volume instead of tmpfs.
+		{"postgres-on-disk", SandboxOptions{Image: "postgres:17", DataDir: pgData, DataBytes: 1 << 30, Env: map[string]string{"POSTGRES_HOST_AUTH_METHOD": "trust", "PGDATA": pgData}},
+			[]string{"psql", "-h", "127.0.0.1", "-U", "postgres", "-Atc", "select 1"},
+			[]string{"psql", "-h", "127.0.0.1", "-U", "postgres", "-At", "-c", "create table t(a int)", "-c", "insert into t values (1)", "-c", "select count(*) from t"}},
+		{"mariadb", SandboxOptions{Image: "mariadb:11", DataDir: "/var/lib/mysql", Env: map[string]string{"MARIADB_ALLOW_EMPTY_ROOT_PASSWORD": "1"}},
 			[]string{"mariadb", "-h127.0.0.1", "-uroot", "-e", "SELECT 1"},
 			[]string{"mariadb", "-h127.0.0.1", "-uroot", "-N", "-B", "-e", sql}},
-		{"mysql", SandboxOptions{Image: "mysql:8.4", DataTmpfs: "/var/lib/mysql", Env: map[string]string{"MYSQL_ALLOW_EMPTY_PASSWORD": "yes"}},
+		{"mysql", SandboxOptions{Image: "mysql:8.4", DataDir: "/var/lib/mysql", Env: map[string]string{"MYSQL_ALLOW_EMPTY_PASSWORD": "yes"}},
 			[]string{"mysql", "-h127.0.0.1", "-uroot", "-e", "SELECT 1"},
 			[]string{"mysql", "-h127.0.0.1", "-uroot", "-N", "-B", "-e", sql}},
-		{"mongo", SandboxOptions{Image: "mongo:7", DataTmpfs: "/data/db"},
+		{"mongo", SandboxOptions{Image: "mongo:7", DataDir: "/data/db"},
 			[]string{"mongosh", "--quiet", "--eval", "db.runCommand({ping:1}).ok"},
 			[]string{"mongosh", "--quiet", "--eval", "db.t.insertOne({a:1}); db.t.countDocuments()"}},
 	} {
@@ -156,5 +160,35 @@ func TestSandboxRunsDatabaseImages(t *testing.T) {
 				t.Errorf("capabilities not dropped: %q %v", caps, err)
 			}
 		})
+	}
+}
+
+// A database that outgrows the container's memory must fail with a message
+// saying the restore test ran out of room, not look like a bad backup.
+func TestSandboxReportsOutOfMemory(t *testing.T) {
+	ctx := context.Background()
+	if os.Getenv("CI") == "" || runtime.GOOS != "linux" || !DockerAvailable(ctx) {
+		t.Skip("runs in CI on Linux with Docker")
+	}
+	sb, err := StartSandbox(ctx, SandboxOptions{Image: "postgres:17", DataDir: pgData, Memory: "256m",
+		Env: map[string]string{"POSTGRES_HOST_AUTH_METHOD": "trust", "PGDATA": pgData}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Remove()
+	if err := sb.WaitReady(ctx, 3*time.Minute, "psql", "-h", "127.0.0.1", "-U", "postgres", "-Atc", "select 1"); err != nil {
+		t.Fatal(err)
+	}
+	// About 600 MB of rows into a tmpfs that counts against a 256 MB limit.
+	// Storage "plain" stops PostgreSQL compressing the padding away.
+	_, err = sb.Exec(ctx, "psql", "-h", "127.0.0.1", "-U", "postgres", "-v", "ON_ERROR_STOP=1",
+		"-c", "create table big (g int, pad text)", "-c", "alter table big alter pad set storage plain",
+		"-c", "insert into big select g, repeat('x', 500) from generate_series(1, 1200000) g")
+	err = sb.Explain(ctx, err)
+	if err == nil {
+		t.Fatal("600 MB loaded into a 256 MB container")
+	}
+	if !strings.Contains(err.Error(), "not a fault in the backup") {
+		t.Errorf("the failure doesn't say the test ran out of room: %v", err)
 	}
 }

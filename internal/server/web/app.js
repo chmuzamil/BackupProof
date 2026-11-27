@@ -359,6 +359,7 @@ function retentionWords(r) {
 }
 
 const CHECK_WORDS = [
+  [/^disk-space$/, 'Enough free disk space for the test'],
   [/^restore-from-storage$/, 'Downloaded and decrypted every file'],
   [/^content-root$/, 'Every file matches the original exactly'],
   [/^(sqlite-integrity-check|amcheck-btree-heapallindexed|check-table|validate-collections)$/, 'Database structure is healthy'],
@@ -3633,6 +3634,7 @@ async function pageSourceForm(id) {
     expectPaths: h('textarea', { name: 'expect-paths', rows: 2, spellcheck: 'false', autocapitalize: 'off' }, (dr.expectPaths || []).join('\n')),
     minFiles: input({ name: 'min-files', type: 'number', inputmode: 'numeric', min: 0, value: dr.minFiles || '' }),
     image: input({ name: 'image', code: true, value: dr.image || '' }),
+    memory: input({ name: 'test-memory', code: true, value: dr.memory || '', placeholder: 'automatic', pattern: '[1-9][0-9]*[mg]', autocapitalize: 'off', spellcheck: 'false' }),
     drillCommand: input({ name: 'drill-command', code: true, value: dr.command || '' }),
     tolerance: input({ name: 'tolerance', type: 'number', inputmode: 'decimal', min: 0, max: 1, step: '0.01', value: dr.rowCountTolerance || '', placeholder: '0.2…' }),
     testDumps: checkbox('Test database dumps found in the backup (needs Docker)', !dr.skipDumps, 'PostgreSQL dumps inside the backed-up files are loaded into a test database and checked.'),
@@ -3711,6 +3713,7 @@ async function pageSourceForm(id) {
         expectPaths: lines(f.expectPaths.value),
         minFiles: num(f.minFiles.value),
         image: f.image.value.trim(),
+        memory: f.memory.value.trim().toLowerCase(),
         command: f.drillCommand.value.trim(),
         rowCountTolerance: num(f.tolerance.value),
         skipDumps: !f.testDumps.cb.checked,
@@ -3772,6 +3775,7 @@ async function pageSourceForm(id) {
     h('div', { class: 'row' }, field('Minimum number of files', f.minFiles, 'Fail if fewer files come back.'), field('Allowed row difference', f.tolerance, 'Between 0 and 1 (default 0.2 = 20%).')),
     field('Files that must be present', f.expectPaths, 'One per line.'),
     h('div', { class: 'row' }, field('Test environment image', f.image), field('Your own check command', f.drillCommand)),
+    field('Database test memory', f.memory, 'For database restore tests. Empty is automatic: databases up to about 1 GB are loaded in memory, larger ones on disk. To set it yourself, write a size such as 8g or 512m.'),
     f.testDumps.el,
     assertFs,
     isAdmin() ? appTest.el : null),

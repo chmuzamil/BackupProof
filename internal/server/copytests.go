@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/chmuzamil/backupproof/internal/drill"
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/protocol"
 )
@@ -163,6 +164,8 @@ func (s *Server) copyDrillOutcome(src *Source, passed bool, checks []proof.Check
 		s.alert("copy-drill-failed", &id, nil, fmt.Sprintf("%s: the restore test of the second copy couldn't read part of it from storage (the storage service kept returning errors). Nothing was found damaged; it runs again within the hour.", src.Name))
 		again := time.Now().Add(-copyTestEvery + time.Hour).UTC().Format(time.RFC3339Nano)
 		_ = s.store.SetSetting(copyTestKey(src.ID), again)
+	case drill.LimitOnlyFailure(checks):
+		s.alert("copy-drill-failed", &id, nil, fmt.Sprintf("%s: the restore test of the second copy couldn't finish because the server running it ran out of memory or disk space. Nothing was found wrong with the copy, but it isn't proven until a test passes.", src.Name))
 	default:
 		s.alert("copy-drill-failed", &id, nil, fmt.Sprintf("%s: the restore test of the second copy FAILED. That copy may not be usable, so don't rely on it. Your main backups aren't affected by this result.", src.Name))
 	}

@@ -20,14 +20,20 @@ type Sandbox struct {
 	// Digest is the resolved image ID, recorded in the attestation so the
 	// exact restore environment is reproducible.
 	Digest string
+	// Memory is the container's memory limit and DataInRAM where the database
+	// keeps its files, so a failure for lack of room can say which ran out.
+	Memory    string
+	DataInRAM bool
+	hasData   bool
 }
 
 type SandboxOptions struct {
 	Image      string
 	Env        map[string]string
 	MountDir   string // host dir mounted read-only at /restore
-	DataTmpfs  string // tmpfs path for the database data dir
-	Memory     string // e.g. "2g"
+	DataDir    string // the database's data folder inside the container
+	DataBytes  int64  // size of the dump(s) to load; places DataDir in memory or on disk
+	Memory     string // e.g. "2g"; empty sizes it from DataBytes
 	CPUs       string // e.g. "2"
 	ExtraArgs  []string
 	Entrypoint []string // optional command args after the image
@@ -95,6 +101,37 @@ func randomHex() string {
 	return hex.EncodeToString(rb)
 }
 
+// pgData is where PostgreSQL restore tests keep the database. The images
+// declare their own disk volume (here up to 17, the parent folder from 18), so
+// the data folder itself is mounted and PGDATA set, or a volume would sit on
+// top of the memory folder and the data would go to disk regardless.
+const pgData = "/var/lib/postgresql/data"
+
+const (
+	// ramDataLimit is the largest loaded database kept in memory (tmpfs), which
+	// is fast. A larger one goes on a throwaway Docker volume on disk, because
+	// tmpfs counts against the container's memory limit.
+	ramDataLimit = 1 << 30
+	// dumpGrowth estimates a loaded database from its dump: indexes and
+	// uncompressed rows make it several times larger.
+	dumpGrowth = 4
+)
+
+// dataPlacement decides where the database keeps its files and the memory
+// limit. memory, when set, is the item's own limit and always wins.
+func dataPlacement(dumpBytes int64, memory string) (inRAM bool, mem string) {
+	inRAM = dumpBytes*dumpGrowth <= ramDataLimit
+	switch {
+	case memory != "":
+		mem = memory
+	case inRAM:
+		mem = "4g" // 2 GB for the database server, up to 2 GB of data in tmpfs
+	default:
+		mem = "2g"
+	}
+	return inRAM, mem
+}
+
 func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
 	name := o.Name
 	if name == "" {
@@ -104,9 +141,14 @@ func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
 	if network == "" {
 		network = "none"
 	}
-	if o.Memory == "" {
-		o.Memory = "2g"
+	inRAM, mem := dataPlacement(o.DataBytes, o.Memory)
+	if o.DataDir == "" {
+		inRAM = false
+		if o.Memory == "" {
+			mem = "2g"
+		}
 	}
+	o.Memory = mem
 	if o.CPUs == "" {
 		o.CPUs = "2"
 	}
@@ -119,7 +161,9 @@ func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
 	args := []string{"run", "-d", "--name", name,
 		"--label", "backupproof.drill=1",
 		"--network", network,
-		"--memory", o.Memory, "--cpus", o.CPUs, "--pids-limit", "512",
+		// Swap equal to memory means no swap: a test that outgrows its limit
+		// stops with a clear message instead of pushing the server into swap.
+		"--memory", o.Memory, "--memory-swap", o.Memory, "--cpus", o.CPUs, "--pids-limit", "512",
 		"--security-opt", "no-new-privileges",
 		"--cap-drop", "ALL",
 	}
@@ -129,8 +173,13 @@ func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
 	if o.MountDir != "" {
 		args = append(args, "-v", o.MountDir+":/restore:ro")
 	}
-	if o.DataTmpfs != "" {
-		args = append(args, "--tmpfs", o.DataTmpfs+":rw,size=8g")
+	if o.DataDir != "" {
+		if inRAM {
+			args = append(args, "--tmpfs", o.DataDir+":rw,size=2g")
+		} else {
+			// An anonymous volume: on disk, and removed with the container (rm -v).
+			args = append(args, "--mount", "type=volume,dst="+o.DataDir)
+		}
 	}
 	for k, v := range o.Env {
 		args = append(args, "-e", k+"="+v)
@@ -141,7 +190,7 @@ func StartSandbox(ctx context.Context, o SandboxOptions) (*Sandbox, error) {
 	if _, err := docker(ctx, args...); err != nil {
 		return nil, err
 	}
-	sb := &Sandbox{Name: name, Image: o.Image}
+	sb := &Sandbox{Name: name, Image: o.Image, Memory: o.Memory, DataInRAM: inRAM, hasData: o.DataDir != ""}
 	if id, err := docker(ctx, "inspect", "--format", "{{.Image}}", name); err == nil {
 		sb.Digest = strings.TrimSpace(id)
 	}
@@ -205,5 +254,51 @@ func (s *Sandbox) Describe() string {
 	if s.Digest != "" {
 		d += "@" + s.Digest
 	}
-	return "docker:" + d + " (network=none)"
+	extra := ""
+	if s.hasData {
+		extra = ", data on disk"
+		if s.DataInRAM {
+			extra = ", data in memory"
+		}
+	}
+	if s.Memory != "" {
+		extra += ", memory " + s.Memory
+	}
+	return "docker:" + d + " (network=none" + extra + ")"
+}
+
+// Explain adds why a step failed when the test container ran out of memory or
+// space, which is a limit of the restore test and says nothing about the backup.
+func (s *Sandbox) Explain(ctx context.Context, err error) error {
+	if err == nil || s == nil {
+		return err
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "No space left on device") || strings.Contains(msg, "could not extend file") {
+		where := "on this server's disk"
+		if s.DataInRAM {
+			where = "in memory"
+		}
+		return fmt.Errorf("%w. The test database ran out of space %s: a limit of the restore test, %s. Raise the item's restore-test memory or free disk space", err, where, NotTheBackup)
+	}
+	if s.outOfMemory(ctx) {
+		return fmt.Errorf("%w. The restore-test container ran out of memory (limit %s): a limit of the restore test, %s. Raise the item's restore-test memory", err, s.Memory, NotTheBackup)
+	}
+	return err
+}
+
+// outOfMemory reports whether the kernel killed a process in the container
+// for lack of memory.
+func (s *Sandbox) outOfMemory(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if out, err := docker(ctx, "exec", s.Name, "cat", "/sys/fs/cgroup/memory.events"); err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			if f := strings.Fields(line); len(f) == 2 && f[0] == "oom_kill" && f[1] != "0" {
+				return true
+			}
+		}
+	}
+	out, err := docker(ctx, "inspect", "--format", "{{.State.OOMKilled}}", s.Name)
+	return err == nil && strings.TrimSpace(out) == "true"
 }

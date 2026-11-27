@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chmuzamil/backupproof/internal/drill"
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/protocol"
 )
@@ -342,6 +343,10 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 				// the backup, so say so and try again soon.
 				s.alert("drill-failed", &sid, nil, fmt.Sprintf("%s: the restore test couldn't read part of the backup from storage (the storage service kept returning errors). Nothing was found damaged; it runs again within the hour.", src.Name))
 				s.retryDrillSoon(src)
+			} else if drill.LimitOnlyFailure(pred.Checks) {
+				// The server running the test ran out of memory or disk: the
+				// backup isn't proven this time, but nothing was found wrong.
+				s.alert("drill-failed", &sid, nil, fmt.Sprintf("%s: the restore test couldn't finish because the server running it ran out of memory or disk space. Nothing was found wrong with the backup, but it isn't proven until a test passes. The item's latest restore test says what to change.", src.Name))
 			} else {
 				s.alert("drill-failed", &sid, nil, fmt.Sprintf("%s: the restore test FAILED. The backup may not be usable.", src.Name))
 			}

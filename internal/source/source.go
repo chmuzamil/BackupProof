@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/chmuzamil/backupproof/internal/backend"
@@ -68,6 +69,10 @@ type Spec struct {
 type DrillSpec struct {
 	// Image overrides the sandbox image (default derived from kind and server version).
 	Image string `json:"image,omitempty"`
+	// Memory is the database restore test's container memory limit, such as
+	// "8g". Empty sizes it from the dump: up to about 1 GB of loaded data is
+	// kept in memory (4g limit), more goes on disk (2g limit).
+	Memory string `json:"memory,omitempty"`
 	// Assertions are SQL queries that must return a single truthy value
 	// (non-zero number, "t", "true", or a non-empty string) on the restored database.
 	Assertions []Assertion `json:"assertions,omitempty"`
@@ -94,9 +99,29 @@ type Assertion struct {
 	SQL  string `json:"sql"`
 }
 
+// validDrillMemory reports whether m is a Docker memory size the restore test
+// accepts: a whole number of megabytes (m) or gigabytes (g), 256m to 1024g.
+func validDrillMemory(m string) bool {
+	if len(m) < 2 || (m[len(m)-1] != 'm' && m[len(m)-1] != 'g') {
+		return false
+	}
+	n, err := strconv.Atoi(m[:len(m)-1])
+	if err != nil || n <= 0 || m[0] == '0' || m[0] == '+' {
+		return false
+	}
+	mb := n
+	if m[len(m)-1] == 'g' {
+		mb = n * 1024
+	}
+	return mb >= 256 && mb <= 1024*1024
+}
+
 func (s Spec) Validate() error {
 	if s.Name == "" {
 		return errors.New("source name is required")
+	}
+	if s.Drill.Memory != "" && !validDrillMemory(s.Drill.Memory) {
+		return fmt.Errorf("restore-test memory %q must be a size like 4g or 512m, at least 256m", s.Drill.Memory)
 	}
 	switch s.Kind {
 	case "files":

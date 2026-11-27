@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -98,8 +99,8 @@ func postgresChecks(ctx context.Context, r *runner, dir string, s snapshot.WithI
 	var sb *Sandbox
 	if !r.check("sandbox-start", func() (string, error) {
 		sb, err = StartSandbox(ctx, SandboxOptions{
-			Image: image, MountDir: dir, DataTmpfs: "/var/lib/postgresql",
-			Env: map[string]string{"POSTGRES_HOST_AUTH_METHOD": "trust"},
+			Image: image, MountDir: dir, DataDir: pgData, DataBytes: fileSize(dump), Memory: spec.Drill.Memory,
+			Env: map[string]string{"POSTGRES_HOST_AUTH_METHOD": "trust", "PGDATA": pgData},
 		})
 		if err != nil {
 			return "", err
@@ -125,7 +126,7 @@ func postgresChecks(ctx context.Context, r *runner, dir string, s snapshot.WithI
 		}
 		_, err := sb.Exec(ctx, "pg_restore", "-h", "127.0.0.1", "-U", "postgres", "-d", "drill",
 			"--no-owner", "--no-privileges", "--exit-on-error", "/restore/"+filepath.ToSlash(rel))
-		return "restored into " + image + " with --exit-on-error", err
+		return "restored into " + image + " with --exit-on-error", sb.Explain(ctx, err)
 	}) {
 		return
 	}
@@ -213,7 +214,7 @@ func mysqlChecks(ctx context.Context, r *runner, dir string, s snapshot.WithID, 
 	var sb *Sandbox
 	if !r.check("sandbox-start", func() (string, error) {
 		sb, err = StartSandbox(ctx, SandboxOptions{
-			Image: image, MountDir: dir, DataTmpfs: "/var/lib/mysql",
+			Image: image, MountDir: dir, DataDir: "/var/lib/mysql", DataBytes: fileSize(dump), Memory: spec.Drill.Memory,
 			Env: map[string]string{"MYSQL_ALLOW_EMPTY_PASSWORD": "yes", "MARIADB_ALLOW_EMPTY_ROOT_PASSWORD": "1"},
 		})
 		if err != nil {
@@ -234,7 +235,7 @@ func mysqlChecks(ctx context.Context, r *runner, dir string, s snapshot.WithID, 
 	rel, _ := filepath.Rel(dir, dump)
 	if !r.check("import-dump", func() (string, error) {
 		_, err := sb.Exec(ctx, "sh", "-c", client+" -h127.0.0.1 -uroot < /restore/"+filepath.ToSlash(rel))
-		return "imported into " + image, err
+		return "imported into " + image, sb.Explain(ctx, err)
 	}) {
 		return
 	}
@@ -312,7 +313,7 @@ func mongoChecks(ctx context.Context, r *runner, dir string, s snapshot.WithID, 
 	}
 	var sb *Sandbox
 	if !r.check("sandbox-start", func() (string, error) {
-		sb, err = StartSandbox(ctx, SandboxOptions{Image: image, MountDir: dir, DataTmpfs: "/data/db"})
+		sb, err = StartSandbox(ctx, SandboxOptions{Image: image, MountDir: dir, DataDir: "/data/db", DataBytes: fileSize(dump), Memory: spec.Drill.Memory})
 		if err != nil {
 			return "", err
 		}
@@ -333,7 +334,7 @@ func mongoChecks(ctx context.Context, r *runner, dir string, s snapshot.WithID, 
 			args = append(args, "--oplogReplay")
 		}
 		_, err := sb.Exec(ctx, args...)
-		return "restored into " + image, err
+		return "restored into " + image, sb.Explain(ctx, err)
 	}) {
 		return
 	}
@@ -370,4 +371,12 @@ func parseLines(out string) map[string]int64 {
 		}
 	}
 	return res
+}
+
+// fileSize is the size of p, or 0 if it can't be read.
+func fileSize(p string) int64 {
+	if fi, err := os.Stat(p); err == nil {
+		return fi.Size()
+	}
+	return 0
 }

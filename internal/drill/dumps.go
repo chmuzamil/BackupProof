@@ -45,12 +45,16 @@ func dumpChecks(ctx context.Context, r *runner, dir string, spec source.Spec) {
 	if image == "" {
 		image = "postgres:17" // pg_restore reads dumps from all older versions
 	}
+	var total int64
+	for _, d := range dumps {
+		total += fileSize(d)
+	}
 	var sb *Sandbox
 	var err error
 	if !r.check("sandbox-start", func() (string, error) {
 		sb, err = StartSandbox(ctx, SandboxOptions{
-			Image: image, MountDir: dir, DataTmpfs: "/var/lib/postgresql",
-			Env: map[string]string{"POSTGRES_HOST_AUTH_METHOD": "trust"},
+			Image: image, MountDir: dir, DataDir: pgData, DataBytes: total, Memory: spec.Drill.Memory,
+			Env: map[string]string{"POSTGRES_HOST_AUTH_METHOD": "trust", "PGDATA": pgData},
 		})
 		if err != nil {
 			return "", err
@@ -85,7 +89,7 @@ func dumpChecks(ctx context.Context, r *runner, dir string, spec source.Spec) {
 				ignored = m[1]
 			}
 			if rerr != nil {
-				return "", rerr
+				return "", sb.Explain(ctx, rerr)
 			}
 			counts, err := psql(`SELECT count(*)||' '||coalesce(sum((xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I.%I', table_schema, table_name), false, true, '')))[1]::text::bigint),0)
 FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema NOT IN ('pg_catalog','information_schema')`)

@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Database restore tests no longer fail on larger databases for lack of memory.** PostgreSQL 18, MySQL, MariaDB and MongoDB restore tests kept the database in memory inside a container limited to 2 GB, so one bigger than about 1.5 GB failed even when the backup was good. Databases up to about 1 GB loaded are still tested in memory (now with a 4 GB limit); larger ones go on a throwaway disk volume. PostgreSQL up to 17 already used disk, because the image's own volume sat on top of the memory folder; it now goes where the size says. Restore-test containers no longer use swap.
+- **A restore test that runs out of memory or disk says so.** The check explains that the server running the test ran out of room, which says nothing about the backup, and the alert says nothing was found wrong instead of "the backup may not be usable".
+
+### Added
+
+- **Free-space check before every restore test.** The test checks the server has room for the restored backup plus 1 GB before it starts, instead of failing partway.
+- **Database test memory setting** under the item's restore test settings, for a database that needs more (or less) than the automatic choice.
+- **Storage compatibility tests.** A small storage written by each release's own command-line tool is kept in the repository, and CI checks the current version still opens it, restores both of its backups byte for byte, passes a full check and adds new backups to it.
+
 ## [0.2.23] - 2026-11-24
 
 ### Fixed

@@ -80,3 +80,19 @@ func TestContainerDatabaseNeedsNoName(t *testing.T) {
 		t.Fatalf("a database found in Docker must be accepted without a name: %v", err)
 	}
 }
+
+func TestValidDrillMemory(t *testing.T) {
+	for m, ok := range map[string]bool{
+		"256m": true, "512m": true, "4g": true, "64g": true, "1024g": true,
+		"": false, "255m": false, "0g": false, "04g": false, "4": false, "4G": false,
+		"4gb": false, "-4g": false, "+4g": false, "1025g": false, "4.5g": false, "g": false,
+	} {
+		if validDrillMemory(m) != ok {
+			t.Errorf("validDrillMemory(%q) = %v, want %v", m, !ok, ok)
+		}
+	}
+	s := Spec{Name: "db", Kind: "postgres", Database: "shop", Drill: DrillSpec{Memory: "lots"}}
+	if err := s.Validate(); err == nil {
+		t.Error("a bad memory setting passed validation")
+	}
+}

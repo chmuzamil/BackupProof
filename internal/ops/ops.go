@@ -243,6 +243,9 @@ func DrillAttested(ctx context.Context, e *Env, spec source.Spec, ref, expectedR
 	if !res.Passed && res.StorageUnreadable {
 		return res, rec, errors.New("the restore test couldn't read part of the backup from storage, even after retrying for several minutes; nothing was found damaged")
 	}
+	if !res.Passed && drill.LimitOnlyFailure(res.Checks) {
+		return res, rec, errors.New("the restore test couldn't finish because this server ran out of memory or disk space; nothing was found wrong with the backup (see checks)")
+	}
 	if !res.Passed {
 		return res, rec, errors.New("restore drill FAILED — see checks")
 	}

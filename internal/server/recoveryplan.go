@@ -171,6 +171,7 @@ func planCLIEnv(b backend.Config) string {
 }
 
 var planCheckWords = map[string]string{
+	"disk-space":                   "There was enough free disk space for the test",
 	"restore-from-storage":         "Every file was downloaded and decrypted",
 	"content-root":                 "Every file matches the original",
 	"expected-paths":               "Important files were present",
