@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **WordPress template, version 2,** also checks that the admin area asks for a sign-in and that the site's API answers from the restored database.
 - **n8n template** for n8n in Docker with its built-in database: passes when n8n has opened the restored database and its editor loads. Offered automatically when an n8n container is found.
 - **What restore tests download.** Each item's page shows how much a restore test downloads from storage and about how much that is a month at its schedule. Where the provider charges for downloads (Amazon S3, Google Cloud Storage), it says so and how to pay less.
+- **`SECURITY.md`:** how to report a vulnerability privately, what counts, and how fast it's handled.
+- **Reproducible builds, checkable.** `sh scripts/verify-build.sh <tag>` rebuilds a release from its tag and checks it matches the published binary byte for byte. 0.2.2, 0.2.10, 0.2.20 and 0.2.23 were checked.
+- **Software bill of materials and build provenance** with every release: `sbom.spdx.json`, covered by the signed `SHA256SUMS`, and GitHub build provenance for each file (`gh attestation verify FILE -R chmuzamil/BackupProof`).
 - **Free-space check before every restore test.** The test checks the server has room for the restored backup plus 1 GB before it starts, instead of failing partway.
 - **Database test memory setting** under the item's restore test settings, for a database that needs more (or less) than the automatic choice.
 - **Storage reliability tests.** Prune stopped after each of its first deletes, two machines backing up into one storage at once, a backup resumed after a failed upload, and prune during a storage outage: in each, every backup still restores byte for byte and a full check finds nothing missing.

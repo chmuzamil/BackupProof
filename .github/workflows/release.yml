@@ -17,6 +17,8 @@ jobs:
     environment: release
     permissions:
       contents: write
+      id-token: write      # build provenance (Sigstore)
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -38,7 +40,20 @@ jobs:
               -o "dist/backupproof-$os-$arch$ext" ./cmd/backupproof
           done
           cp scripts/install.sh scripts/install.ps1 dist/
-          (cd dist && sha256sum backupproof-* install.sh install.ps1 > SHA256SUMS)
+
+      # Every Go module built into the program, read from the binary itself.
+      # It is listed in SHA256SUMS, so the signature covers it too.
+      - name: software bill of materials
+        uses: anchore/sbom-action@v0
+        with:
+          file: dist/backupproof-linux-amd64
+          format: spdx-json
+          output-file: dist/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: checksums
+        run: (cd dist && sha256sum backupproof-* install.sh install.ps1 sbom.spdx.json > SHA256SUMS)
 
       # SHA256SUMS covers every binary and both installers, so its signature
       # covers them too. The result is checked against the published key.
@@ -104,6 +119,18 @@ jobs:
           docker run -d --name backupproof -p 8420:8420 -v backupproof-data:/data ghcr.io/chmuzamil/backupproof:latest
           ```
           EOF
+
+      # Shows which commit and workflow run built each file:
+      # gh attestation verify FILE -R chmuzamil/BackupProof
+      - name: build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/backupproof-*
+            dist/install.sh
+            dist/install.ps1
+            dist/sbom.spdx.json
+            dist/SHA256SUMS
 
       - name: publish release
         env:

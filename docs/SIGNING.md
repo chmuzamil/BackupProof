@@ -37,6 +37,31 @@ still checked. `install.ps1` checks the signature when minisign is installed,
 and otherwise warns that it checked the checksums only, because Windows has no
 built-in Ed25519 check.
 
+## Rebuild a release yourself
+
+Releases are reproducible: building a tag's source with the same Go version and
+command gives the same bytes. `scripts/verify-build.sh` does it and compares:
+
+```bash
+sh scripts/verify-build.sh v0.3.0                  # linux/amd64
+sh scripts/verify-build.sh v0.3.0 windows/amd64
+```
+
+It prints `MATCH` when the published binary is exactly what the source
+builds. It needs git, curl and Go; the exact Go version of the release is
+downloaded automatically. Releases with downloads start at 0.2.2; 0.2.2,
+0.2.10, 0.2.20 and 0.2.23 were checked and match.
+
+## Software bill of materials and provenance
+
+From 0.3.0, each release also has:
+
+- `sbom.spdx.json`, an SPDX list of every Go module built into the program,
+  covered by `SHA256SUMS` and so by its signature;
+- GitHub build provenance for every file, which shows the commit and the
+  workflow run that built it:
+  `gh attestation verify backupproof-linux-amd64 -R chmuzamil/BackupProof`.
+
 ## How releases are signed
 
 The `release` workflow signs `SHA256SUMS` with the secret key from the GitHub
