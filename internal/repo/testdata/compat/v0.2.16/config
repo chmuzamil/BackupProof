@@ -1,0 +1,11 @@
+{
+  "format": "backupproof-repo",
+  "version": 1,
+  "id": "cb47b91593acbc28a8578ad9adc69e3a",
+  "created": "2026-11-27T01:06:37.057867209Z",
+  "chunker": {
+    "Min": 524288,
+    "Avg": 1048576,
+    "Max": 8388608
+  }
+}

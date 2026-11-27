@@ -1,9 +1,25 @@
-# Proof compatibility
+# Compatibility
 
 Every proof made by BackupProof 0.2.0 or later keeps verifying with newer
-versions. CI checks this on every change against proofs made by each release.
+versions, and every storage written by 0.2.0 or later keeps restoring. CI
+checks both on every change against proofs and storage made by each release.
 If a proof format has to change, the new one gets a new version and the old one
-stays supported.
+stays supported. If the storage format has to change, newer versions keep
+reading the old one, and moving to the new one is a separate step you run.
+
+## Storage
+
+The storage format is versioned (v1 since 0.2.0; see the README). Storage
+written by any release from 0.2.0 on must, with the current version:
+
+- open with its password;
+- restore every backup in it byte for byte, with the restored files matching
+  the backup's Merkle root;
+- pass a full check that reads every chunk;
+- take new backups, which restore too.
+
+A version that can't read a storage's format says so and stops; it never
+writes to storage it doesn't understand.
 
 ## What this covers
 
@@ -53,9 +69,16 @@ second copy, and saves the bundles, the evidence pack, the signing keys
 `TestDashboardProofsFromEarlierReleasesStillVerify` checks every bundle, its
 timestamp and the evidence pack.
 
+`internal/repo/testdata/compat/<tag>/` holds a storage written by that
+release's own command-line tool: two backups of a small folder, the second
+after one file was added, one edited and one left alone, so it has reused
+chunks too. `TestStorageFromEarlierReleasesStillRestores` restores both,
+checks every chunk and adds a backup with the current code, on a copy.
+
 The fixtures are made in CI, not on a developer's machine. The `compat-fixtures`
 workflow renames its runner to `compat-fixtures` and builds each tag with its
 real version string. After each release, run the workflow for the new tag and
-commit its two artifacts: `compat-fixtures` under
-`internal/proof/testdata/compat/` and `compat-dashboard` under
-`internal/server/testdata/compat/`.
+commit its three artifacts: `compat-fixtures` under
+`internal/proof/testdata/compat/`, `compat-dashboard` under
+`internal/server/testdata/compat/` and `compat-repos` under
+`internal/repo/testdata/compat/`.

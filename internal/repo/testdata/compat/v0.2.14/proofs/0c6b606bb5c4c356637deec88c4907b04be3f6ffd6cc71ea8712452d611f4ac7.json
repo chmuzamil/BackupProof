@@ -1,0 +1,26 @@
+{
+  "kind": "backup",
+  "snapshotId": "fdbd9893a89b558df47fe32ca9826995a53fc7a07624bd180d4c5195bc851cf0",
+  "source": "files",
+  "passed": true,
+  "envelope": {
+    "payloadType": "application/vnd.in-toto+json",
+    "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJzdWJqZWN0IjpbeyJuYW1lIjoiYmFja3VwcHJvb2Y6MGU4ZjFhMzkzNDM5NDE4OGU1Y2ZkY2M3NjllNzkzOTYvc25hcHNob3QvZmRiZDk4OTNhODliNTU4ZGY0N2ZlMzJjYTk4MjY5OTVhNTNmYzdhMDc2MjRiZDE4MGQ0YzUxOTViYzg1MWNmMCIsImRpZ2VzdCI6eyJibGFrZTMiOiJiZWFjMjQ4MWJlMDA1NDBlZDRhZTgzMmEwMzNkMDVhYmNmYjA0ZGQ0ZWU3ZGFhZDY1NzMzMzgzNWE3OTlhNDg5In19XSwicHJlZGljYXRlVHlwZSI6Imh0dHBzOi8vYmFja3VwcHJvb2YuZGV2L2F0dGVzdGF0aW9uL2JhY2t1cC92MSIsInByZWRpY2F0ZSI6eyJyZXBvSWQiOiIwZThmMWEzOTM0Mzk0MTg4ZTVjZmRjYzc2OWU3OTM5NiIsInNuYXBzaG90SWQiOiJmZGJkOTg5M2E4OWI1NThkZjQ3ZmUzMmNhOTgyNjk5NWE1M2ZjN2EwNzYyNGJkMTgwZDRjNTE5NWJjODUxY2YwIiwic291cmNlIjoiZmlsZXMiLCJraW5kIjoiZmlsZXMiLCJob3N0IjoiY29tcGF0LWZpeHR1cmVzIiwidGltZSI6IjIwMjYtMTEtMjdUMDE6MDY6MzIuMjcxMzg3MzMzWiIsImVudHJpZXMiOjYsImJ5dGVzIjo0OCwiZHVyYXRpb25NcyI6Miwic3RvcmFnZSI6eyJsb2NhdGlvbiI6Ii90bXAvdG1wLnNrYUtwU1VZcmQvcmVwby12MC4yLjE0In0sImVuZ2luZSI6ImJhY2t1cHByb29mLzAuMi4xNCJ9fQ==",
+    "signatures": [
+      {
+        "keyid": "bp:ea70ff309ec4f9a3",
+        "sig": "3ESbKhY+8jEJO0IxsRYSvYvAfW0U/LbomCv6J4p3vWnwJEPA63cuID34FUethGjD2n2UWbIHiW1l2wSZ6n3bDQ=="
+      }
+    ]
+  },
+  "ledger": {
+    "seq": 1,
+    "time": "2026-11-27T01:06:32.272326663Z",
+    "kind": "backup",
+    "subject": "fdbd9893a89b558df47fe32ca9826995a53fc7a07624bd180d4c5195bc851cf0",
+    "envelopeDigest": "0c6b606bb5c4c356637deec88c4907b04be3f6ffd6cc71ea8712452d611f4ac7",
+    "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "c0cfa1cc9a2af30a338ef36c9bcbf9677dc8c6eca55a5d71ea24e5fdaec236fc"
+  },
+  "created": "2026-11-27T01:06:32.27230965Z"
+}

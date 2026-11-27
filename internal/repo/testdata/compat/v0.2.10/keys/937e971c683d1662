@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "kdf": {
+    "algo": "argon2id",
+    "time": 3,
+    "memoryKiB": 65536,
+    "threads": 4,
+    "salt": "ehfE8Nztvh6NV+0jFvJ9LQ=="
+  },
+  "wrapped": "ISbRYyyGCISgGRQiFFXeVvRpzNu2Rj1aEMtEjuKIgMJeuaEt0pJdgLhUrLQI8uoMu8eL+/lUHEcSUqUeJu92XLoH49Daez4nXSuXBrQ9g0z2BMCc5hfMPw4A1c8ifqPNcgQRKe/GQKGhGjJPi8ts6By4Cf3x7fL5cUvlIPM6fS+EANx/irbeNyX+3ByV6aNIc7ks+Xfk81F/17v5dLRuj18d0Iz/NQfkUfFYp8SaABZc1c12lIE1SPCgu4L96YOqCBryP38QImmt",
+  "created": "2026-11-27T01:06:22Z",
+  "host": "compat-fixtures"
+}
