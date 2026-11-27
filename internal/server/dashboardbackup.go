@@ -55,8 +55,8 @@ var dashboardLocalOK = false
 
 // scheduleDashboardBackup starts the daily dashboard backup when it's due.
 func (s *Server) scheduleDashboardBackup(now time.Time) {
-	if s.dashboardRepoID() == 0 {
-		return
+	if s.dashboardRepoID() == 0 || s.store.RepositoryPaused(s.dashboardRepoID()) {
+		return // a storage being upgraded waits; the backup runs after
 	}
 	next, err := time.Parse(time.RFC3339, s.store.Setting(settingDashNext))
 	if err == nil && now.Before(next) {
@@ -81,6 +81,9 @@ func (s *Server) backupDashboard(ctx context.Context, actor string) error {
 		return errors.New("a dashboard backup is already running")
 	}
 	defer dashboardRunning.Store(false)
+	if s.store.RepositoryPaused(s.dashboardRepoID()) {
+		return errors.New("its storage is being upgraded; try again when that finishes")
+	}
 	snap, err := s.runDashboardBackup(ctx)
 	if err != nil {
 		_ = s.store.SetSetting(settingDashError, err.Error())

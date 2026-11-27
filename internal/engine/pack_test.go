@@ -24,6 +24,8 @@ type countingStore struct {
 	gets         map[string]int
 	puts         map[string]int
 	failPackPuts bool
+	// failPuts fails every write whose key starts with it: an interruption.
+	failPuts string
 }
 
 func newCountingStore(t *testing.T) (*countingStore, string) {
@@ -55,7 +57,7 @@ func (c *countingStore) Get(ctx context.Context, key string) ([]byte, error) {
 func (c *countingStore) Put(ctx context.Context, key string, data []byte) error {
 	c.mu.Lock()
 	c.puts[top(key)]++
-	fail := c.failPackPuts && strings.HasPrefix(key, "packs/")
+	fail := c.failPackPuts && strings.HasPrefix(key, "packs/") || c.failPuts != "" && strings.HasPrefix(key, c.failPuts)
 	c.mu.Unlock()
 	if fail {
 		return errors.New("access denied")
@@ -193,8 +195,12 @@ func TestUpgradeV1ToV2(t *testing.T) {
 	if err := r.Upgrade(ctx, t.Logf); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Upgrade(ctx, nil); err == nil {
-		t.Error("upgraded twice")
+	cfgBefore, _ := store.Get(ctx, "config")
+	if err := r.Upgrade(ctx, nil); err != nil {
+		t.Errorf("upgrading v2 storage again: %v", err)
+	}
+	if cfgAfter, _ := store.Get(ctx, "config"); !bytes.Equal(cfgBefore, cfgAfter) {
+		t.Error("upgrading v2 storage again changed it")
 	}
 	store.reset()
 	up, err := repo.Open(ctx, store, []byte(pw))
@@ -231,6 +237,95 @@ func TestUpgradeV1ToV2(t *testing.T) {
 	if res := mustCheckClean(t, fresh); res.UnusedBlobs != 0 {
 		t.Errorf("%d unused blobs after prune", res.UnusedBlobs)
 	}
+}
+
+// An upgrade cut off before it finishes leaves the storage on v1 and usable,
+// and running it again finishes the job, even after a prune in between
+// deleted blobs the half-written index lists, and with an index file that was
+// cut off mid-write. The finished index never claims a blob that's gone, so
+// new backups upload it again instead of pointing at nothing.
+func TestUpgradeInterruptedAndRunAgain(t *testing.T) {
+	t.Setenv("BP_NO_CACHE", "1")
+	fastRetries(t)
+	ctx := context.Background()
+	store, dir := newCountingStore(t)
+	r, err := repo.InitVersion(ctx, store, []byte(pw), testParams, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aData, bData := randomPayload(500<<10), randomPayload(500<<10)
+	a := commitPayload(t, mustBuilder(t, r), "a", aData)
+	b := commitPayload(t, mustBuilder(t, r), "b", bData)
+
+	// Interrupted after the index files, before the format version.
+	store.failPuts = "config"
+	if err := r.Upgrade(ctx, t.Logf); err == nil {
+		t.Fatal("the upgrade finished although the config couldn't be written")
+	}
+	store.failPuts = ""
+	if n := countKeys(t, store, "index/"); n == 0 {
+		t.Fatal("the interrupted upgrade wrote no index files; the test needs some")
+	}
+	still, err := repo.Open(ctx, store, []byte(pw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := still.Config().Version; v != 1 {
+		t.Fatalf("an interrupted upgrade left v%d", v)
+	}
+	mustRestore(t, still, a, aData)
+	mustRestore(t, still, b, bData)
+	mustCheckClean(t, still)
+
+	// Another interruption cut an index file off mid-write.
+	if err := os.WriteFile(filepath.Join(dir, "index", strings.Repeat("ab", 32)), []byte("cut off"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// While still v1, a prune deletes the blobs only backup a used, which
+	// the leftover index files still list.
+	if err := Forget(ctx, still, []string{a.ID.String()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prune(ctx, still, PruneOptions{Grace: -time.Hour, MarkAge: -1}); err != nil {
+		t.Fatal(err)
+	}
+
+	again, _ := repo.Open(ctx, store, []byte(pw))
+	if err := again.Upgrade(ctx, t.Logf); err != nil {
+		t.Fatalf("running the upgrade again: %v", err)
+	}
+	up, err := repo.Open(ctx, store, []byte(pw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := up.Config().Version; v != 2 {
+		t.Fatalf("v%d after running the upgrade again", v)
+	}
+	indexed, err := up.StoredBlobs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDisk := map[string]bool{}
+	if err := store.List(ctx, "data/", func(o backend.ObjectInfo) error {
+		onDisk[o.Key[strings.LastIndex(o.Key, "/")+1:]] = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for id := range indexed {
+		if !onDisk[id.String()] {
+			t.Errorf("the index lists blob %s, which the prune deleted", id.Short())
+		}
+	}
+	if len(indexed) != len(onDisk) {
+		t.Errorf("%d blobs indexed, %d stored", len(indexed), len(onDisk))
+	}
+	mustRestore(t, up, b, bData)
+	// Backing up a's data again must upload what the prune deleted.
+	a2 := commitPayload(t, mustBuilder(t, up), "a", aData)
+	fresh, _ := repo.Open(ctx, store, []byte(pw))
+	mustRestore(t, fresh, a2, aData)
+	mustCheckClean(t, fresh)
 }
 
 // Prune deletes packs nothing needs, rewrites packs that are mostly unneeded,

@@ -404,7 +404,12 @@ func (s *Store) LeaseJob(agentID int64, lease time.Duration, windowOpen bool) (*
 	if !windowOpen {
 		q += " AND j.trigger <> 'schedule'"
 	}
-	err := s.db.QueryRow(q+" ORDER BY j.id LIMIT 1", agentID).Scan(&id)
+	args := []any{agentID}
+	for repoID := range s.paused {
+		q += " AND NOT EXISTS (SELECT 1 FROM sources ps WHERE ps.id=j.source_id AND (ps.repo_id=? OR ps.copy_repo_id=?))"
+		args = append(args, repoID, repoID)
+	}
+	err := s.db.QueryRow(q+" ORDER BY j.id LIMIT 1", args...).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -416,6 +421,35 @@ func (s *Store) LeaseJob(agentID int64, lease time.Duration, windowOpen bool) (*
 		return nil, err
 	}
 	return s.Job(id)
+}
+
+// PauseRepository stops handing out jobs that use a storage, as its first or
+// second copy, and returns how many such jobs are running now. Jobs stay
+// queued until ResumeRepository.
+func (s *Store) PauseRepository(repoID int64) (running int, err error) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if s.paused == nil {
+		s.paused = map[int64]bool{}
+	}
+	s.paused[repoID] = true
+	err = s.db.QueryRow(`SELECT COUNT(*) FROM jobs j JOIN sources ps ON ps.id=j.source_id
+		WHERE j.state='running' AND (ps.repo_id=? OR ps.copy_repo_id=?)`, repoID, repoID).Scan(&running)
+	return running, err
+}
+
+// ResumeRepository hands out a paused storage's jobs again.
+func (s *Store) ResumeRepository(repoID int64) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	delete(s.paused, repoID)
+}
+
+// RepositoryPaused reports whether a storage's jobs are paused.
+func (s *Store) RepositoryPaused(repoID int64) bool {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return s.paused[repoID]
 }
 
 // errLeaseLost means the job is no longer this agent's to run.

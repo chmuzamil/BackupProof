@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -478,12 +480,35 @@ func (r *Repo) TakeWritten(ctx context.Context) ([]PackRecord, error) {
 // are listed once into index files; from then on backups write packs and
 // never list every blob again. Agents older than 0.4 can't use the storage
 // afterwards, so upgrade them first.
+//
+// It is safe to interrupt and to run again. Index files are written first and
+// the format version last, so until the very end the storage is still v1 and
+// v1 readers ignore the index files. A later run first checks index files an
+// interrupted run left behind: one that can't be read, or that lists a blob
+// deleted since (by a prune in between), is deleted, so the upgraded index
+// never claims a blob the storage doesn't have. Running it on v2 storage does
+// nothing.
 func (r *Repo) Upgrade(ctx context.Context, log func(string, ...any)) error {
-	if r.cfg.Version >= 2 {
-		return fmt.Errorf("this storage already uses format v%d", r.cfg.Version)
-	}
 	if log == nil {
 		log = func(string, ...any) {}
+	}
+	if r.cfg.Version >= 2 {
+		log("the storage already uses format v%d", r.cfg.Version)
+		return nil
+	}
+	stored := map[bpcrypto.ID]int64{}
+	err := r.be.List(ctx, "data/", func(o backend.ObjectInfo) error {
+		name := o.Key[strings.LastIndex(o.Key, "/")+1:]
+		if id, err := bpcrypto.ParseID(name); err == nil {
+			stored[id] = o.Size
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("listing the existing blobs: %w", err)
+	}
+	if err := r.dropStaleIndexes(ctx, stored, log); err != nil {
+		return err
 	}
 	const perFile = 100000
 	var batch []PackEntry
@@ -499,19 +524,22 @@ func (r *Repo) Upgrade(ctx context.Context, log func(string, ...any)) error {
 		batch = nil
 		return nil
 	}
-	err := r.be.List(ctx, "data/", func(o backend.ObjectInfo) error {
-		name := o.Key[strings.LastIndex(o.Key, "/")+1:]
-		id, err := bpcrypto.ParseID(name)
-		if err != nil {
-			return nil
-		}
-		batch = append(batch, PackEntry{ID: id, Len: o.Size})
+	ids := make([]bpcrypto.ID, 0, len(stored))
+	for id := range stored {
+		ids = append(ids, id)
+	}
+	// Sorted, so a run over the same blobs writes the same index files
+	// (they are named by their content) instead of new copies.
+	sort.Slice(ids, func(i, j int) bool { return bytes.Compare(ids[i][:], ids[j][:]) < 0 })
+	for _, id := range ids {
+		batch = append(batch, PackEntry{ID: id, Len: stored[id]})
 		blobs++
 		if len(batch) >= perFile {
-			return flush()
+			if err = flush(); err != nil {
+				break
+			}
 		}
-		return nil
-	})
+	}
 	if err == nil {
 		err = flush()
 	}
@@ -534,6 +562,42 @@ func (r *Repo) Upgrade(ctx context.Context, log func(string, ...any)) error {
 	r.locs = map[bpcrypto.ID]blobLoc{}
 	r.mu.Unlock()
 	log("the storage now uses format v2")
+	return nil
+}
+
+// dropStaleIndexes deletes index files in v1 storage that an interrupted
+// upgrade left behind and that can't be trusted any more: unreadable (cut
+// off mid-write) or listing a blob that is no longer stored. v1 storage has
+// no other index files. One that is still right is kept: the run writes the
+// same file again (index files are named by their content).
+func (r *Repo) dropStaleIndexes(ctx context.Context, stored map[bpcrypto.ID]int64, log func(string, ...any)) error {
+	ids, err := r.ListIDs(ctx, "index")
+	if err != nil {
+		return fmt.Errorf("listing index files left by an earlier upgrade: %w", err)
+	}
+	dropped := 0
+	for _, id := range ids {
+		var f IndexFile
+		stale := r.readIndex(ctx, id, &f) != nil
+		for _, p := range f.Packs {
+			for _, b := range p.Blobs {
+				if size, ok := stored[b.ID]; p.ID != (bpcrypto.ID{}) || !ok || size != b.Len {
+					stale = true
+				}
+			}
+		}
+		if !stale {
+			continue
+		}
+		if err := r.be.Delete(ctx, "index/"+id.String()); err != nil && !errors.Is(err, backend.ErrNotFound) {
+			return fmt.Errorf("index file %s, left by an interrupted upgrade, lists blobs this storage no longer has and can't be deleted (%w); delete it, or wait for its object lock to end, then upgrade again", id.Short(), err)
+		}
+		r.cacheDrop(id)
+		dropped++
+	}
+	if len(ids) > 0 {
+		log("found %d index files from an interrupted upgrade: kept %d, deleted %d out of date", len(ids), len(ids)-dropped, dropped)
+	}
 	return nil
 }
 

@@ -67,6 +67,8 @@ type Store struct {
 	// wmu serializes writes that must be atomic with respect to the ledger head.
 	wmu    sync.Mutex
 	secret []byte
+	// paused holds storages whose jobs aren't handed out (during an upgrade).
+	paused map[int64]bool
 }
 
 func OpenStore(dataDir string, secret []byte) (*Store, error) {

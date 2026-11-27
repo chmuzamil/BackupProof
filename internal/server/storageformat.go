@@ -187,8 +187,26 @@ func (s *Server) handleUpgradeStorage(w http.ResponseWriter, r *http.Request) {
 		}
 		upgrades.Store(id, us)
 	}
+	// Nothing else may use the storage while it changes format: a prune
+	// could delete blobs the new index lists, and a backup could add blobs
+	// it doesn't. Its jobs wait in the queue until the upgrade ends.
+	running, err := s.store.PauseRepository(id)
+	if err == nil && dashboardRunning.Load() && s.dashboardRepoID() == id {
+		running++ // the dashboard is backing itself up to this storage
+	}
+	if err != nil || running > 0 {
+		s.store.ResumeRepository(id)
+		upgrades.Delete(id)
+		if err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		writeErr(w, 409, fmt.Errorf("%d jobs are using this storage right now; upgrade it when they finish", running))
+		return
+	}
 	actor := s.actor(r)
 	go func() {
+		defer s.store.ResumeRepository(id)
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
 		defer cancel()
 		err := s.upgradeStorage(ctx, rp, sec)

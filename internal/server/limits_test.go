@@ -65,3 +65,51 @@ func TestWindowHoldsScheduledJobs(t *testing.T) {
 		t.Errorf("limits not saved: %+v", ag.Limits)
 	}
 }
+
+// While a storage is upgraded no job that uses it, as first or second copy,
+// is handed out, and the upgrade can't start while one is running.
+func TestPausedStorageHoldsJobs(t *testing.T) {
+	dir := t.TempDir()
+	srv, err := New(Config{DataDir: filepath.Join(dir, "s"), NoLocalAgent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	st := srv.store
+	res, _ := st.db.Exec("INSERT INTO agents(name,public_key,token_hash,created) VALUES('web','key','hash',?)", now())
+	agentID, _ := res.LastInsertId()
+	one, _ := st.CreateRepository("one", backend.Config{Type: "local", Path: filepath.Join(dir, "1")}, RepoSecret{Password: "a-long-repository-password"})
+	two, _ := st.CreateRepository("two", backend.Config{Type: "local", Path: filepath.Join(dir, "2")}, RepoSecret{Password: "a-long-repository-password"})
+	spec := source.Spec{Kind: "files", Paths: []string{dir}}
+	onOne, _ := st.SaveSource(&Source{Name: "on-one", AgentID: agentID, RepoID: one, Spec: spec, BackupCron: "@daily", DrillCron: "@weekly", Enabled: true}, &SourceSecret{})
+	copyToOne, _ := st.SaveSource(&Source{Name: "copy-to-one", AgentID: agentID, RepoID: two, Spec: spec, BackupCron: "@daily", DrillCron: "@weekly", Enabled: true}, &SourceSecret{})
+	onTwo, _ := st.SaveSource(&Source{Name: "on-two", AgentID: agentID, RepoID: two, Spec: spec, BackupCron: "@daily", DrillCron: "@weekly", Enabled: true}, &SourceSecret{})
+	if _, err := st.db.Exec("UPDATE sources SET copy_repo_id=? WHERE id=?", one, copyToOne); err != nil {
+		t.Fatal(err)
+	}
+	j1, _ := st.EnqueueJob("backup", onOne, agentID, "manual")
+	j2, _ := st.EnqueueJob("copy", copyToOne, agentID, "manual")
+	j3, _ := st.EnqueueJob("backup", onTwo, agentID, "manual")
+
+	if running, err := st.PauseRepository(one); err != nil || running != 0 {
+		t.Fatalf("pause: %d running, %v", running, err)
+	}
+	if j, _ := st.LeaseJob(agentID, time.Minute, true); j == nil || j.ID != j3 {
+		t.Fatalf("with storage one paused, leased %+v, want job %d on storage two", j, j3)
+	}
+	if j, _ := st.LeaseJob(agentID, time.Minute, true); j != nil {
+		t.Fatalf("job %d using a paused storage was handed out", j.ID)
+	}
+	st.ResumeRepository(one)
+	if j, _ := st.LeaseJob(agentID, time.Minute, true); j == nil || j.ID != j1 {
+		t.Fatalf("after resuming, leased %+v, want %d", j, j1)
+	}
+	// Job 1 is running on storage one now, so pausing it reports it.
+	if running, _ := st.PauseRepository(one); running != 1 {
+		t.Errorf("%d jobs reported running on storage one, want 1", running)
+	}
+	st.ResumeRepository(one)
+	if j, _ := st.LeaseJob(agentID, time.Minute, true); j == nil || j.ID != j2 {
+		t.Fatalf("leased %+v, want the copy job %d", j, j2)
+	}
+}
