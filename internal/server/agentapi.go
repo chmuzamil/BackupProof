@@ -145,6 +145,7 @@ func (s *Server) buildLease(job *Job) (*protocol.Lease, error) {
 		JobID: job.ID, Kind: job.Kind, Source: spec, Repository: repo.Backend, RepoID: repo.ID,
 		Password: sec.Password, Creds: sec.Credentials, Retention: src.Retention,
 		Verified: verified, TSAs: s.tsaURLs(), LeaseSecs: int(leaseDuration.Seconds()),
+		StorageFormat: s.newStorageFormat(repo.ID),
 	}
 	if lim, err := s.store.AgentLimits(job.AgentID); err == nil {
 		lease.UploadBps, lease.DownloadBps = int64(lim.UploadKBps)*1024, int64(lim.DownloadKBps)*1024

@@ -24,6 +24,9 @@ type Backend interface {
 	// Put stores data under key atomically. Existing keys are overwritten.
 	Put(ctx context.Context, key string, data []byte) error
 	Get(ctx context.Context, key string) ([]byte, error)
+	// GetRange reads length bytes of an object starting at offset (used to
+	// read one chunk out of a pack). Reading past the end is an error.
+	GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error)
 	// Open streams an object; used for large foreign objects during import.
 	Open(ctx context.Context, key string) (io.ReadCloser, error)
 	Stat(ctx context.Context, key string) (ObjectInfo, error)

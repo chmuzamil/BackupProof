@@ -187,7 +187,7 @@ func withSettings(s transfer.Settings) context.Context {
 func TestParallelRestoreMatchesSequential(t *testing.T) {
 	fastRetries(t)
 	fs := newFakeStore(t)
-	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	r, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), testParams, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestParallelRestoreMatchesSequential(t *testing.T) {
 // and identical to reading one chunk at a time; repeated chunks are fetched once.
 func TestFetcherStreamOrderAndDedup(t *testing.T) {
 	fs := newFakeStore(t)
-	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	r, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), testParams, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestRestoreFailsOnBadChunk(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			fastRetries(t)
 			fs := newFakeStore(t)
-			r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+			r, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), testParams, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -348,7 +348,7 @@ func TestRestoreFailsOnBadChunk(t *testing.T) {
 // Stopping a restore part way leaves no goroutines behind.
 func TestCancelLeavesNoGoroutines(t *testing.T) {
 	fs := newFakeStore(t)
-	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	r, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), testParams, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestCancelLeavesNoGoroutines(t *testing.T) {
 // The download speed limit holds for all workers together.
 func TestSpeedLimitIsGlobal(t *testing.T) {
 	fs := newFakeStore(t)
-	r0, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	r0, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), testParams, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestSpeedLimitIsGlobal(t *testing.T) {
 func TestFailedUploadWritesNoSnapshot(t *testing.T) {
 	fastRetries(t)
 	fs := newFakeStore(t)
-	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	r, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), testParams, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func TestFailedUploadWritesNoSnapshot(t *testing.T) {
 // chunk, in parallel.
 func TestParallelBackupUploads(t *testing.T) {
 	fs := newFakeStore(t)
-	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	r, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), testParams, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +449,7 @@ func BenchmarkRestoreLatency(b *testing.B) {
 	params := chunker.Params{Min: 2 << 20, Avg: 4 << 20, Max: 8 << 20}
 	local, _ := backend.NewLocal(filepath.Join(b.TempDir(), "repo"))
 	fs := &fakeStore{Backend: local, busy: map[string]int{}, drops: map[string]int{}, corrupt: map[string]bool{}}
-	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), params)
+	r, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), params, 1)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -486,7 +486,7 @@ func TestCheckSeparatesUnreadableFromDamaged(t *testing.T) {
 	UnreadablePause = time.Millisecond
 	t.Cleanup(func() { UnreadablePause = oldPause })
 	fs := newFakeStore(t)
-	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	r, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), testParams, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +565,7 @@ func TestRestoreWaitsForUnreadableChunk(t *testing.T) {
 	UnreadablePauses = []time.Duration{time.Millisecond, time.Millisecond}
 	t.Cleanup(func() { UnreadablePauses = oldPauses })
 	fs := newFakeStore(t)
-	r, err := repo.Init(context.Background(), fs, []byte("correct horse battery"), testParams)
+	r, err := repo.InitVersion(context.Background(), fs, []byte("correct horse battery"), testParams, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

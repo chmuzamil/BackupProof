@@ -129,22 +129,35 @@ func TestTamperedBlobDetected(t *testing.T) {
 			writeTree(t, src)
 			s := backup(t, r, src, nil)
 
-			// Flip one byte in one stored data blob of the kind under test.
-			var victim string
-			r.Backend().List(ctx, "data/", func(o backend.ObjectInfo) error {
-				name := o.Key[strings.LastIndex(o.Key, "/")+1:]
-				if victim == "" && slices.Contains(s.Manifest, name) == tc.fileList {
-					victim = o.Key
+			// Flip one byte in one stored blob of the kind under test: in
+			// the middle of it inside its pack.
+			stored, err := r.StoredBlobs(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var victim bpcrypto.ID
+			found := false
+			for id := range stored {
+				if !found && slices.Contains(s.Manifest, id.String()) == tc.fileList {
+					victim, found = id, true
 				}
-				return nil
-			})
-			if victim == "" {
+			}
+			if !found {
 				t.Fatal("no blob of this kind to damage")
 			}
-			p := filepath.Join(dir, "repo", filepath.FromSlash(victim))
-			b, _ := os.ReadFile(p)
-			b[len(b)/2] ^= 0xff
-			os.WriteFile(p, b, 0o600)
+			files, _ := r.ReadIndexes(ctx)
+			for _, f := range files {
+				for _, p := range f.Packs {
+					for _, b := range p.Blobs {
+						if b.ID == victim {
+							path := filepath.Join(dir, "repo", filepath.FromSlash(repo.PackKey(p.ID)))
+							data, _ := os.ReadFile(path)
+							data[b.Off+b.Len/2] ^= 0xff
+							os.WriteFile(path, data, 0o600)
+						}
+					}
+				}
+			}
 
 			res, err := Check(ctx, r, CheckOptions{ReadDataPercent: 100})
 			if err != nil {

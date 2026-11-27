@@ -51,6 +51,8 @@ Standalone (no server needed):
   backupproof check     --repo REPO [--read-data PERCENT]
   backupproof forget    --repo REPO --source NAME [--keep-last N --keep-daily N ...] [--prune]
   backupproof key-add   --repo REPO            add another password slot (break-glass key)
+  backupproof upgrade   --repo REPO            move storage to format v2 (packs and an index);
+                       every server using it then needs 0.4 or later. init --format 1 makes v1 storage
   backupproof import    --repo REPO --from LOCATION --name NAME [--format files|restic|kopia|borg]
                        [--restic-env /etc/restic/env --restic-password-file /etc/restic/password]
                        [--decrypt auto|none|gpg|openssl|age] [--unpack] [--group auto|day|folder|file|all]
@@ -112,6 +114,8 @@ func main() {
 		err = cmdAgent(ctx, args)
 	case "init":
 		err = cmdInit(ctx, args)
+	case "upgrade":
+		err = cmdUpgrade(ctx, args)
 	case "backup":
 		err = cmdBackup(ctx, args)
 	case "drill":
@@ -395,6 +399,7 @@ func cmdAgent(ctx context.Context, args []string) error {
 func cmdInit(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
+	format := fs.Int("format", repo.DefaultVersion, "storage format: 2, or 1 if agents older than 0.4 must use it")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -406,13 +411,37 @@ func cmdInit(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	r, err := repo.Init(ctx, be, pw, chunker.DefaultParams)
+	r, err := repo.InitVersion(ctx, be, pw, chunker.DefaultParams, *format)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
 	fmt.Printf("created repository %s at %s\n", r.Config().ID, be.Location())
 	fmt.Println("IMPORTANT: store the password offline. Without it no one — including you — can restore.")
+	return nil
+}
+
+// cmdUpgrade moves storage to the newest format (v2: packs and an index).
+func cmdUpgrade(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("upgrade", flag.ExitOnError)
+	repoURL := fs.String("repo", os.Getenv("BP_REPO"), "repository")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	r, _, err := openRepo(ctx, *repoURL)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	if v := r.Config().Version; v >= repo.FormatVersion {
+		fmt.Printf("this storage already uses format v%d, the newest\n", v)
+		return nil
+	}
+	fmt.Println("Upgrading to format v2. Every server that uses this storage must run BackupProof 0.4 or later afterwards.")
+	if err := r.Upgrade(ctx, func(f string, a ...any) { fmt.Printf(f+"\n", a...) }); err != nil {
+		return err
+	}
+	fmt.Println("Done. Existing backups stay where they are; new backups are packed.")
 	return nil
 }
 

@@ -190,3 +190,27 @@ func (s *S3) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	}
 	return out.Body, nil
 }
+
+func (s *S3) GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error) {
+	if length <= 0 {
+		return nil, fmt.Errorf("reading %s: invalid length %d", key, length)
+	}
+	rng := fmt.Sprintf("bytes=%d-%d", offset, offset+length-1)
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.cfg.Bucket), Key: aws.String(s.key(key)), Range: aws.String(rng)}, noSDKRetry)
+	if err != nil {
+		var nsk *types.NoSuchKey
+		if errors.As(err, &nsk) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	defer out.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(out.Body, length+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) != length {
+		return nil, fmt.Errorf("reading %s: got %d bytes at %d, wanted %d", key, len(b), offset, length)
+	}
+	return b, nil
+}

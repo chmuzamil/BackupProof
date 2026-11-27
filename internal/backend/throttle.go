@@ -76,6 +76,14 @@ func (t *throttled) Get(ctx context.Context, key string) ([]byte, error) {
 	return b, err
 }
 
+func (t *throttled) GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error) {
+	b, err := t.Backend.GetRange(ctx, key, offset, length)
+	if err == nil {
+		err = t.down.wait(ctx, len(b))
+	}
+	return b, err
+}
+
 func (t *throttled) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	rc, err := t.Backend.Open(ctx, key)
 	if err != nil || t.down == nil {

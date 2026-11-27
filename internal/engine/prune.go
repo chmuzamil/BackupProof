@@ -29,6 +29,10 @@ type PruneResult struct {
 	KeptRecent   int   `json:"keptRecent"`
 	Marked       int   `json:"marked"`
 	Locked       int   `json:"locked"`
+	// Repacked and IndexFiles are for v2 storage: packs rewritten with only
+	// what is still needed, and index files folded into one.
+	Repacked   int `json:"repacked,omitempty"`
+	IndexFiles int `json:"indexFiles,omitempty"`
 }
 
 // Forget removes snapshot records. Data is reclaimed by Prune.
@@ -61,6 +65,9 @@ func Prune(ctx context.Context, r *repo.Repo, opts PruneOptions) (PruneResult, e
 	if len(errs) > 0 {
 		// Never delete data when we cannot see every reference.
 		return res, fmt.Errorf("refusing to prune: %d snapshot(s) unreadable: %s", len(errs), errs[0])
+	}
+	if r.Config().Version >= 2 {
+		return pruneV2(ctx, r, opts, refs)
 	}
 	stored, err := storedBlobs(ctx, r)
 	if err != nil {

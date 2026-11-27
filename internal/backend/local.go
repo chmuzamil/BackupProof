@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -138,4 +139,24 @@ func (l *Local) Open(_ context.Context, key string) (io.ReadCloser, error) {
 		return nil, ErrNotFound
 	}
 	return f, err
+}
+
+func (l *Local) GetRange(_ context.Context, key string, offset, length int64) ([]byte, error) {
+	p, err := l.path(key)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b := make([]byte, length)
+	if _, err := f.ReadAt(b, offset); err != nil {
+		return nil, fmt.Errorf("reading %d bytes at %d of %s: %w", length, offset, key, err)
+	}
+	return b, nil
 }

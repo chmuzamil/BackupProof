@@ -336,7 +336,7 @@ func (a *Agent) runCopy(ctx context.Context, env *ops.Env, lease *protocol.Lease
 	dst, err := repo.Open(ctx, be, []byte(c.Password))
 	if errors.Is(err, repo.ErrNotARepo) {
 		jl.Logf("initializing the second storage at %s", be.Location())
-		dst, err = repo.Init(ctx, be, []byte(c.Password), chunker.DefaultParams)
+		dst, err = repo.InitVersion(ctx, be, []byte(c.Password), chunker.DefaultParams, storageFormat(c.StorageFormat))
 	}
 	if err != nil {
 		be.Close()

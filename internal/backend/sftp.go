@@ -181,3 +181,23 @@ func (s *SFTP) Open(_ context.Context, key string) (io.ReadCloser, error) {
 	}
 	return f, err
 }
+
+func (s *SFTP) GetRange(_ context.Context, key string, offset, length int64) ([]byte, error) {
+	p, err := s.p(key)
+	if err != nil {
+		return nil, err
+	}
+	f, err := s.client.Open(p)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b := make([]byte, length)
+	if _, err := f.ReadAt(b, offset); err != nil {
+		return nil, fmt.Errorf("reading %d bytes at %d of %s: %w", length, offset, key, err)
+	}
+	return b, nil
+}
