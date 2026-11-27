@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-28
+
 ### Added
 
 - **App tests can follow redirects, including to HTTPS.** Turn on **Follow redirects** and each page asked for follows up to 5 redirects. The test has no network or certificates, so a redirect to `https://name/page` asks the app for `/page` again with `Host: name` and `X-Forwarded-Proto: https`, as a site behind an HTTPS proxy is asked; the redirects followed are recorded in the check. A server older than 0.6 can't follow them, so the dashboard won't save that setting for an item it tests.
