@@ -255,6 +255,8 @@ type SourceStatus struct {
 	Running          *Job      `json:"running"`
 	Recovery         Recovery  `json:"recovery"`
 	LastCopyTest     *ProofRow `json:"lastCopyTest,omitempty"`
+	// RestoreDownload is only filled in on the item's own page.
+	RestoreDownload *RestoreDownload `json:"restoreDownload,omitempty"`
 }
 
 func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int64]string) SourceStatus {
@@ -388,7 +390,9 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, rp := s.nameMaps()
-	writeJSON(w, 200, s.sourceStatus(*src, a, rp))
+	st := s.sourceStatus(*src, a, rp)
+	st.RestoreDownload = s.restoreDownload(*src, st.LastBackup, time.Now())
+	writeJSON(w, 200, st)
 }
 
 func (s *Server) handleSaveSource(w http.ResponseWriter, r *http.Request) {

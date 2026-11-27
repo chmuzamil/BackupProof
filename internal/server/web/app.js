@@ -1555,6 +1555,20 @@ async function pageRestore(id) {
 
 // ---------------------------------------------------------- item detail
 
+// downloadFacts says what each restore test downloads from storage, and what
+// that comes to a month where the provider charges for downloads.
+function downloadFacts(d) {
+  if (!d || d.charges === 'none') return null;
+  const month = d.testsPerMonth ? ` · about ${bytes(d.perMonthBytes)} a month at ${plural(d.testsPerMonth, 'test')}` : '';
+  const notes = {
+    charged: `${d.provider} charges for downloads. To pay less: test less often, run restore tests on a server in the same region as the storage, or keep backups on storage with free downloads such as Cloudflare R2.`,
+    free: `${d.provider} doesn’t charge for downloads.`,
+    'free-limited': `${d.provider} includes some downloads free; check your plan’s allowance.`,
+  };
+  return [h('dt', null, 'Each restore test downloads'),
+    h('dd', null, `about ${bytes(d.perTestBytes)} from ${d.provider}${month}`, notes[d.charges] ? h('span', { class: 'hint block' }, notes[d.charges]) : null)];
+}
+
 async function pageSource(id) {
   let st, jobs, proofs, repos, rec;
   try {
@@ -1597,6 +1611,7 @@ async function pageSource(id) {
       h('dt', null, 'Last restore test'),
       h('dd', null, drill ? [h('span', { class: drill.passed ? 'fact-ok' : 'fact-bad' }, drill.passed ? 'passed ' : 'failed '), timeEl(drill.created)] : 'not yet'),
       h('dt', null, 'Time to restore'), h('dd', null, rto != null ? durWords(rto) : '—'),
+      downloadFacts(st.restoreDownload),
       h('dt', null, isImp ? 'Converts' : 'Backs up'), h('dd', null, cronWords(src.backupCron), src.nextBackup && src.backupCron !== 'manual' ? [' (next ', timeEl(src.nextBackup), ')'] : ''),
       h('dt', null, 'Tests a restore'), h('dd', null, cronWords(src.drillCron), src.nextDrill ? [' (next ', timeEl(src.nextDrill), ')'] : ''),
       h('dt', null, 'Keeps'), h('dd', null, retentionWords(src.retention)),
