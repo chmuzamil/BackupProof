@@ -3,6 +3,8 @@
 package protocol
 
 import (
+	"time"
+
 	"github.com/chmuzamil/backupproof/internal/backend"
 	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/retention"
@@ -17,6 +19,19 @@ type EnrollRequest struct {
 	Version   string `json:"version"`
 	PublicKey string `json:"publicKey"` // bpkey1:... Ed25519 attestation key
 	Docker    bool   `json:"docker"`
+}
+
+// SessionRequest starts a short-lived agent session: Signature is the agent's
+// Ed25519 signature over server.AgentSessionMessage(agent ID, Time).
+type SessionRequest struct {
+	Time      int64  `json:"time"`
+	Signature []byte `json:"signature"`
+}
+
+// SessionResponse is the session token and when it stops working.
+type SessionResponse struct {
+	Token   string    `json:"token"`
+	Expires time.Time `json:"expires"`
 }
 
 type EnrollResponse struct {

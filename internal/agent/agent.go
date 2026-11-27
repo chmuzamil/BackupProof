@@ -8,6 +8,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -56,19 +57,81 @@ func LoadState(dir string) (*State, error) {
 
 type client struct {
 	base  string
-	token string
+	token string // the long-lived token: only used to start a session
 	http  *http.Client
+
+	// A short-lived session (0.5 on): started by proving this agent holds its
+	// signing key, so the long-lived token alone isn't enough.
+	agentID    int64
+	key        *proof.Key
+	mu         sync.Mutex
+	session    string
+	expires    time.Time
+	noSessions bool // the dashboard is older than 0.5
+}
+
+// renewBefore is how long before a session ends a new one is started.
+const renewBefore = 10 * time.Minute
+
+// authToken is the token to send: a live session, a new one, or the
+// long-lived token with a dashboard that has no sessions.
+func (c *client) authToken(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.key == nil || c.noSessions || c.token == "" {
+		return c.token, nil
+	}
+	if c.session != "" && time.Until(c.expires) > renewBefore {
+		return c.session, nil
+	}
+	at := time.Now().Unix()
+	req := protocol.SessionRequest{Time: at, Signature: ed25519.Sign(c.key.Private, sessionMessage(c.agentID, at))}
+	var resp protocol.SessionResponse
+	code, err := c.raw(ctx, "/api/agent/session", c.token, req, &resp)
+	switch {
+	case code == http.StatusNotFound || code == http.StatusMethodNotAllowed:
+		c.noSessions = true // an older dashboard
+		return c.token, nil
+	case err != nil:
+		return "", err
+	}
+	c.session, c.expires = resp.Token, resp.Expires
+	return c.session, nil
+}
+
+// sessionMessage is what the dashboard expects signed (server.AgentSessionMessage).
+func sessionMessage(agentID, at int64) []byte {
+	return []byte(fmt.Sprintf("backupproof-agent-session/v1\n%d\n%d\n", agentID, at))
 }
 
 func (c *client) post(ctx context.Context, path string, in, out any) (int, error) {
+	tok, err := c.authToken(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("starting a session with the dashboard: %w", err)
+	}
+	code, err := c.raw(ctx, path, tok, in, out)
+	if code == http.StatusUnauthorized && tok != c.token {
+		// The session ended early (the dashboard restarted its records, or
+		// the clock jumped): start a new one and try once more.
+		c.mu.Lock()
+		c.session = ""
+		c.mu.Unlock()
+		if tok, err = c.authToken(ctx); err == nil {
+			code, err = c.raw(ctx, path, tok, in, out)
+		}
+	}
+	return code, err
+}
+
+func (c *client) raw(ctx context.Context, path, token string, in, out any) (int, error) {
 	b, _ := json.Marshal(in)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(b))
 	if err != nil {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -180,7 +243,7 @@ func New(dir string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{dir: dir, st: st, key: key, c: &client{base: st.Server, token: st.Token, http: &http.Client{Timeout: 60 * time.Second}}}, nil
+	return &Agent{dir: dir, st: st, key: key, c: &client{base: st.Server, token: st.Token, http: &http.Client{Timeout: 60 * time.Second}, agentID: st.AgentID, key: key}}, nil
 }
 
 // storageFormat is the format to create storage in: what the dashboard asked

@@ -24,7 +24,7 @@ What happens next:
 Anything that breaks what BackupProof promises, for example:
 
 - reading or changing backup data without the storage password;
-- a proof, evidence pack or timestamp that verifies when it shouldn't;
+- a proof, evidence pack, timestamp or transparency-log checkpoint that verifies when it shouldn't, or a witness that cosigns a checkpoint that doesn't extend the last one it saw;
 - a restore test that passes when the backup can't be restored;
 - a restore writing outside its target folder;
 - a restored backup, or an app test, reaching the server it runs on;

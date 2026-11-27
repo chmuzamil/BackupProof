@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/chmuzamil/backupproof/internal/drill"
@@ -21,10 +20,12 @@ type agentCtxKey struct{}
 
 func (s *Server) agentAuth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		a, err := s.store.AgentByToken(tok)
-		if tok == "" || err != nil {
-			writeErr(w, http.StatusUnauthorized, errors.New("unknown or revoked agent"))
+		a, err := s.agentFromRequest(r)
+		if err != nil {
+			if !errors.Is(err, errSessionsOnly) {
+				err = errors.New("unknown or revoked agent")
+			}
+			writeErr(w, http.StatusUnauthorized, err)
 			return
 		}
 		h(w, r.WithContext(context.WithValue(r.Context(), agentCtxKey{}, a)))
@@ -35,6 +36,7 @@ func agentFrom(r *http.Request) *Agent { return r.Context().Value(agentCtxKey{})
 
 func (s *Server) agentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/enroll", s.handleEnroll)
+	mux.HandleFunc("POST /api/agent/session", s.handleAgentSession)
 	mux.HandleFunc("POST /api/agent/poll", s.agentAuth(s.handlePoll))
 	mux.HandleFunc("POST /api/agent/jobs/{id}/log", s.agentAuth(s.handleJobLog))
 	mux.HandleFunc("POST /api/agent/jobs/{id}/attest", s.agentAuth(s.handleAttest))

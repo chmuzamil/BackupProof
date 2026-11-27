@@ -81,7 +81,7 @@ func OpenStore(dataDir string, secret []byte) (*Store, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	// Additive migrations for databases created by older versions.
-	for _, m := range append(append([]string{"ALTER TABLE agents ADD COLUMN inventory TEXT"}, accountMigrations...), append(append(append(storageMigrations, limitMigrations...), restoreMigrations...), recoveryMigrations...)...) {
+	for _, m := range append(append([]string{"ALTER TABLE agents ADD COLUMN inventory TEXT"}, append(accountMigrations, agentSessionMigrations...)...), append(append(append(storageMigrations, limitMigrations...), restoreMigrations...), recoveryMigrations...)...) {
 		// "duplicate column" on up-to-date databases is expected.
 		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
@@ -555,6 +555,7 @@ func (s *Store) RemoveAgent(id int64) ([]string, error) {
 
 func (s *Store) RevokeAgent(id int64) error {
 	_, err := s.db.Exec("UPDATE agents SET revoked=1 WHERE id=?", id)
+	s.EndAgentSessions(id)
 	return err
 }
 

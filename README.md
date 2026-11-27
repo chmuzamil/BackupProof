@@ -391,7 +391,8 @@ Cloud storage sometimes refuses a request for a while (HTTP 500 or 503). BackupP
 ## Security model
 
 - **Secrets at rest.** Repository passwords, storage and database credentials are encrypted in the dashboard database with a 256-bit key (`secret.key` or `BP_SECRET_KEY`). They are sent only to the agent holding the job lease.
-- **Agents.** Each agent has its own Ed25519 attestation key and a bearer token, stored hashed. The server checks every attestation's signature against the enrolled key, and that it describes the leased job's item, before ledgering it.
+- **Agents.** Each agent has its own Ed25519 attestation key and a long-lived token, stored hashed. From 0.5 an agent signs a challenge with its key to get a one-hour session, and after its first session the long-lived token alone is refused, so a stolen token is useless without the key. The server checks every attestation's signature against the enrolled key, and that it describes the leased job's item, before ledgering it.
+- **Transparency log and witnesses.** The ledger is published as a C2SP transparency log (`/log/`, private unless you make it public; it holds only entry hashes). Witnesses you run elsewhere with `backupproof witness` cosign each checkpoint only if it extends the last one they saw, so the dashboard can't rewrite or fork its history without them refusing. `backupproof proof verify-log` checks the signatures, cosignatures, consistency with an earlier checkpoint, and that a proof is in the log.
 - **Accounts.** Argon2id password hashes, HttpOnly `SameSite=Strict` session cookies and CSRF tokens, optional two-factor sign-in (TOTP, with one-time recovery codes; a code can't be used twice). Changing a password needs the current one. Roles are admin, operator and auditor (read-only plus evidence). Anything that could give control of a server or show the contents of backed-up files is admin-only: restores, browsing and downloading backups, adding storage and choosing second copies, commands and hooks, custom restore-test commands, moving an item to another server, connecting servers, on-the-fly rclone remotes and previewing old backups. Every action, including sign-ins, is written to the same ledger as the proofs and shown on the Activity page.
 - **API tokens.** Stored hashed, shown once, optionally expiring; a token never has more rights than its owner and can't manage people, tokens or two-factor sign-in.
 - **Restores and copies.** Only backups with a signed proof for that item can be browsed, downloaded, restored or copied, and each is checked against the content root in that proof. A second copy is accepted only if its content root equals the original's. Restores never write into the dashboard's own data folder, and an in-place restore never follows a folder that is a symbolic link on disk (except root's own), so a link planted after the backup can't redirect it.
@@ -428,7 +429,6 @@ What BackupProof doesn't do yet, or does with a limit worth knowing:
 
 ## Roadmap
 
-- **0.5:** short-lived agent identities (mTLS), transparency-log (C2SP tlog-tiles) checkpoints co-signed by outside witnesses, and an easier way for an auditor to check proofs without an account
 - Later, as people ask: PostgreSQL point-in-time recovery and MySQL physical backups, MSSQL and Redis, Object Lock retention extension during maintenance, Kubernetes volumes, Windows VSS snapshots, single sign-on (OIDC/LDAP)
 
 ## Contributing
