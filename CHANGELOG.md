@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **App tests can follow redirects, including to HTTPS.** Turn on **Follow redirects** and each page asked for follows up to 5 redirects. The test has no network or certificates, so a redirect to `https://name/page` asks the app for `/page` again with `Host: name` and `X-Forwarded-Proto: https`, as a site behind an HTTPS proxy is asked; the redirects followed are recorded in the check. A server older than 0.6 can't follow them, so the dashboard won't save that setting for an item it tests.
+- **WordPress template, version 3,** with options on the form: the sign-in page (for a site whose security plugin moved it; the admin-area check is then left out), whether to check the site's API (for a site that turns its REST API off), and following redirects to HTTPS (on by default). A new CI job builds real WordPress sites in Docker in four setups (plain, sign-in moved by WPS Hide Login, REST API off, HTTPS forced) and checks the template passes each with the right option and fails each without it, rather than passing a site it can't really check.
+- **[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)** and **[docs/AUDIT-SCOPE.md](docs/AUDIT-SCOPE.md):** what encryption, the storage format, the proof chain, the agent API and witnesses defend against and the risks that remain, and a scope for an outside security review.
 - **Check a proof in the browser** at backupproof.dev/verify/. The proof verifier, compiled to WebAssembly (`backupproof-verify.wasm`, a new release file listed in the signed `SHA256SUMS`), checks a bundle on the visitor's own computer; the page can't send it anywhere. CI runs it on every proof any release has made and requires the same report as `backupproof proof verify`, and rejects tampered copies. `sh scripts/verify-build.sh <tag> js/wasm` rebuilds it byte for byte.
 
 ## [0.5.1] - 2026-11-27

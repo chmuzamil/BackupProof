@@ -40,6 +40,12 @@ administrator; and problems in a Docker image or app you chose for an app test.
 
 Fixes go into the newest release. Upgrade to it; there are no backports.
 
+## Threat model and audits
+
+[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) describes what BackupProof defends
+against and the risks that remain. If you're reviewing BackupProof's security,
+[docs/AUDIT-SCOPE.md](docs/AUDIT-SCOPE.md) sets out priorities and what you get.
+
 ## Checking what you run
 
 - Releases are signed: see [docs/SIGNING.md](docs/SIGNING.md).
@@ -47,3 +53,6 @@ Fixes go into the newest release. Upgrade to it; there are no backports.
   release from its source and checks it matches, byte for byte.
 - Each release has a software bill of materials (`sbom.spdx.json`) and GitHub
   build provenance: `gh attestation verify <file> -R chmuzamil/BackupProof`.
+- Check a proof without installing anything at
+  [backupproof.dev/verify/](https://backupproof.dev/verify/): the release's own
+  verifier, compiled to WebAssembly, runs in your browser and sends nothing.

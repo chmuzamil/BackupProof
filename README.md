@@ -257,9 +257,11 @@ A restore test proves the data came back. Turn on the app test under **Edit (adv
 - The same dropped capabilities, no-new-privileges, memory, CPU and process limits as the database restore tests. Containers are always removed afterwards, whether the test passed, failed, timed out or was cancelled.
 - Secrets are never stored in the item. Set them on the server that runs the test as variables starting with `BP_APPTEST_` (for example in the agent's systemd unit), and refer to one with `WORDPRESS_DB_PASSWORD=$BP_APPTEST_WP_DB_PASSWORD`. Response bodies and container logs are never kept in a proof.
 
+**Following redirects.** Turn on **Follow redirects, including to HTTPS** and each page asked for follows up to 5 redirects. The test has no network or certificates, so a redirect to `https://name/page` asks the app for `/page` again with `Host: name` and `X-Forwarded-Proto: https`, as a site behind an HTTPS proxy is asked. The redirects followed are recorded in the check.
+
 Results appear as ordinary checks in the signed proof, named `app-sandbox-start`, `app-running`, `app-database-running`, `app-http-status`, `app-body-text`, `app-response-time` and, if the server runs short of disk, `app-disk-space`. If they fail, only the app test has failed: the backup still counts as restore-tested, the item says the app didn't come back up, and you get a separate **App test failed** alert. An agent too old to know about the app test ignores it, so the item page says it didn't run.
 
-**Templates** fill in the form, and you see everything they'll run before saving: **WordPress (Docker)** and **Any web app**. A template can only fill in the fields above, so it can't give an app more access, and it never holds secrets. Its name and version are recorded in the proof. When BackupProof recognises WordPress in a Docker backup, it offers the template with the images and paths filled in.
+**Templates** fill in the form, and you see everything they'll run before saving: **WordPress (Docker)**, **n8n (Docker)** and **Any web app**. The WordPress template has options for a sign-in page moved by a security plugin, a site with its REST API off, and a site that forces HTTPS; CI tests it against real WordPress in each of those setups. A template can only fill in the fields above, so it can't give an app more access, and it never holds secrets. Its name and version are recorded in the proof. When BackupProof recognises WordPress in a Docker backup, it offers the template with the images and paths filled in.
 
 ## Recovery plan
 
@@ -423,6 +425,8 @@ What BackupProof doesn't do yet, or does with a limit worth knowing:
 - [Compatibility](docs/COMPATIBILITY.md): which old proofs and storage keep working, and how CI checks it
 - [Release signing](docs/SIGNING.md): verifying downloads, rebuilding a release yourself, and how the signing key is kept and replaced
 - [Security policy](SECURITY.md): how to report a vulnerability
+- [Threat model](docs/THREAT-MODEL.md): what encryption, the storage format, the proof chain, the agent API and witnesses defend against, and what they don't
+- [Audit scope](docs/AUDIT-SCOPE.md): for a security review: priorities, what's out of scope, what you get
 - [Example item settings](examples/): PostgreSQL, MySQL in Docker, WordPress, SQLite, MongoDB, Docker Compose apps
 - [Research notes](docs/RESEARCH.md): market and technical research behind the design
 - [Changelog](CHANGELOG.md)
