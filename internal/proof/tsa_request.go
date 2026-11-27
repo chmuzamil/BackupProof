@@ -74,4 +74,3 @@ func requestOne(ctx context.Context, url string, req, data []byte) (*Timestamp, 
 	}
 	return &Timestamp{TSA: url, Time: ts.Time, Token: base64.StdEncoding.EncodeToString(ts.RawToken)}, nil
 }
-
