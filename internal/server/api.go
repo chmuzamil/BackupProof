@@ -103,6 +103,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dashboard", s.auth("auditor", s.handleDashboard))
 
 	mux.HandleFunc("GET /api/app-templates", s.auth("operator", s.handleAppTemplates))
+	mux.HandleFunc("POST /api/app-templates/{name}/apply", s.auth("operator", s.handleApplyAppTemplate))
 	mux.HandleFunc("GET /api/sources", s.auth("auditor", s.handleListSources))
 	mux.HandleFunc("POST /api/sources", s.auth("operator", s.handleSaveSource))
 	mux.HandleFunc("GET /api/sources/{id}", s.auth("auditor", s.handleGetSource))
@@ -454,6 +455,18 @@ func (s *Server) handleSaveSource(w http.ResponseWriter, r *http.Request) {
 	if at := src.Spec.Drill.AppTest; at != nil && at.Template != "" && !discover.KnownTemplate(at.Template, at.TemplateVersion) {
 		writeErr(w, 400, errors.New("the app test names a template this dashboard doesn't have"))
 		return
+	}
+	// Agents older than 0.6 ignore followRedirects and would report the
+	// redirect as a failure of the app.
+	if at := src.Spec.Drill.AppTest; at != nil && at.FollowRedirects {
+		tester := src.AgentID
+		if src.VerifierID != nil {
+			tester = *src.VerifierID
+		}
+		if a, err := s.store.Agent(tester); err == nil && a.Version != "" && !agentAtLeast(a.Version, 0, 6) {
+			writeErr(w, 400, fmt.Errorf("the server %s runs the restore test and is older than 0.6, so it can't follow redirects: update it first, or turn off following redirects", a.Name))
+			return
+		}
 	}
 	// Secrets arriving in the spec are moved to the encrypted secret column.
 	sec := req.Secret
@@ -1030,6 +1043,27 @@ func (s *Server) handlePutServerSettings(w http.ResponseWriter, r *http.Request)
 // show exactly what each one fills in.
 func (s *Server) handleAppTemplates(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, discover.Templates())
+}
+
+// handleApplyAppTemplate gives a template's app test for the options chosen
+// on the form. It only computes the values: nothing is saved.
+func (s *Server) handleApplyAppTemplate(w http.ResponseWriter, r *http.Request) {
+	t, ok := discover.FindTemplate(r.PathValue("name"))
+	if !ok {
+		writeErr(w, 404, errors.New("no such template"))
+		return
+	}
+	var opts map[string]string
+	if err := readJSON(r, &opts); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	at, err := t.Apply(opts)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, at)
 }
 
 // humanDur renders durations the way people say them.

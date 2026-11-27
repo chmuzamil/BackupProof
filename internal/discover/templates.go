@@ -1,6 +1,7 @@
 package discover
 
 import (
+	"fmt"
 	"path"
 	"strings"
 
@@ -28,49 +29,74 @@ type AppTemplate struct {
 	ExpectPaths []string `json:"expectPaths,omitempty"`
 	// Needs lists what the person must do or check before relying on it.
 	Needs []string `json:"needs,omitempty"`
+	// Options are choices the form shows for this template; Apply turns
+	// them into the app test. Test is what Apply gives for the defaults.
+	Options []TemplateOption `json:"options,omitempty"`
+
+	build func(opts map[string]string) source.AppTest
+}
+
+// TemplateOption is one choice a template offers, such as where a site's
+// sign-in page is.
+type TemplateOption struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Hint  string `json:"hint,omitempty"`
+	// Kind is "path" (a page on the app, starting with /) or "switch"
+	// ("on" or "off").
+	Kind    string `json:"kind"`
+	Default string `json:"default"`
+}
+
+// Apply returns the template's app test for the given options; options left
+// out take their defaults.
+func (t AppTemplate) Apply(opts map[string]string) (source.AppTest, error) {
+	if t.build == nil {
+		if len(opts) > 0 {
+			return source.AppTest{}, fmt.Errorf("the %s template has no options", t.Name)
+		}
+		return t.Test, nil
+	}
+	values := map[string]string{}
+	for _, o := range t.Options {
+		v, given := opts[o.Key]
+		if !given {
+			v = o.Default
+		}
+		switch o.Kind {
+		case "path":
+			if !strings.HasPrefix(v, "/") || strings.ContainsAny(v, " \t\r\n#") || len(v) > 200 {
+				return source.AppTest{}, fmt.Errorf("%s: a page on the site, starting with /", o.Label)
+			}
+		case "switch":
+			if v != "on" && v != "off" {
+				return source.AppTest{}, fmt.Errorf("%s: on or off", o.Label)
+			}
+		}
+		values[o.Key] = v
+	}
+	for k := range opts {
+		if _, ok := values[k]; !ok {
+			return source.AppTest{}, fmt.Errorf("the %s template has no option %q", t.Name, k)
+		}
+	}
+	return t.build(values), nil
+}
+
+// FindTemplate returns the built-in template with that name.
+func FindTemplate(name string) (AppTemplate, bool) {
+	for _, t := range Templates() {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return AppTemplate{}, false
 }
 
 // Templates returns the built-in templates. Each call makes fresh values.
 func Templates() []AppTemplate {
 	return []AppTemplate{
-		{
-			Name: "wordpress", Version: 2, Title: "WordPress (Docker)",
-			Summary: "The official WordPress image with its restored files read-only, and MariaDB or MySQL beside it on a throwaway copy of its restored database files. Passes when the sign-in page loads, the admin area asks for a sign-in, and the site's API answers from the restored database.",
-			Kinds:   []string{"docker"},
-			Test: source.AppTest{
-				Template: "wordpress", TemplateVersion: 2,
-				App: source.AppContainer{
-					Image:  "wordpress:6-apache",
-					Mounts: []source.AppDataMount{{To: "/var/www/html"}},
-					Env: []source.AppEnv{
-						{Name: "WORDPRESS_DB_HOST", Value: "127.0.0.1"},
-						{Name: "WORDPRESS_DB_NAME", Value: "wordpress"},
-						{Name: "WORDPRESS_DB_USER", Value: "wordpress"},
-						{Name: "WORDPRESS_DB_PASSWORD", SecretEnv: source.AppTestSecretPrefix + "WORDPRESS_DB_PASSWORD"},
-					},
-				},
-				Database: &source.AppContainer{
-					Image:  "mariadb:11",
-					Mounts: []source.AppDataMount{{To: "/var/lib/mysql", Writable: true}},
-				},
-				Port: 80, Path: "/wp-login.php", ExpectStatus: 200, ExpectText: "wp-submit", StartTimeoutSecs: 180,
-				Checks: []source.AppCheck{
-					// The admin area sends visitors to sign in: WordPress and its sessions work.
-					{Name: "Admin asks for a sign-in", Path: "/wp-admin/", ExpectStatus: 302},
-					// The REST API index is built from the restored options table.
-					// rest_route works with and without pretty permalinks.
-					{Name: "Site API answers from the database", Path: "/?rest_route=/", ExpectStatus: 200, ExpectText: "namespaces"},
-				},
-			},
-			ExpectPaths: []string{"wp-includes/version.php", "wp-config.php"},
-			Needs: []string{
-				"Set " + source.AppTestSecretPrefix + "WORDPRESS_DB_PASSWORD on the server that runs the restore test, to the site's database password.",
-				"Use the database and WordPress versions your site runs. A Docker backup must stop the containers so the database files are consistent.",
-				"Correct the database name and user if yours differ.",
-				"A site that forces HTTPS for logins redirects instead: expect status 302 and remove the expected text.",
-				"To check uploaded media came back, add a check for a file you know exists, such as /wp-content/uploads/2025/01/logo.png.",
-			},
-		},
+		wordpressTemplate(),
 		{
 			Name: "n8n", Version: 1, Title: "n8n (Docker)",
 			Summary: "The official n8n image on a throwaway copy of its restored data folder, which holds its SQLite database, settings and encryption key. Passes when n8n has opened its restored database and its editor loads.",
@@ -188,4 +214,68 @@ func backupPath(mounts []mountFacts, destination string) string {
 		}
 	}
 	return ""
+}
+
+// wordpressTemplate is WordPress in Docker. Version 3 added its options and
+// follows redirects, including to HTTPS.
+func wordpressTemplate() AppTemplate {
+	t := AppTemplate{
+		Name: "wordpress", Version: 3, Title: "WordPress (Docker)",
+		Summary: "The official WordPress image with its restored files read-only, and MariaDB or MySQL beside it on a throwaway copy of its restored database files. Passes when the sign-in page loads, the admin area asks for a sign-in, and the site's API answers from the restored database.",
+		Kinds:   []string{"docker"},
+		Options: []TemplateOption{
+			{Key: "loginPath", Label: "Sign-in page", Kind: "path", Default: "/wp-login.php",
+				Hint: "Change it if a security plugin moved the sign-in page, for example to /secret-login/. The admin-area check is then left out: those plugins hide the admin area from visitors."},
+			{Key: "restCheck", Label: "Check the site's API", Kind: "switch", Default: "on",
+				Hint: "Turn it off if the site turns off its REST API for visitors."},
+			{Key: "followHttps", Label: "Follow redirects, including to HTTPS", Kind: "switch", Default: "on",
+				Hint: "For a site that sends visitors to HTTPS. The test has no network or certificates, so it asks the restored site again as a site behind an HTTPS proxy is asked (X-Forwarded-Proto: https), which the official image's wp-config.php understands."},
+		},
+		ExpectPaths: []string{"wp-includes/version.php", "wp-config.php"},
+		Needs: []string{
+			"Set " + source.AppTestSecretPrefix + "WORDPRESS_DB_PASSWORD on the server that runs the restore test, to the site's database password.",
+			"Use the database and WordPress versions your site runs. A Docker backup must stop the containers so the database files are consistent.",
+			"Correct the database name and user if yours differ.",
+			"A site that forces HTTPS and whose wp-config.php doesn't trust X-Forwarded-Proto keeps redirecting, and the test says so.",
+			"To check uploaded media came back, add a check for a file you know exists, such as /wp-content/uploads/2025/01/logo.png.",
+		},
+	}
+	t.build = func(o map[string]string) source.AppTest {
+		follow := o["followHttps"] == "on"
+		at := source.AppTest{
+			Template: "wordpress", TemplateVersion: 3,
+			App: source.AppContainer{
+				Image:  "wordpress:6-apache",
+				Mounts: []source.AppDataMount{{To: "/var/www/html"}},
+				Env: []source.AppEnv{
+					{Name: "WORDPRESS_DB_HOST", Value: "127.0.0.1"},
+					{Name: "WORDPRESS_DB_NAME", Value: "wordpress"},
+					{Name: "WORDPRESS_DB_USER", Value: "wordpress"},
+					{Name: "WORDPRESS_DB_PASSWORD", SecretEnv: source.AppTestSecretPrefix + "WORDPRESS_DB_PASSWORD"},
+				},
+			},
+			Database: &source.AppContainer{
+				Image:  "mariadb:11",
+				Mounts: []source.AppDataMount{{To: "/var/lib/mysql", Writable: true}},
+			},
+			Port: 80, Path: o["loginPath"], ExpectStatus: 200, ExpectText: "wp-submit", StartTimeoutSecs: 180,
+			FollowRedirects: follow,
+		}
+		if o["loginPath"] == "/wp-login.php" {
+			// The admin area sends visitors to sign in: WordPress and its sessions work.
+			admin := source.AppCheck{Name: "Admin asks for a sign-in", Path: "/wp-admin/", ExpectStatus: 302}
+			if follow {
+				admin = source.AppCheck{Name: "Admin asks for a sign-in", Path: "/wp-admin/", ExpectStatus: 200, ExpectText: "wp-submit"}
+			}
+			at.Checks = append(at.Checks, admin)
+		}
+		if o["restCheck"] == "on" {
+			// The REST API index is built from the restored options table.
+			// rest_route works with and without pretty permalinks.
+			at.Checks = append(at.Checks, source.AppCheck{Name: "Site API answers from the database", Path: "/?rest_route=/", ExpectStatus: 200, ExpectText: "namespaces"})
+		}
+		return at
+	}
+	t.Test, _ = t.Apply(nil)
+	return t
 }

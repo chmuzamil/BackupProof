@@ -3504,6 +3504,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
     path: input({ name: 'app-path', code: true, value: at.path || '', placeholder: '/…' }),
     status: input({ name: 'app-status', type: 'number', inputmode: 'numeric', min: 100, max: 599, value: at.expectStatus || '', placeholder: '200…' }),
     host: input({ name: 'app-host', code: true, value: at.host || '', autocomplete: 'off', placeholder: 'www.example.com…' }),
+    follow: checkbox('Follow redirects, including to HTTPS', !!at.followRedirects, 'Up to 5. The test has no network or certificates, so a redirect to https://name/page asks the app for /page again with that name and X-Forwarded-Proto: https, as a site behind an HTTPS proxy is asked.'),
     text: input({ name: 'app-text', value: at.expectText || '', autocomplete: 'off' }),
     maxMs: input({ name: 'app-max-ms', type: 'number', inputmode: 'numeric', min: 0, max: 60000, value: at.maxResponseMs || '' }),
     start: input({ name: 'app-start', type: 'number', inputmode: 'numeric', min: 0, max: 900, value: at.startTimeoutSecs || '', placeholder: '120…' }),
@@ -3530,6 +3531,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
     f.path.value = test.path || '';
     f.status.value = test.expectStatus || '';
     f.host.value = test.host || '';
+    f.follow.cb.checked = !!test.followRedirects;
     f.text.value = test.expectText || '';
     f.maxMs.value = test.maxResponseMs || '';
     f.start.value = test.startTimeoutSecs || '';
@@ -3542,9 +3544,44 @@ function appTestSection(initial, templates, hint, expectPaths) {
       const have = lines(expectPaths.value);
       expectPaths.value = [...have, ...t.expectPaths.map((p) => `${found.appFrom}/${p}`).filter((p) => !have.includes(p))].join('\n');
     }
-    fill(tplNote, h('p', { class: 'hint' }, t.summary), t.needs && t.needs.length ? h('ul', { class: 'hint' }, t.needs.map((n) => h('li', null, n))) : null,
+    fill(tplNote, h('p', { class: 'hint' }, t.summary), templateOptions(t), t.needs && t.needs.length ? h('ul', { class: 'hint' }, t.needs.map((n) => h('li', null, n))) : null,
       found.appFrom ? h('p', { class: 'hint' }, `Filled in from what was found on this server: ${found.appImage}${found.databaseImage ? `, ${found.databaseImage}` : ''}.`) : null);
     sync();
+  };
+  // A template's options re-fill what to check from the dashboard, which
+  // applies them exactly as the tests do. The app, its data and settings
+  // stay as they are.
+  const optValues = {};
+  const templateOptions = (t) => {
+    if (!t.options || !t.options.length) return null;
+    for (const k of Object.keys(optValues)) delete optValues[k];
+    const msg = h('p', { class: 'hint', role: 'status' });
+    const reapply = async () => {
+      try {
+        const test = await api(`/app-templates/${encodeURIComponent(t.name)}/apply`, { method: 'POST', body: optValues });
+        f.path.value = test.path || '';
+        f.status.value = test.expectStatus || '';
+        f.text.value = test.expectText || '';
+        f.follow.cb.checked = !!test.followRedirects;
+        f.checks.value = checksText(test.checks);
+        template = { name: t.name, version: t.version };
+        fill(msg);
+        renderPreview();
+      } catch (err) {
+        fill(msg, err.message);
+      }
+    };
+    const controls = t.options.map((o) => {
+      if (o.kind === 'switch') {
+        const c = checkbox(o.label, o.default === 'on', o.hint);
+        c.cb.addEventListener('change', () => { optValues[o.key] = c.cb.checked ? 'on' : 'off'; reapply(); });
+        return c.el;
+      }
+      const i = input({ name: `tpl-${o.key}`, code: true, value: o.default, autocomplete: 'off' });
+      i.addEventListener('change', () => { optValues[o.key] = i.value.trim(); reapply(); });
+      return field(o.label, i, o.hint);
+    });
+    return h('div', { class: 'tpl-options' }, h('h4', null, `${t.title} options`), controls, msg);
   };
   const tplSelect = templates.length ? select([['', 'Fill in by hand'], ...templates.map((t) => [t.name, `Template: ${t.title} (version ${t.version})`])], at.template || '', { name: 'app-template' }) : null;
   if (tplSelect) {
@@ -3592,6 +3629,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
       ...(template ? { template: template.name, templateVersion: template.version } : {}),
       app: { image: f.image.value.trim(), mounts, tmpfs: lines(f.tmpfs.value), env },
       port: num(f.port.value), path: f.path.value.trim(), host: f.host.value.trim(), expectStatus: num(f.status.value),
+      ...(f.follow.cb.checked ? { followRedirects: true } : {}),
       expectText: f.text.value, maxResponseMs: num(f.maxMs.value), startTimeoutSecs: num(f.start.value),
       checks: parseChecks(f.checks.value).out,
     };
@@ -3623,7 +3661,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
         a.app.mounts.map(mountWords), a.app.tmpfs.map((p) => h('li', null, 'Gives it an empty temporary folder at ', h('code', null, p))), a.app.env.map(envWords),
         a.database ? [h('li', null, 'Starts ', h('code', null, a.database.image), ' beside it, reachable only by the app at 127.0.0.1'), a.database.mounts.map(mountWords), a.database.tmpfs.map((p) => h('li', null, 'Gives the database an empty temporary folder at ', h('code', null, p))), a.database.env.map(envWords)] : null,
         h('li', null, 'No outside network and no ports on the server. No extra privileges, and each container is limited to 2 GB of memory and 2 CPUs.'),
-        h('li', null, `Asks for ${a.path || '/'} on port ${a.port || '?'} from inside the test. Passes on status ${want}${a.expectText ? `, the text “${a.expectText}”` : ''}${a.maxResponseMs ? ` and an answer within ${a.maxResponseMs} ms` : ''}, within ${a.startTimeoutSecs || 120} seconds.`),
+        h('li', null, `Asks for ${a.path || '/'} on port ${a.port || '?'} from inside the test${a.followRedirects ? ', following redirects' : ''}. Passes on status ${want}${a.expectText ? `, the text “${a.expectText}”` : ''}${a.maxResponseMs ? ` and an answer within ${a.maxResponseMs} ms` : ''}, within ${a.startTimeoutSecs || 120} seconds.`),
         a.checks.map((c) => h('li', null, `Then “${c.name}”: asks for ${c.path}, expects status ${c.expectStatus || 200}${c.expectText ? ` and the text “${c.expectText}”` : ''}.`)),
         template ? h('li', null, `Based on the ${template.name} template, version ${template.version}.`) : null));
   };
@@ -3636,6 +3674,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
       field('Settings', f.env, 'NAME=value, one per line. Never write a password here: use NAME=$BP_APPTEST_SOMETHING and set that variable on the server that runs the test.')),
     h('h3', null, 'What to check'),
     h('div', { class: 'row' }, field('Address to ask for', f.path), field('Expected status', f.status), field('Host name to send', f.host, 'Optional, for apps that only answer to their own name.')),
+    f.follow.el,
     h('div', { class: 'row' }, field('Text the answer must contain', f.text, 'Optional. Searched for in the first 1 MB.'), field('Slowest allowed answer (ms)', f.maxMs, 'Optional.'), field('Time to start up (seconds)', f.start)),
     field('More pages to check', f.checks, 'Optional, up to 10, one per line: name | /address | status | text. For example a sign-in page, an API, or an uploaded file you know exists. Status defaults to 200; text is optional.'),
     details('A database beside the app',

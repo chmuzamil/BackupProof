@@ -34,6 +34,8 @@ type fakeDocker struct {
 	onState  func() // called on each state inspect
 	// pages answers a probe by its address, when set: body, status.
 	pages map[string][2]string
+	// web answers a probe from its curl arguments, when set.
+	web func(args []string) (body, stderr string)
 }
 
 func (f *fakeDocker) cmd(ctx context.Context, _ int, args ...string) (string, string, error) {
@@ -85,6 +87,10 @@ func (f *fakeDocker) cmd(ctx context.Context, _ int, args ...string) (string, st
 		}
 		if f.probe != nil {
 			return f.probe()
+		}
+		if f.web != nil {
+			body, stderr := f.web(args)
+			return body, stderr, nil
 		}
 		if f.pages != nil {
 			url := args[len(args)-1]
@@ -558,20 +564,22 @@ func TestCopyRestoredKeepsLinksWithoutFollowing(t *testing.T) {
 
 func TestParseProbe(t *testing.T) {
 	cases := []struct {
-		in     string
-		status int
-		ms     int64
-		ok     bool
+		in       string
+		status   int
+		ms       int64
+		location string
+		ok       bool
 	}{
-		{"BPPROBE 200 0.250", 200, 250, true},
-		{"curl: (52) Empty reply\nBPPROBE 000 0.1", 0, 100, true},
-		{"", 0, 0, false},
-		{"BPPROBE nonsense", 0, 0, false},
+		{"BPPROBE 200 0.250 ", 200, 250, "", true},
+		{"BPPROBE 302 0.010 https://site.test/wp-login.php", 302, 10, "https://site.test/wp-login.php", true},
+		{"curl: (52) Empty reply\nBPPROBE 000 0.1", 0, 100, "", true},
+		{"", 0, 0, "", false},
+		{"BPPROBE nonsense", 0, 0, "", false},
 	}
 	for _, c := range cases {
-		status, ms, ok := parseProbe(c.in)
-		if status != c.status || ms != c.ms || ok != c.ok {
-			t.Errorf("parseProbe(%q) = %d %d %v", c.in, status, ms, ok)
+		status, ms, location, ok := parseProbe(c.in)
+		if status != c.status || ms != c.ms || location != c.location || ok != c.ok {
+			t.Errorf("parseProbe(%q) = %d %d %q %v", c.in, status, ms, location, ok)
 		}
 	}
 }
@@ -628,6 +636,66 @@ func TestAppTestExtraPages(t *testing.T) {
 	for _, c := range res.Checks {
 		if !c.Passed && !proof.IsAppCheck(c.Name) {
 			t.Errorf("a failing app page failed %s", c.Name)
+		}
+	}
+}
+
+// With FollowRedirects, a redirect to HTTPS is followed over the sandbox's
+// HTTP with the redirect's host and X-Forwarded-Proto, as a site behind an
+// HTTPS proxy sees it; the redirects end up in the check's detail. Without
+// it, the redirect is the answer.
+func TestAppTestFollowsRedirects(t *testing.T) {
+	web := func(args []string) (string, string) {
+		url := args[len(args)-1]
+		host, https := "", false
+		for i, a := range args {
+			if a == "--header" && strings.HasPrefix(args[i+1], "Host: ") {
+				host = strings.TrimPrefix(args[i+1], "Host: ")
+			}
+			if a == "--header" && args[i+1] == "X-Forwarded-Proto: https" {
+				https = true
+			}
+		}
+		switch {
+		case strings.HasSuffix(url, "/loop"):
+			return "", "BPPROBE 302 0.001 http://site.test/loop"
+		case host != "site.test" || !https:
+			// WordPress with FORCE_SSL_ADMIN and an https:// site address.
+			path := url[strings.Index(url[len("http://"):], "/")+len("http://"):]
+			return "", "BPPROBE 302 0.004 https://site.test" + path
+		case strings.Contains(url, "/wp-login.php"):
+			return "<form>wp-submit</form>", "BPPROBE 200 0.010 "
+		case strings.HasSuffix(url, "/wp-admin/"):
+			return "", "BPPROBE 302 0.003 https://site.test/wp-login.php?redirect_to=x"
+		}
+		return "not found", "BPPROBE 404 0.002 "
+	}
+	at := basicAppTest()
+	at.MaxResponseMs = 0
+	at.Checks = []source.AppCheck{{Name: "Admin", Path: "/wp-admin/", ExpectStatus: 200, ExpectText: "wp-submit"}, {Name: "Loop", Path: "/loop"}}
+
+	useFake(t, &fakeDocker{web: web})
+	res, _ := runApp(t, context.Background(), restoredTree(t), at)
+	if m := checkMap(res); m["app-http-status"] {
+		t.Error("without FollowRedirects a 302 passed as 200")
+	}
+
+	at.FollowRedirects = true
+	useFake(t, &fakeDocker{web: web})
+	res, _ = runApp(t, context.Background(), restoredTree(t), at)
+	m := checkMap(res)
+	if !m["app-http-status"] || !m["app-body-text"] || !m["app-page: Admin"] {
+		t.Fatalf("following the redirects to HTTPS: %+v", res.Checks)
+	}
+	if m["app-page: Loop"] {
+		t.Error("an endless redirect passed")
+	}
+	for _, c := range res.Checks {
+		if c.Name == "app-http-status" && !strings.Contains(c.Detail, "302 https://site.test/wp-login.php") {
+			t.Errorf("the redirect followed isn't in the detail: %q", c.Detail)
+		}
+		if c.Name == "app-page: Loop" && !strings.Contains(c.Detail, "more than 5 times") {
+			t.Errorf("endless redirect: %q", c.Detail)
 		}
 	}
 }

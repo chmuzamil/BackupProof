@@ -1,0 +1,33 @@
+# The WordPress app-test template against real WordPress sites in four
+# setups: plain, sign-in page moved by a security plugin, REST API off, and
+# HTTPS forced. Builds each site with Docker, so it runs when the template or
+# the app-test code changes, and weekly, rather than on every push.
+name: wordpress
+
+on:
+  push:
+    branches: [main]
+    paths: ["internal/drill/**", "internal/discover/**", "internal/source/**", ".github/workflows/wordpress.yml"]
+  pull_request:
+    paths: ["internal/drill/**", "internal/discover/**", "internal/source/**", ".github/workflows/wordpress.yml"]
+  schedule:
+    - cron: "40 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setups:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: build the test
+        run: go test -c -o drill.test ./internal/drill
+      # Root, as the agent runs: the sites' files belong to the containers' users.
+      - name: four WordPress setups
+        run: sudo -E BP_WORDPRESS_TEST=1 ./drill.test -test.run TestWordPressSetups -test.v -test.timeout 35m

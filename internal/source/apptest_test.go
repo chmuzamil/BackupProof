@@ -124,7 +124,9 @@ func TestAppTestHasNoPermissionFields(t *testing.T) {
 		typ  reflect.Type
 		want []string
 	}{
-		{reflect.TypeFor[AppTest](), []string{"Template", "TemplateVersion", "App", "Database", "Port", "Path", "Host", "ExpectStatus", "ExpectText", "MaxResponseMs", "StartTimeoutSecs", "Checks"}},
+		// FollowRedirects only changes which page on the app's own port is
+		// asked for next: the sandbox still has no network.
+		{reflect.TypeFor[AppTest](), []string{"Template", "TemplateVersion", "App", "Database", "Port", "Path", "Host", "FollowRedirects", "ExpectStatus", "ExpectText", "MaxResponseMs", "StartTimeoutSecs", "Checks"}},
 		// Extra checks only name a page and what it should say.
 		{reflect.TypeFor[AppCheck](), []string{"Name", "Path", "ExpectStatus", "ExpectText"}},
 		{reflect.TypeFor[AppContainer](), []string{"Image", "Mounts", "Tmpfs", "Env"}},

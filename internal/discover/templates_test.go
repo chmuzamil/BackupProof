@@ -2,6 +2,7 @@ package discover
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -154,7 +155,42 @@ func TestTemplateHintFindsN8n(t *testing.T) {
 	if hint == nil || *hint != want {
 		t.Fatalf("hint = %+v", hint)
 	}
-	if !KnownTemplate("n8n", 1) || !KnownTemplate("wordpress", 1) || !KnownTemplate("wordpress", 2) || KnownTemplate("wordpress", 3) {
+	if !KnownTemplate("n8n", 1) || !KnownTemplate("wordpress", 1) || !KnownTemplate("wordpress", 2) || !KnownTemplate("wordpress", 3) || KnownTemplate("wordpress", 4) {
 		t.Error("template versions")
+	}
+}
+
+// The WordPress options shape its test: a moved sign-in page drops the admin
+// check, the API check can be turned off, and redirects are followed by
+// default; the defaults are the template's own test; bad values are refused.
+func TestWordPressTemplateOptions(t *testing.T) {
+	tpl, ok := FindTemplate("wordpress")
+	if !ok {
+		t.Fatal("no wordpress template")
+	}
+	def, err := tpl.Apply(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(def, tpl.Test) || !def.FollowRedirects || def.Path != "/wp-login.php" || len(def.Checks) != 2 || def.TemplateVersion != 3 {
+		t.Errorf("defaults: %+v", def)
+	}
+	moved, _ := tpl.Apply(map[string]string{"loginPath": "/secret-login/", "restCheck": "off", "followHttps": "off"})
+	if moved.Path != "/secret-login/" || len(moved.Checks) != 0 || moved.FollowRedirects {
+		t.Errorf("moved sign-in, no API check, no redirects: %+v", moved)
+	}
+	noFollow, _ := tpl.Apply(map[string]string{"followHttps": "off"})
+	if len(noFollow.Checks) == 0 || noFollow.Checks[0].ExpectStatus != 302 {
+		t.Errorf("without following, the admin area answers 302: %+v", noFollow.Checks)
+	}
+	for _, bad := range []map[string]string{{"loginPath": "wp-login.php"}, {"loginPath": "/a b"}, {"restCheck": "maybe"}, {"image": "evil"}} {
+		if _, err := tpl.Apply(bad); err == nil {
+			t.Errorf("accepted %v", bad)
+		}
+	}
+	if n8n, _ := FindTemplate("n8n"); n8n.Options != nil {
+		t.Error("n8n has options")
+	} else if _, err := n8n.Apply(map[string]string{"x": "y"}); err == nil {
+		t.Error("options accepted by a template without any")
 	}
 }

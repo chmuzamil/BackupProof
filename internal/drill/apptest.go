@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -133,9 +134,9 @@ func appChecks(ctx context.Context, r *runner, dir string, spec source.Spec, par
 			return "", final.err
 		}
 		if final.status != a.wantStatus() {
-			return "", fmt.Errorf("the app answered with status %d, expected %d", final.status, a.wantStatus())
+			return "", fmt.Errorf("the app answered with status %d%s, expected %d", final.status, final.via(), a.wantStatus())
 		}
-		return fmt.Sprintf("GET %s answered with status %d", a.path(), final.status), nil
+		return fmt.Sprintf("GET %s answered with status %d%s", a.path(), final.status, final.via()), nil
 	}) {
 		return
 	}
@@ -166,12 +167,12 @@ func appChecks(ctx context.Context, r *runner, dir string, spec source.Spec, par
 				return "", res.err
 			}
 			if res.status != want {
-				return "", fmt.Errorf("GET %s answered with status %d, expected %d", c.Path, res.status, want)
+				return "", fmt.Errorf("GET %s answered with status %d%s, expected %d", c.Path, res.status, res.via(), want)
 			}
 			if c.ExpectText != "" && !bytes.Contains(res.body, []byte(c.ExpectText)) {
 				return "", fmt.Errorf("GET %s answered %d but the text %q wasn't in the first %d bytes", c.Path, res.status, c.ExpectText, appBodyLimit)
 			}
-			detail := fmt.Sprintf("GET %s answered with status %d", c.Path, res.status)
+			detail := fmt.Sprintf("GET %s answered with status %d%s", c.Path, res.status, res.via())
 			if c.ExpectText != "" {
 				detail += fmt.Sprintf(" and contains %q", c.ExpectText)
 			}
@@ -587,13 +588,76 @@ type probeResult struct {
 	ms       int64
 	body     []byte
 	err      error
+	location string   // where a redirect points
+	hops     []string // redirects followed to get here
+}
+
+// via says which redirects were followed, for a check's detail.
+func (p probeResult) via() string {
+	if len(p.hops) == 0 {
+		return ""
+	}
+	return " after following " + strings.Join(p.hops, " → ")
 }
 
 const probeMarker = "BPPROBE"
 
 // probe requests the app from inside the holder's network. curl sends the
 // measurements to stderr so a large body can't push them out of the stdout limit.
+//
+// With FollowRedirects, a redirect is followed up to maxRedirects times. The
+// sandbox has no network and no TLS, so every hop goes to the app's own port
+// over HTTP: a redirect to https://host/path asks for /path with "Host: host"
+// and "X-Forwarded-Proto: https", which is how a site behind an HTTPS proxy
+// is told the visitor used HTTPS.
 func (a *appRun) probe(ctx context.Context, path string) probeResult {
+	host, https := a.at.Host, false
+	var res probeResult
+	for hop := 0; ; hop++ {
+		r := a.probeOnce(ctx, path, host, https)
+		r.ms += res.ms
+		r.hops = res.hops
+		res = r
+		if res.err != nil || !a.at.FollowRedirects || !isRedirect(res.status) || res.location == "" {
+			return res
+		}
+		if hop == maxRedirects {
+			res.err = fmt.Errorf("GET %s redirected more than %d times (%s): the app keeps sending visitors elsewhere", path, maxRedirects, strings.Join(res.hops, " → "))
+			return res
+		}
+		u, err := url.Parse(res.location)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "") {
+			return res // a redirect it can't follow: report the redirect itself
+		}
+		if u.Host != "" {
+			host = u.Host
+		}
+		if u.Scheme == "https" {
+			https = true
+		}
+		next := u.EscapedPath()
+		if next == "" {
+			next = "/"
+		}
+		if u.RawQuery != "" {
+			next += "?" + u.RawQuery
+		}
+		res.hops = append(res.hops, fmt.Sprintf("%d %s", res.status, res.location))
+		path = next
+	}
+}
+
+const maxRedirects = 5
+
+func isRedirect(status int) bool {
+	switch status {
+	case 301, 302, 303, 307, 308:
+		return true
+	}
+	return false
+}
+
+func (a *appRun) probeOnce(ctx context.Context, path, host string, https bool) probeResult {
 	limit := appProbeTimeout
 	if d := time.Duration(a.at.MaxResponseMs)*time.Millisecond + time.Second; d > limit {
 		limit = d // long enough to measure an answer that breaks the item's own limit
@@ -604,37 +668,43 @@ func (a *appRun) probe(ctx context.Context, path string) probeResult {
 		"--proto", "=http", "--noproxy", "*",
 		"--max-time", strconv.Itoa(int(limit.Seconds())),
 		"--output", "-",
-		"--write-out", "%{stderr}" + probeMarker + " %{http_code} %{time_total}"}
-	if a.at.Host != "" {
-		args = append(args, "--header", "Host: "+a.at.Host)
+		"--write-out", "%{stderr}" + probeMarker + " %{http_code} %{time_total} %{redirect_url}"}
+	if host != "" {
+		args = append(args, "--header", "Host: "+host)
+	}
+	if https {
+		args = append(args, "--header", "X-Forwarded-Proto: https")
 	}
 	args = append(args, "http://127.0.0.1:"+strconv.Itoa(a.at.Port)+path)
 	body, stderr, err := dockerCmd(ctx, appBodyLimit, args...)
-	status, ms, ok := parseProbe(stderr)
+	status, ms, location, ok := parseProbe(stderr)
 	if err != nil || !ok || status == 0 {
 		return probeResult{err: fmt.Errorf("nothing answered on port %d", a.at.Port)}
 	}
-	return probeResult{answered: true, status: status, ms: ms, body: []byte(body)}
+	return probeResult{answered: true, status: status, ms: ms, body: []byte(body), location: location}
 }
 
-func parseProbe(stderr string) (status int, ms int64, ok bool) {
+func parseProbe(stderr string) (status int, ms int64, location string, ok bool) {
 	i := strings.LastIndex(stderr, probeMarker)
 	if i < 0 {
-		return 0, 0, false
+		return 0, 0, "", false
 	}
 	f := strings.Fields(stderr[i:])
-	if len(f) != 3 {
-		return 0, 0, false
+	if len(f) != 3 && len(f) != 4 {
+		return 0, 0, "", false
 	}
 	status, err := strconv.Atoi(f[1])
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, "", false
 	}
 	secs, err := strconv.ParseFloat(f[2], 64)
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, "", false
 	}
-	return status, int64(secs * 1000), true
+	if len(f) == 4 {
+		location = f[3]
+	}
+	return status, int64(secs * 1000), location, true
 }
 
 // cleanup removes everything the test started. It can't use the test's own

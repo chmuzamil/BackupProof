@@ -32,6 +32,11 @@ type AppTest struct {
 	// Host header, for apps that refuse names they don't know.
 	Path string `json:"path,omitempty"`
 	Host string `json:"host,omitempty"`
+	// FollowRedirects follows up to 5 redirects for every page it asks
+	// for. The sandbox has no TLS, so a redirect to https://host/path is
+	// asked for over HTTP with "Host: host" and "X-Forwarded-Proto: https",
+	// as a site behind an HTTPS proxy is. Agents older than 0.6 ignore it.
+	FollowRedirects bool `json:"followRedirects,omitempty"`
 	// ExpectStatus is the HTTP status that counts as working (default 200).
 	ExpectStatus int `json:"expectStatus,omitempty"`
 	// ExpectText must appear in the first 1 MiB of the response, if set.
