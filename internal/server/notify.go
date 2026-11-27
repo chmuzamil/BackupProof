@@ -107,6 +107,7 @@ var alertWords = map[string]string{
 	"copy-drill-failed":       "restore test of the second copy failed",
 	"app-test-failed":         "app test failed",
 	"dashboard-backup-failed": "the dashboard's own backup failed",
+	"witness-failed":          "a transparency-log witness stopped cosigning",
 }
 
 func (s *Server) alert(kind string, sourceID, agentID *int64, msg string) {

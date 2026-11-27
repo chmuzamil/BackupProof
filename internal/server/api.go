@@ -154,6 +154,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/settings/server", s.auth("admin", s.handlePutServerSettings))
 	mux.HandleFunc("GET /log/checkpoint", s.logRoute(s.handleLogCheckpoint))
 	mux.HandleFunc("GET /log/tile/", s.logRoute(s.handleLogTile))
+	mux.HandleFunc("GET /healthz/witnesses", s.handleWitnessHealth)
 	mux.HandleFunc("GET /api/settings/transparency", s.auth("auditor", s.handleGetTransparency))
 	mux.HandleFunc("PUT /api/settings/transparency", s.auth("admin", s.handlePutTransparency))
 	mux.HandleFunc("GET /api/repositories/{id}/format", s.auth("auditor", s.handleStorageFormat))

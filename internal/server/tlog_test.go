@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chmuzamil/backupproof/internal/transparency"
 )
@@ -116,6 +117,71 @@ func TestTransparencyLogWithWitness(t *testing.T) {
 	if _, err := get(ctx, "checkpoint"); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("a private log answered without a sign-in: %v", err)
 	}
+
+	// The witness goes away. A short outage is tolerated; one longer than
+	// witnessGrace raises an alert and fails the health endpoint, which
+	// needs no sign-in although the log is private.
+	health := func() int {
+		resp, err := http.Get(web.URL + "/healthz/witnesses")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := health(); code != 200 {
+		t.Errorf("health with a working witness: %d", code)
+	}
+	ws.Close()
+	_ = srv.store.Audit("test", "event", "while the witness is down")
+	if err := srv.refreshCheckpoint(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := health(); code != 200 {
+		t.Errorf("health right after the witness went down: %d, want 200 until the grace ends", code)
+	}
+	down := srv.witnesses()
+	if down[0].LastError == "" || down[0].FailingSince == "" {
+		t.Fatalf("a failed cosign request wasn't recorded: %+v", down[0])
+	}
+	down[0].FailingSince = time.Now().Add(-witnessGrace - time.Minute).UTC().Format(time.RFC3339)
+	raw, _ = json.Marshal(down)
+	_ = srv.store.SetSetting(settingTlogWitnesses, string(raw))
+	if err := srv.refreshCheckpoint(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := health(); code != 503 {
+		t.Errorf("health after the witness failed for longer than the grace: %d, want 503", code)
+	}
+	if n := openAlerts(t, srv, "witness-failed"); n != 1 {
+		t.Errorf("%d witness-failed alerts open, want 1", n)
+	}
+
+	// Back up: the next round cosigns, and the alert resolves.
+	ws2 := httptest.NewServer(witness)
+	defer ws2.Close()
+	back := srv.witnesses()
+	back[0].URL = ws2.URL
+	raw, _ = json.Marshal(back)
+	_ = srv.store.SetSetting(settingTlogWitnesses, string(raw))
+	if err := srv.refreshCheckpoint(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := health(); code != 200 {
+		t.Errorf("health after the witness came back: %d", code)
+	}
+	if n := openAlerts(t, srv, "witness-failed"); n != 0 {
+		t.Errorf("%d witness-failed alerts still open after it came back", n)
+	}
+}
+
+func openAlerts(t *testing.T, srv *Server, kind string) int {
+	t.Helper()
+	var n int
+	if err := srv.store.db.QueryRow("SELECT COUNT(*) FROM alerts WHERE kind=? AND resolved IS NULL", kind).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // A dashboard upgraded from a version without the log adds its existing

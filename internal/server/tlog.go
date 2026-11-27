@@ -30,6 +30,62 @@ type WitnessConfig struct {
 	Size      int64  `json:"size,omitempty"`
 	Cosigned  string `json:"cosigned,omitempty"`
 	LastError string `json:"lastError,omitempty"`
+	// FailingSince is when its requests started failing (empty when the
+	// last one worked).
+	FailingSince string `json:"failingSince,omitempty"`
+}
+
+// witnessGrace is how long a witness may fail before it counts as down:
+// longer than a short network blip or a restart.
+const witnessGrace = 15 * time.Minute
+
+// failingWitnesses are the witnesses that have failed for witnessGrace.
+func failingWitnesses(ws []WitnessConfig, now time.Time) []WitnessConfig {
+	var out []WitnessConfig
+	for _, w := range ws {
+		if since, err := time.Parse(time.RFC3339, w.FailingSince); err == nil && now.Sub(since) >= witnessGrace {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func witnessName(w WitnessConfig) string {
+	if v, err := transparency.ParseVerifier(w.Key); err == nil {
+		return v.Name
+	}
+	return w.URL
+}
+
+// alertWitnesses raises or resolves the alert for witnesses that stopped cosigning.
+func (s *Server) alertWitnesses(ws []WitnessConfig) {
+	failing := failingWitnesses(ws, time.Now())
+	if len(failing) == 0 {
+		s.resolve("witness-failed", nil, nil)
+		return
+	}
+	var parts []string
+	for _, w := range failing {
+		parts = append(parts, fmt.Sprintf("%s (%s)", witnessName(w), w.LastError))
+	}
+	s.alert("witness-failed", nil, nil, "The transparency log isn't being cosigned by "+strings.Join(parts, "; ")+
+		". Until it is, nothing outside the dashboard confirms that its proof history hasn't been rewritten.")
+}
+
+// handleWitnessHealth answers 200 while every witness cosigns and 503 once
+// one has failed for witnessGrace, for an uptime monitor. It says nothing
+// about the log itself, so it needs no sign-in even when the log is private.
+func (s *Server) handleWitnessHealth(w http.ResponseWriter, r *http.Request) {
+	ws := s.witnesses()
+	failing := failingWitnesses(ws, time.Now())
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if len(failing) > 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprintf(w, "failing: %d of %d witnesses haven't cosigned for %s\n", len(failing), len(ws), witnessGrace)
+		return
+	}
+	fmt.Fprintf(w, "ok: %d witnesses\n", len(ws))
 }
 
 var tlogMu sync.Mutex // one checkpoint round at a time
@@ -104,6 +160,9 @@ func (s *Server) refreshCheckpoint(ctx context.Context) error {
 		sigs, err := s.askWitness(ctx, client, w, n, logNote)
 		if err != nil {
 			w.LastError = err.Error()
+			if w.FailingSince == "" {
+				w.FailingSince = time.Now().UTC().Format(time.RFC3339)
+			}
 			continue
 		}
 		added := false
@@ -115,14 +174,18 @@ func (s *Server) refreshCheckpoint(ctx context.Context) error {
 		}
 		if !added {
 			w.LastError = "the witness answered without a valid cosignature from its key"
+			if w.FailingSince == "" {
+				w.FailingSince = time.Now().UTC().Format(time.RFC3339)
+			}
 			continue
 		}
-		w.Size, w.Cosigned, w.LastError = n, time.Now().UTC().Format(time.RFC3339), ""
+		w.Size, w.Cosigned, w.LastError, w.FailingSince = n, time.Now().UTC().Format(time.RFC3339), "", ""
 	}
 	raw, _ := json.Marshal(ws)
 	if err := s.store.SetSetting(settingTlogWitnesses, string(raw)); err != nil {
 		return err
 	}
+	s.alertWitnesses(ws)
 	return s.store.SetSetting(settingTlogCheckpoint, note.String())
 }
 
