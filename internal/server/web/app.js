@@ -389,6 +389,8 @@ function checkWords(name) {
   const di = /^database-dump-integrity:\s*(.*)$/.exec(name || '');
   if (di) return `${di[1]}: database structure is healthy`;
   if (name === 'database-dumps') return 'Database dumps found';
+  const ap = /^app-page: (.*)$/.exec(name || '');
+  if (ap) return `The app: ${ap[1]}`;
   for (const [re, w] of CHECK_WORDS) if (re.test(name || '')) return w;
   return name || 'Check';
 }
@@ -3445,6 +3447,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
   const at = initial || {}, app = at.app || {}, db = at.database || {};
   const mountsText = (ms) => (ms || []).map((m) => `${m.from} -> ${m.to}${m.writable ? ' writable' : ''}`).join('\n');
   const envText = (es) => (es || []).map((e) => (e.secretEnv ? `${e.name}=$${e.secretEnv}` : `${e.name}=${e.value || ''}`)).join('\n');
+  const checksText = (cs) => (cs || []).map((c) => [c.name, c.path, c.expectStatus || '', c.expectText || ''].join(' | ').replace(/( \| )+$/, '')).join('\n');
   const area = (name, value, placeholder) => h('textarea', { name, rows: 2, spellcheck: 'false', autocapitalize: 'off', placeholder }, value);
   const on = checkbox('After a restore test passes, start the app and check that it responds', !!initial, 'Off unless you turn it on. Needs Docker on the server that runs the restore test.');
   const f = {
@@ -3459,6 +3462,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
     text: input({ name: 'app-text', value: at.expectText || '', autocomplete: 'off' }),
     maxMs: input({ name: 'app-max-ms', type: 'number', inputmode: 'numeric', min: 0, max: 60000, value: at.maxResponseMs || '' }),
     start: input({ name: 'app-start', type: 'number', inputmode: 'numeric', min: 0, max: 900, value: at.startTimeoutSecs || '', placeholder: '120…' }),
+    checks: h('textarea', { name: 'app-checks', rows: 3, spellcheck: 'false', autocapitalize: 'off', placeholder: 'Sign-in page | /login | 200 | Password…' }, checksText(at.checks)),
     dbImage: input({ name: 'app-db-image', code: true, value: db.image || '', placeholder: 'mariadb:11…', autocomplete: 'off' }),
     dbMounts: area('app-db-mounts', mountsText(db.mounts), 'docker/volumes/db_data -> /var/lib/mysql writable…'),
     dbTmpfs: area('app-db-tmpfs', (db.tmpfs || []).join('\n'), ''),
@@ -3484,6 +3488,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
     f.text.value = test.expectText || '';
     f.maxMs.value = test.maxResponseMs || '';
     f.start.value = test.startTimeoutSecs || '';
+    f.checks.value = checksText(test.checks);
     f.dbImage.value = db ? found.databaseImage || db.image || '' : '';
     f.dbMounts.value = db ? mountsText(withData(db.mounts, found.databaseFrom)) : '';
     f.dbTmpfs.value = db ? (db.tmpfs || []).join('\n') : '';
@@ -3523,12 +3528,27 @@ function appTestSection(initial, templates, hint, expectPaths) {
     }
     return { out };
   };
+  // parseChecks reads "name | /address | status | text" lines; status and text are optional.
+  const parseChecks = (text) => {
+    const out = [];
+    for (const line of lines(text)) {
+      const [name, path, status, ...rest] = line.split('|').map((x) => x.trim());
+      const expectText = rest.join('|').trim();
+      if (!name || !path || !path.startsWith('/') || (status && !/^[1-5][0-9][0-9]$/.test(status))) {
+        return { out, bad: `Write each line as: name | /address | status | text (status and text are optional). “${line}” doesn’t fit.` };
+      }
+      out.push({ name, path, ...(status ? { expectStatus: Number(status) } : {}), ...(expectText ? { expectText } : {}) });
+    }
+    if (out.length > 10) return { out, bad: 'Ask for at most 10 more pages.' };
+    return { out };
+  };
   const collect = (mounts, env, dbMounts, dbEnv) => {
     const out = {
       ...(template ? { template: template.name, templateVersion: template.version } : {}),
       app: { image: f.image.value.trim(), mounts, tmpfs: lines(f.tmpfs.value), env },
       port: num(f.port.value), path: f.path.value.trim(), host: f.host.value.trim(), expectStatus: num(f.status.value),
       expectText: f.text.value, maxResponseMs: num(f.maxMs.value), startTimeoutSecs: num(f.start.value),
+      checks: parseChecks(f.checks.value).out,
     };
     if (f.dbImage.value.trim()) out.database = { image: f.dbImage.value.trim(), mounts: dbMounts, tmpfs: lines(f.dbTmpfs.value), env: dbEnv };
     return out;
@@ -3541,6 +3561,8 @@ function appTestSection(initial, templates, hint, expectPaths) {
     const wrong = parsed.find((p) => p.bad);
     if (wrong) return fieldError(wrong.ctl, wrong.bad);
     if (!parsed[0].out.length) return fieldError(f.mounts, 'Give the app at least one part of the backup.');
+    const pages = parseChecks(f.checks.value);
+    if (pages.bad) return fieldError(f.checks, pages.bad);
     return collect(...parsed.map((p) => p.out));
   };
   const preview = h('div', { class: 'banner info' });
@@ -3557,6 +3579,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
         a.database ? [h('li', null, 'Starts ', h('code', null, a.database.image), ' beside it, reachable only by the app at 127.0.0.1'), a.database.mounts.map(mountWords), a.database.tmpfs.map((p) => h('li', null, 'Gives the database an empty temporary folder at ', h('code', null, p))), a.database.env.map(envWords)] : null,
         h('li', null, 'No outside network and no ports on the server. No extra privileges, and each container is limited to 2 GB of memory and 2 CPUs.'),
         h('li', null, `Asks for ${a.path || '/'} on port ${a.port || '?'} from inside the test. Passes on status ${want}${a.expectText ? `, the text “${a.expectText}”` : ''}${a.maxResponseMs ? ` and an answer within ${a.maxResponseMs} ms` : ''}, within ${a.startTimeoutSecs || 120} seconds.`),
+        a.checks.map((c) => h('li', null, `Then “${c.name}”: asks for ${c.path}, expects status ${c.expectStatus || 200}${c.expectText ? ` and the text “${c.expectText}”` : ''}.`)),
         template ? h('li', null, `Based on the ${template.name} template, version ${template.version}.`) : null));
   };
   const body = h('div', null,
@@ -3569,6 +3592,7 @@ function appTestSection(initial, templates, hint, expectPaths) {
     h('h3', null, 'What to check'),
     h('div', { class: 'row' }, field('Address to ask for', f.path), field('Expected status', f.status), field('Host name to send', f.host, 'Optional, for apps that only answer to their own name.')),
     h('div', { class: 'row' }, field('Text the answer must contain', f.text, 'Optional. Searched for in the first 1 MB.'), field('Slowest allowed answer (ms)', f.maxMs, 'Optional.'), field('Time to start up (seconds)', f.start)),
+    field('More pages to check', f.checks, 'Optional, up to 10, one per line: name | /address | status | text. For example a sign-in page, an API, or an uploaded file you know exists. Status defaults to 200; text is optional.'),
     details('A database beside the app',
       h('div', { class: 'row' }, field('Database image', f.dbImage, 'The same version as your server. The app reaches it at 127.0.0.1.')),
       field('Parts of the backup to give it', f.dbMounts, 'Database files need “writable”, so they get a throwaway copy.'),

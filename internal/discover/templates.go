@@ -34,11 +34,11 @@ type AppTemplate struct {
 func Templates() []AppTemplate {
 	return []AppTemplate{
 		{
-			Name: "wordpress", Version: 1, Title: "WordPress (Docker)",
-			Summary: "The official WordPress image with its restored files read-only, and MariaDB or MySQL beside it on a throwaway copy of its restored database files. Passes when the login page loads from the restored database.",
+			Name: "wordpress", Version: 2, Title: "WordPress (Docker)",
+			Summary: "The official WordPress image with its restored files read-only, and MariaDB or MySQL beside it on a throwaway copy of its restored database files. Passes when the sign-in page loads, the admin area asks for a sign-in, and the site's API answers from the restored database.",
 			Kinds:   []string{"docker"},
 			Test: source.AppTest{
-				Template: "wordpress", TemplateVersion: 1,
+				Template: "wordpress", TemplateVersion: 2,
 				App: source.AppContainer{
 					Image:  "wordpress:6-apache",
 					Mounts: []source.AppDataMount{{To: "/var/www/html"}},
@@ -54,6 +54,13 @@ func Templates() []AppTemplate {
 					Mounts: []source.AppDataMount{{To: "/var/lib/mysql", Writable: true}},
 				},
 				Port: 80, Path: "/wp-login.php", ExpectStatus: 200, ExpectText: "wp-submit", StartTimeoutSecs: 180,
+				Checks: []source.AppCheck{
+					// The admin area sends visitors to sign in: WordPress and its sessions work.
+					{Name: "Admin asks for a sign-in", Path: "/wp-admin/", ExpectStatus: 302},
+					// The REST API index is built from the restored options table.
+					// rest_route works with and without pretty permalinks.
+					{Name: "Site API answers from the database", Path: "/?rest_route=/", ExpectStatus: 200, ExpectText: "namespaces"},
+				},
 			},
 			ExpectPaths: []string{"wp-includes/version.php", "wp-config.php"},
 			Needs: []string{
@@ -61,6 +68,33 @@ func Templates() []AppTemplate {
 				"Use the database and WordPress versions your site runs. A Docker backup must stop the containers so the database files are consistent.",
 				"Correct the database name and user if yours differ.",
 				"A site that forces HTTPS for logins redirects instead: expect status 302 and remove the expected text.",
+				"To check uploaded media came back, add a check for a file you know exists, such as /wp-content/uploads/2025/01/logo.png.",
+			},
+		},
+		{
+			Name: "n8n", Version: 1, Title: "n8n (Docker)",
+			Summary: "The official n8n image on a throwaway copy of its restored data folder, which holds its SQLite database, settings and encryption key. Passes when n8n has opened its restored database and its editor loads.",
+			Kinds:   []string{"docker"},
+			Test: source.AppTest{
+				Template: "n8n", TemplateVersion: 1,
+				App: source.AppContainer{
+					Image:  "n8nio/n8n",
+					Mounts: []source.AppDataMount{{To: "/home/node/.n8n", Writable: true}},
+					Env: []source.AppEnv{
+						{Name: "N8N_DIAGNOSTICS_ENABLED", Value: "false"},
+						{Name: "N8N_PERSONALIZATION_ENABLED", Value: "false"},
+					},
+				},
+				// readiness answers 200 only once n8n has opened and migrated its database.
+				Port: 5678, Path: "/healthz/readiness", ExpectStatus: 200, ExpectText: "ok", StartTimeoutSecs: 240,
+				Checks: []source.AppCheck{
+					{Name: "Editor loads", Path: "/", ExpectStatus: 200, ExpectText: "n8n"},
+				},
+			},
+			ExpectPaths: []string{"database.sqlite", "config"},
+			Needs: []string{
+				"Use the n8n version your server runs (for example n8nio/n8n:1.80.0): a newer one may change the database when it starts.",
+				"This is for n8n's built-in SQLite database. If your n8n uses PostgreSQL, back up that database as its own item; its restore test checks it.",
 			},
 		},
 		{
@@ -112,6 +146,12 @@ type mountFacts struct{ Type, Name, Source, Destination string }
 // templateHint recognises a Docker app a template fits.
 func templateHint(containers []containerFacts) *TemplateHint {
 	var hint *TemplateHint
+	for _, c := range containers {
+		img := strings.ToLower(c.Image)
+		if strings.Contains(img, "n8nio/n8n") || strings.HasPrefix(img, "n8n:") || img == "n8n" {
+			return &TemplateHint{Template: "n8n", AppImage: c.Image, AppFrom: backupPath(c.Mounts, "/home/node/.n8n")}
+		}
+	}
 	for _, c := range containers {
 		img := strings.ToLower(c.Image)
 		if strings.Contains(img, "wordpress") && !strings.Contains(img, ":cli") {

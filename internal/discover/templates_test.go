@@ -144,3 +144,17 @@ func TestHintHasNoEnvironment(t *testing.T) {
 		t.Errorf("hint has an environment field: %s", b)
 	}
 }
+
+func TestTemplateHintFindsN8n(t *testing.T) {
+	hint := templateHint([]containerFacts{
+		{Image: "docker.n8n.io/n8nio/n8n:1.80.0", Mounts: []mountFacts{{Type: "volume", Name: "n8n_data", Destination: "/home/node/.n8n"}}},
+		{Image: "postgres:16"},
+	})
+	want := TemplateHint{Template: "n8n", AppImage: "docker.n8n.io/n8nio/n8n:1.80.0", AppFrom: "docker/volumes/n8n_data"}
+	if hint == nil || *hint != want {
+		t.Fatalf("hint = %+v", hint)
+	}
+	if !KnownTemplate("n8n", 1) || !KnownTemplate("wordpress", 1) || !KnownTemplate("wordpress", 2) || KnownTemplate("wordpress", 3) {
+		t.Error("template versions")
+	}
+}

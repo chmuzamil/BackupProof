@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chmuzamil/backupproof/internal/proof"
 	"github.com/chmuzamil/backupproof/internal/source"
 )
 
@@ -31,6 +32,8 @@ type fakeDocker struct {
 	failRun  string // name suffix of the container whose docker run fails
 	stderrOn string // text a failing docker run prints
 	onState  func() // called on each state inspect
+	// pages answers a probe by its address, when set: body, status.
+	pages map[string][2]string
 }
 
 func (f *fakeDocker) cmd(ctx context.Context, _ int, args ...string) (string, string, error) {
@@ -82,6 +85,15 @@ func (f *fakeDocker) cmd(ctx context.Context, _ int, args ...string) (string, st
 		}
 		if f.probe != nil {
 			return f.probe()
+		}
+		if f.pages != nil {
+			url := args[len(args)-1]
+			for path, page := range f.pages {
+				if strings.HasSuffix(url, path) {
+					return page[0], "BPPROBE " + page[1] + " 0.010", nil
+				}
+			}
+			return "not found", "BPPROBE 404 0.010", nil
 		}
 		return "<html>wp-submit</html>", "BPPROBE 200 0.012", nil
 	}
@@ -580,5 +592,42 @@ func TestSweepRemovesOnlyExpiredContainers(t *testing.T) {
 	(&appRun{}).sweepLeftovers(context.Background())
 	if !slices.Equal(removed, []string{"expired"}) {
 		t.Errorf("removed %v", removed)
+	}
+}
+
+// Extra checks ask for more pages; each passes or fails on its own and a
+// failing one fails only the app test.
+func TestAppTestExtraPages(t *testing.T) {
+	f := &fakeDocker{pages: map[string][2]string{
+		"/wp-login.php": {"<form>wp-submit</form>", "200"},
+		"/wp-admin/":    {"", "302"},
+		"/wp-json/":     {`{"name":"Shop","namespaces":["wp/v2"]}`, "200"},
+	}}
+	useFake(t, f)
+	at := basicAppTest()
+	at.Path, at.ExpectText = "/wp-login.php", "wp-submit"
+	at.Checks = []source.AppCheck{
+		{Name: "Admin asks for a sign-in", Path: "/wp-admin/", ExpectStatus: 302},
+		{Name: "Site API", Path: "/wp-json/", ExpectText: "namespaces"},
+		{Name: "Logo", Path: "/wp-content/uploads/logo.png"},
+	}
+	res, _ := runApp(t, context.Background(), restoredTree(t), at)
+	m := checkMap(res)
+	if !m["app-page: Admin asks for a sign-in"] || !m["app-page: Site API"] {
+		t.Errorf("checks: %+v", res.Checks)
+	}
+	if passed, ran := m["app-page: Logo"]; passed || !ran {
+		t.Errorf("a missing page passed or didn't run: %+v", res.Checks)
+	}
+	for _, c := range res.Checks {
+		if c.Name == "app-page: Logo" && !strings.Contains(c.Detail, "status 404, expected 200") {
+			t.Errorf("logo detail: %s", c.Detail)
+		}
+	}
+	// Every failure is an app check: only the app test failed.
+	for _, c := range res.Checks {
+		if !c.Passed && !proof.IsAppCheck(c.Name) {
+			t.Errorf("a failing app page failed %s", c.Name)
+		}
 	}
 }

@@ -124,7 +124,9 @@ func TestAppTestHasNoPermissionFields(t *testing.T) {
 		typ  reflect.Type
 		want []string
 	}{
-		{reflect.TypeFor[AppTest](), []string{"Template", "TemplateVersion", "App", "Database", "Port", "Path", "Host", "ExpectStatus", "ExpectText", "MaxResponseMs", "StartTimeoutSecs"}},
+		{reflect.TypeFor[AppTest](), []string{"Template", "TemplateVersion", "App", "Database", "Port", "Path", "Host", "ExpectStatus", "ExpectText", "MaxResponseMs", "StartTimeoutSecs", "Checks"}},
+		// Extra checks only name a page and what it should say.
+		{reflect.TypeFor[AppCheck](), []string{"Name", "Path", "ExpectStatus", "ExpectText"}},
 		{reflect.TypeFor[AppContainer](), []string{"Image", "Mounts", "Tmpfs", "Env"}},
 		{reflect.TypeFor[AppDataMount](), []string{"From", "To", "Writable"}},
 		{reflect.TypeFor[AppEnv](), []string{"Name", "Value", "SecretEnv"}},
@@ -149,6 +151,31 @@ func TestAppTestIgnoresExtraJSON(t *testing.T) {
 	for _, w := range []string{"privileged", "SYS_ADMIN", "host", "command", "entrypoint", "volumes"} {
 		if strings.Contains(string(b), w) {
 			t.Errorf("%s survived: %s", w, b)
+		}
+	}
+}
+
+func TestAppChecksValidation(t *testing.T) {
+	base := func(checks ...AppCheck) *AppTest {
+		return &AppTest{App: AppContainer{Image: "nginx:1.27-alpine", Mounts: []AppDataMount{{From: "site", To: "/usr/share/nginx/html"}}}, Port: 80, Checks: checks}
+	}
+	if err := base(AppCheck{Name: "Sign-in page", Path: "/login", ExpectStatus: 200, ExpectText: "Password"}).Validate("files"); err != nil {
+		t.Errorf("a good check was refused: %v", err)
+	}
+	for name, at := range map[string]*AppTest{
+		"no name":        base(AppCheck{Path: "/"}),
+		"padded name":    base(AppCheck{Name: " x", Path: "/"}),
+		"newline":        base(AppCheck{Name: "a\nb", Path: "/"}),
+		"same name":      base(AppCheck{Name: "x", Path: "/"}, AppCheck{Name: "x", Path: "/y"}),
+		"no slash":       base(AppCheck{Name: "x", Path: "login"}),
+		"space in path":  base(AppCheck{Name: "x", Path: "/a b"}),
+		"full address":   base(AppCheck{Name: "x", Path: "http://evil.example/"}),
+		"bad status":     base(AppCheck{Name: "x", Path: "/", ExpectStatus: 99}),
+		"long text":      base(AppCheck{Name: "x", Path: "/", ExpectText: strings.Repeat("a", 201)}),
+		"too many pages": base(make([]AppCheck, MaxAppChecks+1)...),
+	} {
+		if err := at.Validate("files"); err == nil {
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }

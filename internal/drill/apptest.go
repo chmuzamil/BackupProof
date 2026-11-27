@@ -128,7 +128,7 @@ func appChecks(ctx context.Context, r *runner, dir string, spec source.Spec, par
 		if !ready {
 			return "", a.notReady(last)
 		}
-		final = a.probe(ctx)
+		final = a.probe(ctx, a.path())
 		if final.err != nil {
 			return "", final.err
 		}
@@ -153,6 +153,29 @@ func appChecks(ctx context.Context, r *runner, dir string, spec source.Spec, par
 				return "", fmt.Errorf("the app took %d ms, over the limit of %d ms", final.ms, a.at.MaxResponseMs)
 			}
 			return fmt.Sprintf("answered in %d ms (limit %d ms)", final.ms, a.at.MaxResponseMs), nil
+		})
+	}
+	for _, c := range a.at.Checks {
+		a.check(r, "app-page: "+c.Name, func() (string, error) {
+			want := c.ExpectStatus
+			if want == 0 {
+				want = 200
+			}
+			res := a.probe(ctx, c.Path)
+			if res.err != nil {
+				return "", res.err
+			}
+			if res.status != want {
+				return "", fmt.Errorf("GET %s answered with status %d, expected %d", c.Path, res.status, want)
+			}
+			if c.ExpectText != "" && !bytes.Contains(res.body, []byte(c.ExpectText)) {
+				return "", fmt.Errorf("GET %s answered %d but the text %q wasn't in the first %d bytes", c.Path, res.status, c.ExpectText, appBodyLimit)
+			}
+			detail := fmt.Sprintf("GET %s answered with status %d", c.Path, res.status)
+			if c.ExpectText != "" {
+				detail += fmt.Sprintf(" and contains %q", c.ExpectText)
+			}
+			return detail, nil
 		})
 	}
 }
@@ -537,7 +560,7 @@ func (a *appRun) waitUntilUp(ctx context.Context) (ready bool, dbStopped string,
 				return false, ds.words("database"), last, nil
 			}
 		}
-		last = a.probe(waitCtx)
+		last = a.probe(waitCtx, a.path())
 		if last.err == nil && last.status == a.wantStatus() {
 			return true, "", last, nil
 		}
@@ -570,7 +593,7 @@ const probeMarker = "BPPROBE"
 
 // probe requests the app from inside the holder's network. curl sends the
 // measurements to stderr so a large body can't push them out of the stdout limit.
-func (a *appRun) probe(ctx context.Context) probeResult {
+func (a *appRun) probe(ctx context.Context, path string) probeResult {
 	limit := appProbeTimeout
 	if d := time.Duration(a.at.MaxResponseMs)*time.Millisecond + time.Second; d > limit {
 		limit = d // long enough to measure an answer that breaks the item's own limit
@@ -585,7 +608,7 @@ func (a *appRun) probe(ctx context.Context) probeResult {
 	if a.at.Host != "" {
 		args = append(args, "--header", "Host: "+a.at.Host)
 	}
-	args = append(args, "http://127.0.0.1:"+strconv.Itoa(a.at.Port)+a.path())
+	args = append(args, "http://127.0.0.1:"+strconv.Itoa(a.at.Port)+path)
 	body, stderr, err := dockerCmd(ctx, appBodyLimit, args...)
 	status, ms, ok := parseProbe(stderr)
 	if err != nil || !ok || status == 0 {

@@ -35,7 +35,7 @@ func TestProbeWaitsAsLongAsTheItemsLimit(t *testing.T) {
 	f := &fakeDocker{}
 	useFake(t, f)
 	a := &appRun{at: &source.AppTest{Port: 80, MaxResponseMs: 20000}, holder: "x-net"}
-	a.probe(context.Background())
+	a.probe(context.Background(), a.path())
 	calls := f.find("exec")
 	if len(calls) != 1 {
 		t.Fatalf("calls: %v", calls)

@@ -40,7 +40,21 @@ type AppTest struct {
 	MaxResponseMs int `json:"maxResponseMs,omitempty"`
 	// StartTimeoutSecs is how long the app gets to answer (default 120).
 	StartTimeoutSecs int `json:"startTimeoutSecs,omitempty"`
+	// Checks are more pages to ask for once the app answers, such as a
+	// sign-in page, an API or an uploaded file, each with its own expectation.
+	Checks []AppCheck `json:"checks,omitempty"`
 }
+
+// AppCheck is one more page an app test asks for.
+type AppCheck struct {
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	ExpectStatus int    `json:"expectStatus,omitempty"` // default 200
+	ExpectText   string `json:"expectText,omitempty"`
+}
+
+// MaxAppChecks is the most extra pages one app test asks for.
+const MaxAppChecks = 10
 
 // AppContainer is one container of an app test.
 type AppContainer struct {
@@ -132,6 +146,28 @@ func (a *AppTest) Validate(kind string) error {
 	}
 	if a.StartTimeoutSecs < 0 || a.StartTimeoutSecs > maxAppStartSec {
 		return fmt.Errorf("the app test's start time must be between 0 (the default) and %d seconds", maxAppStartSec)
+	}
+	if len(a.Checks) > MaxAppChecks {
+		return fmt.Errorf("the app test can ask for at most %d more pages", MaxAppChecks)
+	}
+	names := map[string]bool{}
+	for _, c := range a.Checks {
+		if n := strings.TrimSpace(c.Name); n == "" || len(n) > 60 || n != c.Name || strings.ContainsAny(n, "\r\n\t") {
+			return errors.New("each extra app check needs a short name (up to 60 characters)")
+		}
+		if names[c.Name] {
+			return fmt.Errorf("two extra app checks are called %q", c.Name)
+		}
+		names[c.Name] = true
+		if !appWebPathRe.MatchString(c.Path) {
+			return fmt.Errorf("the address of the app check %q must start with / and contain no spaces", c.Name)
+		}
+		if c.ExpectStatus != 0 && (c.ExpectStatus < 100 || c.ExpectStatus > 599) {
+			return fmt.Errorf("the expected status of the app check %q must be between 100 and 599", c.Name)
+		}
+		if len(c.ExpectText) > 200 {
+			return fmt.Errorf("the expected text of the app check %q can be at most 200 characters", c.Name)
+		}
 	}
 	if err := a.App.validate("app", kind); err != nil {
 		return err

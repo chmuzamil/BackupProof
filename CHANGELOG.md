@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **The dashboard backs itself up.** Under **Settings → Dashboard backup**, choose a storage that isn't on the dashboard's server. Once a day the dashboard backs up its accounts, items, schedules, proof history and keys there, with a signed proof like any other backup, and keeps the newest 14. A failure raises an alert.
 - **`backupproof server restore-dashboard`** rebuilds a lost dashboard from that backup into an empty data folder, using the storage's recovery kit, and checks the proof ledger it brought back. The rebuilt dashboard keeps its signing key, so its earlier proofs still match, and connected servers reconnect once its address points at the new server.
+- **App tests can check more pages.** Up to 10 more addresses, each with its own expected status and text, such as a sign-in page, an API or an uploaded file you know exists. Each is its own check in the proof; a failing one fails only the app test.
+- **WordPress template, version 2,** also checks that the admin area asks for a sign-in and that the site's API answers from the restored database.
+- **n8n template** for n8n in Docker with its built-in database: passes when n8n has opened the restored database and its editor loads. Offered automatically when an n8n container is found.
 - **Free-space check before every restore test.** The test checks the server has room for the restored backup plus 1 GB before it starts, instead of failing partway.
 - **Database test memory setting** under the item's restore test settings, for a database that needs more (or less) than the automatic choice.
 - **Storage reliability tests.** Prune stopped after each of its first deletes, two machines backing up into one storage at once, a backup resumed after a failed upload, and prune during a storage outage: in each, every backup still restores byte for byte and a full check finds nothing missing.

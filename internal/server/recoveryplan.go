@@ -204,6 +204,8 @@ func planChecks(checks []proof.Check) []string {
 		if w == "" {
 			if strings.HasPrefix(c.Name, "assert:") {
 				w = "Your check: " + strings.TrimSpace(strings.TrimPrefix(c.Name, "assert:"))
+			} else if name, ok := strings.CutPrefix(c.Name, "app-page: "); ok {
+				w = "The app: " + name
 			} else {
 				continue
 			}
