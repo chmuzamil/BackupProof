@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Check a proof in the browser** at backupproof.dev/verify/. The proof verifier, compiled to WebAssembly (`backupproof-verify.wasm`, a new release file listed in the signed `SHA256SUMS`), checks a bundle on the visitor's own computer; the page can't send it anywhere. CI runs it on every proof any release has made and requires the same report as `backupproof proof verify`, and rejects tampered copies. `sh scripts/verify-build.sh <tag> js/wasm` rebuilds it byte for byte.
+
 ## [0.5.1] - 2026-11-27
 
 ### Fixed

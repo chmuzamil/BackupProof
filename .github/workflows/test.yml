@@ -53,6 +53,27 @@ jobs:
             GOOS=${p%/*} GOARCH=${p#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/backupproof
           done
 
+  # The browser verifier (backupproof.dev/verify/) is the proof verifier
+  # compiled to WebAssembly. On every proof any release made, it must give
+  # the same report as `backupproof proof verify`, and reject tampered ones.
+  browser-verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: build the verifier for browsers and the command line
+        run: |
+          GOOS=js GOARCH=wasm go vet ./cmd/verify-wasm
+          GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o verify.wasm ./cmd/verify-wasm
+          CGO_ENABLED=0 go build -o backupproof ./cmd/backupproof
+      - name: browser and command line agree on every fixture
+        run: node scripts/verify-wasm-test.mjs verify.wasm "$(go env GOROOT)/lib/wasm/wasm_exec.js" ./backupproof
+
   # The installer checks release signatures with minisign or OpenSSL; this
   # tests that check against signatures made by real minisign.
   signature:

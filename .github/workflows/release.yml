@@ -39,6 +39,12 @@ jobs:
               -ldflags "-s -w -X github.com/chmuzamil/backupproof/internal/engine.Version=backupproof/${VERSION#v}" \
               -o "dist/backupproof-$os-$arch$ext" ./cmd/backupproof
           done
+          # The browser verifier for backupproof.dev/verify/, and the Go
+          # loader it needs, both covered by SHA256SUMS.
+          GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w -X main.version=${VERSION#v}" \
+            -o dist/backupproof-verify.wasm ./cmd/verify-wasm
+          cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" dist/backupproof-wasm_exec.js
           cp scripts/install.sh scripts/install.ps1 dist/
 
       # Every Go module built into the program, read from the binary itself.
