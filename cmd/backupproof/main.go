@@ -74,7 +74,13 @@ Proofs:
   backupproof proof export --repo REPO DIGEST_PREFIX [-o bundle.json]
   backupproof proof verify BUNDLE.json [--key bpkey1:...]... [--tsa-root CA.pem] [--require-timestamp]
   backupproof proof verify-pack EVIDENCE.json [--key bpkey1:...]...
+  backupproof proof verify-log --url https://DASHBOARD/log --log-key KEY [--witness KEY]... [--bundle F] [--since F]
+                       check the dashboard's transparency log, its witnesses, and that a proof is in it
   backupproof proof key                       print this machine's public signing key
+
+Witness (run on a machine the dashboard's operators don't control):
+  backupproof witness --name NAME --log KEY [--log KEY]... [--listen :8421] [--data DIR]
+                       cosign a dashboard's log checkpoints, only ever extending what it saw before
 
 REPO is a path, s3://bucket/prefix?endpoint=URL&region=R&lock=COMPLIANCE&lockDays=30
 or sftp://user@host:22/path. Secrets come from the environment:
@@ -116,6 +122,8 @@ func main() {
 		err = cmdInit(ctx, args)
 	case "upgrade":
 		err = cmdUpgrade(ctx, args)
+	case "witness":
+		err = cmdWitness(ctx, args)
 	case "backup":
 		err = cmdBackup(ctx, args)
 	case "drill":
@@ -740,10 +748,12 @@ func cmdKeyAdd(ctx context.Context, args []string) error {
 
 func cmdProof(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: backupproof proof list|export|verify|verify-pack|key")
+		return errors.New("usage: backupproof proof list|export|verify|verify-pack|verify-log|key")
 	}
 	sub, args := args[0], args[1:]
 	switch sub {
+	case "verify-log":
+		return cmdVerifyLog(ctx, args)
 	case "key":
 		host, _ := os.Hostname()
 		if err := os.MkdirAll(stateDir(), 0o700); err != nil {

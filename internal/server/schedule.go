@@ -120,6 +120,7 @@ func (s *Server) tick(now time.Time) {
 	s.scheduleChecks(now, sources)
 	s.scheduleCopyTests(now, sources)
 	s.scheduleDashboardBackup(now)
+	s.scheduleCheckpoint(now)
 	s.maybeSendWeeklyReport(now)
 	s.heartbeat()
 }

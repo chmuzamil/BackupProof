@@ -81,7 +81,7 @@ func OpenStore(dataDir string, secret []byte) (*Store, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	// Additive migrations for databases created by older versions.
-	for _, m := range append(append([]string{"ALTER TABLE agents ADD COLUMN inventory TEXT"}, accountMigrations...), append(append(append(storageMigrations, limitMigrations...), restoreMigrations...), recoveryMigrations...)...) {
+	for _, m := range append(append([]string{"ALTER TABLE agents ADD COLUMN inventory TEXT"}, append(accountMigrations, agentSessionMigrations...)...), append(append(append(storageMigrations, limitMigrations...), restoreMigrations...), recoveryMigrations...)...) {
 		// "duplicate column" on up-to-date databases is expected.
 		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
@@ -94,7 +94,12 @@ func OpenStore(dataDir string, secret []byte) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db, secret: secret}, nil
+	st := &Store{db: db, secret: secret}
+	if err := st.backfillTlog(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return st, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -194,6 +199,9 @@ func (s *Store) AppendLedger(kind, subject, digest, detail string, extra func(tx
 	if _, err := tx.Exec("INSERT INTO ledger(seq,time,kind,subject,envelope_digest,prev,hash,detail) VALUES(?,?,?,?,?,?,?,?)",
 		e.Seq, e.Time.Format(time.RFC3339Nano), e.Kind, e.Subject, e.EnvelopeDigest, e.Prev, e.Hash, detail); err != nil {
 		return e, err
+	}
+	if err := appendTlog(tx, e.Seq, e.Hash); err != nil {
+		return e, fmt.Errorf("transparency log: %w", err)
 	}
 	if extra != nil {
 		if err := extra(tx, e); err != nil {
@@ -547,6 +555,7 @@ func (s *Store) RemoveAgent(id int64) ([]string, error) {
 
 func (s *Store) RevokeAgent(id int64) error {
 	_, err := s.db.Exec("UPDATE agents SET revoked=1 WHERE id=?", id)
+	s.EndAgentSessions(id)
 	return err
 }
 
