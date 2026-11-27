@@ -265,7 +265,18 @@ Results appear as ordinary checks in the signed proof, named `app-sandbox-start`
 
 Administrators can use **Servers → Recovery plan** to build a plan for one server to print or download ahead of time: what to restore and in what order, the newest backup that passed a restore test, how long it took, the storage and recovery kit you need, the exact dashboard and command-line steps, and what isn't covered. Steps a person must confirm, including DNS and firewall changes, are kept apart from what the restore test already checked automatically. It never includes passwords, a container's environment or `.env` contents. The same data is at `GET /api/agents/{id}/recovery-plan`.
 
-Plans also say plainly what recovery can't do yet: database restores from the dashboard go to the original server, Docker put-back restores volumes and mounted folders but not Compose files, and what to do if the dashboard itself is lost.
+Plans also say plainly what recovery can't do yet: database restores from the dashboard go to the original server, and Docker put-back restores volumes and mounted folders but not Compose files.
+
+## Dashboard backup
+
+Under **Settings → Dashboard backup**, choose a storage that isn't on the dashboard's own server. Once a day the dashboard backs up its accounts, items, schedules, proof history and keys there, with a signed proof like any other backup, and keeps the newest 14. If the dashboard's server is lost, rebuild it on a new one:
+
+```bash
+export BP_PASSWORD=...        # from that storage's recovery kit, plus its access keys
+backupproof server restore-dashboard --repo 's3://bucket/prefix?endpoint=...' --data /var/lib/backupproof
+```
+
+It restores into an empty folder and checks the proof ledger it brought back. Start the dashboard and point its address at the new server; connected servers reconnect by themselves. `--list` shows the dashboard backups in a storage.
 
 ## API
 
@@ -388,26 +399,36 @@ Cloud storage sometimes refuses a request for a while (HTTP 500 or 503). BackupP
 - **Releases.** `SHA256SUMS` is signed with an offline-held minisign key, and the installer checks the signature before installing. See [Release signing](docs/SIGNING.md).
 - **Web.** Strict CSP (`default-src 'self'`), `X-Frame-Options: DENY`, no third-party assets.
 - **Error reports.** Off by default; see [Error reporting](#error-reporting-optional) for what an opted-in report can contain.
-- **Restore-test sandboxes.** `--network none`, memory, CPU and PID limits, `no-new-privileges`, data on tmpfs, restored files mounted read-only, and the image recorded by digest.
+- **Restore-test sandboxes.** `--network none`, memory, CPU and PID limits with no swap, `no-new-privileges`, the database on tmpfs (or a throwaway disk volume when it's large), restored files mounted read-only, and the image recorded by digest.
+- **Dashboard backups.** The dashboard's own backup includes its secret key, so that storage's recovery kit can rebuild the dashboard *and* read the passwords it holds for your other storage. Keep that kit as safe as the dashboard itself.
 - **Ransomware.** Use S3 Object Lock in COMPLIANCE mode and storage credentials that cannot delete. Prune skips locked objects. Run restore tests on a different server.
+
+## Limits
+
+What BackupProof doesn't do yet, or does with a limit worth knowing:
+
+- **Database restore tests** load the database into memory when it is up to about 1 GB loaded (4 GB container limit), and onto a throwaway disk volume when larger (2 GB limit). A database needing more memory than that fails its restore test with a message saying the test ran out of room; raise **Database test memory** for that item.
+- **Every restore test downloads the whole newest backup.** From storage that charges for downloads (Amazon S3, Google Cloud Storage) that costs money each time; each item's page shows the estimate. Run tests on a server next to the storage, test less often, or use storage with free downloads.
+- **Very large storage.** Every backup first lists every chunk in storage. At a million chunks (about 1 TB) that is 1,000 list requests and around 80 MB of memory before the backup starts. Pack files, planned below, remove this.
+- **App tests** check up to 11 addresses of the restored app over HTTP. They can't sign in or click through it.
+- **Recovering a lost dashboard** needs its own backup turned on (**Settings → Dashboard backup**). Without it, backups still restore from the command line, but accounts, items, schedules and the proof history are gone.
+- **Databases** are backed up as logical dumps. Point-in-time recovery and physical backups aren't supported yet.
 
 ## Documentation
 
 - [Getting started](docs/GETTING-STARTED.md): plain-language guide for non-technical users
-- [Proof compatibility](docs/COMPATIBILITY.md): which old proofs keep verifying, and how CI checks it
-- [Release signing](docs/SIGNING.md): verifying downloads, and how the signing key is kept and replaced
+- [Compatibility](docs/COMPATIBILITY.md): which old proofs and storage keep working, and how CI checks it
+- [Release signing](docs/SIGNING.md): verifying downloads, rebuilding a release yourself, and how the signing key is kept and replaced
+- [Security policy](SECURITY.md): how to report a vulnerability
 - [Example item settings](examples/): PostgreSQL, MySQL in Docker, WordPress, SQLite, MongoDB, Docker Compose apps
 - [Research notes](docs/RESEARCH.md): market and technical research behind the design
 - [Changelog](CHANGELOG.md)
 
 ## Roadmap
 
-- Pack files (batch small chunks) and a local index cache for very large repositories
-- PostgreSQL physical/PITR (pg_basebackup + WAL, `pg_verifybackup`) and MySQL physical (XtraBackup/mariabackup `--prepare`)
-- MSSQL (`RESTORE` + `DBCC CHECKDB`) and Redis (`redis-check-rdb` + key digests)
-- mTLS agent identities with short-lived certificates; transparency-log (C2SP tlog-tiles) checkpoints with witness co-signing
-- Object Lock retention extension during maintenance; restore tests of second copies
-- Kubernetes PVC sources; Windows VSS snapshots; single sign-on (OIDC/LDAP)
+- **0.4:** storage format v2 with pack files and a local index cache, so large storage doesn't list every chunk before each backup, and `backupproof upgrade` to move existing storage to it
+- **0.5:** short-lived agent identities (mTLS), transparency-log (C2SP tlog-tiles) checkpoints co-signed by outside witnesses, and an easier way for an auditor to check proofs without an account
+- Later, as people ask: PostgreSQL point-in-time recovery and MySQL physical backups, MSSQL and Redis, Object Lock retention extension during maintenance, Kubernetes volumes, Windows VSS snapshots, single sign-on (OIDC/LDAP)
 
 ## Contributing
 

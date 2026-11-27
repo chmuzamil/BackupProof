@@ -442,14 +442,15 @@ var planKnownGaps = []string{
 // for (attestedRoot), and the built-in server refuses its own data folder
 // (engine.IsDenied).
 var planLostDashboard = []string{
-	"Your backups don't depend on the dashboard. Each storage holds the encrypted data and a copy of the signed proofs.",
+	"If the dashboard backs itself up (Settings → Dashboard backup), rebuild it on a new server: set BP_PASSWORD and the access keys from that storage's recovery kit, run backupproof server restore-dashboard --repo '<storage address>' --data /var/lib/backupproof, start the dashboard and point its address at the new server. Accounts, items, schedules and proof history come back, and connected servers reconnect by themselves.",
+	"Without a dashboard backup, your backups still don't depend on the dashboard. Each storage holds the encrypted data and a copy of the signed proofs.",
 	"On any computer, download the backupproof program, then set BP_PASSWORD from the recovery kit, and the storage's access keys or login.",
 	"List the backups with: backupproof snapshots --repo '<storage address>'",
 	"Restore one with: backupproof restore --repo '<storage address>' --target /root/restored SNAPSHOT-ID. Every file is checked against its hash.",
 	"Check the proofs with: backupproof proof list --repo '<storage address>'",
 	"To go back to using a dashboard, install a new one and connect each server again with a new code, because a server's connection belongs to the old dashboard.",
 	"Add each storage to the new dashboard with its recovery kit. Backups made before the dashboard was lost can't be restored from the new dashboard, because it has no signed proofs for them: use the command line for those. New backups work as usual.",
-	"The dashboard can't back up its own data folder. If you want to keep users, schedules and the proof history, copy the data folder (BP_DATA) somewhere else yourself.",
+	"To keep users, schedules and the proof history next time, turn on Settings → Dashboard backup.",
 }
 
 func (s *Server) handleRecoveryPlan(w http.ResponseWriter, r *http.Request) {
