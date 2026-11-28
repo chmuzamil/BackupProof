@@ -81,12 +81,18 @@ func TestSymlinkedRootFollowed(t *testing.T) {
 	if err := b.AddPath(ctx, link); err != nil {
 		t.Fatal(err)
 	}
+	// The folder is saved under its resolved name (on Windows the long form
+	// of a short 8.3 temp path).
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var sawLink, sawFile bool
 	for _, e := range b.Entries() {
 		switch e.Path {
 		case snapshot.CleanPath(link):
 			sawLink = e.Type == snapshot.TypeSymlink
-		case snapshot.CleanPath(filepath.Join(real, "index.php")):
+		case snapshot.CleanPath(filepath.Join(resolved, "index.php")):
 			sawFile = e.Type == snapshot.TypeFile
 		}
 	}
