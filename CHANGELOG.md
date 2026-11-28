@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-28
+
 ### Fixed
 
 - **Files a backup can't read now raise an alert.** Before, a file the agent wasn't allowed to read was left out with a line in the job log, and the item still showed "Restore tested ✓". Now the backup counts them (`skippedFiles` in its stats) and the dashboard raises a "backup incomplete" alert naming a few, with the usual cause for the system: Full Disk Access on a Mac, a file another program keeps open on Windows, permissions on Linux. Files that disappear while the backup runs are normal and aren't counted. The item shows **Needs attention** until a backup reads everything.

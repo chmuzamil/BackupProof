@@ -43,8 +43,8 @@ Releases are reproducible: building a tag's source with the same Go version and
 command gives the same bytes. `scripts/verify-build.sh` does it and compares:
 
 ```bash
-sh scripts/verify-build.sh v0.6.0                  # linux/amd64
-sh scripts/verify-build.sh v0.6.0 windows/amd64
+sh scripts/verify-build.sh v0.6.1                  # linux/amd64
+sh scripts/verify-build.sh v0.6.1 windows/amd64
 ```
 
 It prints `MATCH` when the published binary is exactly what the source
