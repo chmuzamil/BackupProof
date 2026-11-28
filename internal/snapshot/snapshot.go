@@ -51,6 +51,8 @@ type Stats struct {
 	Uploaded   int64 `json:"uploadedBytes"`
 	Unchanged  int   `json:"unchangedFiles"`
 	DurationMs int64 `json:"durationMs"`
+	// Skipped counts files and folders the backup couldn't read.
+	Skipped int `json:"skippedFiles,omitempty"`
 }
 
 type Source struct {

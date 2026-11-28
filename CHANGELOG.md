@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Files a backup can't read now raise an alert.** Before, a file the agent wasn't allowed to read was left out with a line in the job log, and the item still showed "Restore tested ✓". Now the backup counts them (`skippedFiles` in its stats) and the dashboard raises a "backup incomplete" alert naming a few, with the usual cause for the system: Full Disk Access on a Mac, a file another program keeps open on Windows, permissions on Linux. Files that disappear while the backup runs are normal and aren't counted. The item shows **Needs attention** until a backup reads everything.
+- **A protected folder that is a link is backed up with what it points to.** `/var/www/site -> /home/u/site`, or a deploy tool's `current -> releases/42`, used to be saved as the link alone, and the restore test passed. Now the link and the folder behind it are both saved; a link to a folder that doesn't exist raises an alert.
+- **Backing up `/` skips `/proc`, `/sys` and the other kernel filesystems,** which hold no files to back up and can hang a backup. A folder asked for directly is still read.
+- **Docker: a container that won't stop fails the backup** (with the ones already stopped started again) instead of copying a running database's files, and **a container that doesn't start again after the backup raises an alert** instead of a log line, since its app is down. The job log says how long the containers were stopped.
+- **Failed clean-up of old backups raises an alert.** A retention or prune error, such as a storage key that may not delete or a damaged backup that makes pruning refuse, was recorded and never shown, and the storage kept growing.
+- **An agent that was added but never got in touch raises a "server offline" alert** after 10 minutes, as one that stops does.
+
+### Added
+
+- **Alerts are retried and repeated.** An alert a channel didn't accept (mail server down, webhook error) is retried for a day with growing gaps. Settings → Alerts shows **Failing** on a channel whose last send failed, with the error, and the home page says so too. A problem still open a day later is sent again, once a day.
+- **"Backup looks unusual" alert.** When a backup holds less than half the data or files of the one before, or nearly every file changed in an item where most usually stay the same, which is what files encrypted by ransomware look like, the dashboard raises an alert and marks the item **Needs attention**. It doesn't close by itself, since the next encrypted backup looks normal next to this one: an administrator closes it with **It was expected**.
+- **Storage size warning.** On the Storage page, an administrator can set a size per storage; the weekly storage check raises an alert when it's bigger, before a quota or a bill does.
+- **The home page points out missing safety nets:** no alert channel set up, an alert channel that is failing, and no heartbeat. The dashboard starts every backup, so if it stops, all of them stop and it can't say so itself; the heartbeat lets an outside service notice.
+- The macOS agent installer explains how to give the agent Full Disk Access.
+
 ## [0.6.0] - 2026-11-28
 
 ### Added

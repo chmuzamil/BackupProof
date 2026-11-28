@@ -47,6 +47,9 @@ type Env struct {
 	// DenyPaths are never backed up, imported or used as storage (the
 	// built-in agent denies the server's own data directory).
 	DenyPaths []string
+	// Warnings is filled in by Backup: problems that didn't stop it but
+	// should reach a person, such as files it couldn't read.
+	Warnings []string
 }
 
 // Record is one stored attestation (also written to proofs/ in the repository).
@@ -142,6 +145,7 @@ func Backup(ctx context.Context, e *Env, spec source.Spec, tags []string) (snaps
 	if err != nil {
 		return snapshot.WithID{}, nil, err
 	}
+	e.Warnings = b.Warnings()
 	st := snap.Stats
 	e.log("snapshot %s saved: %d entries, %d bytes scanned, %d new chunks (%d bytes uploaded) in %dms",
 		snap.ID.Short(), snap.Entries, st.Bytes, st.NewChunks, st.Uploaded, st.DurationMs)

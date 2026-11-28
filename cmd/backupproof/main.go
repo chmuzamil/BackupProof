@@ -495,6 +495,9 @@ func cmdBackup(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("snapshot %s  root %s…  ledger #%d\n", snap.ID.Short(), snap.Root[:16], rec.Ledger.Seq)
+	for _, w := range env.Warnings {
+		fmt.Fprintln(os.Stderr, "warning:", w)
+	}
 	return nil
 }
 

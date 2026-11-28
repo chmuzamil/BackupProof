@@ -135,6 +135,8 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/repositories/{id}/check", s.auth("operator", s.handleCheckRepo))
 	mux.HandleFunc("POST /api/repositories/{id}/recovery-kit", s.auth("admin", s.handleRecoveryKit))
 	mux.HandleFunc("GET /api/repositories/stats", s.auth("auditor", s.handleRepoStats))
+	mux.HandleFunc("GET /api/repositories/size-warnings", s.auth("auditor", s.handleSizeWarnings))
+	mux.HandleFunc("PUT /api/repositories/{id}/size-warning", s.auth("admin", s.handleSetSizeWarning))
 
 	mux.HandleFunc("GET /api/proofs", s.auth("auditor", s.handleListProofs))
 	mux.HandleFunc("GET /api/proofs/{id}", s.auth("auditor", s.handleGetProof))
@@ -145,6 +147,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/evidence/report", s.auth("auditor", s.handleEvidenceReport))
 
 	mux.HandleFunc("GET /api/alerts", s.auth("auditor", s.handleAlerts))
+	mux.HandleFunc("POST /api/alerts/{id}/dismiss", s.auth("admin", s.handleDismissAlert))
 
 	mux.HandleFunc("GET /api/settings/notify", s.auth("admin", s.handleGetNotify))
 	mux.HandleFunc("PUT /api/settings/notify", s.auth("admin", s.handlePutNotify))
@@ -315,6 +318,17 @@ func (s *Server) sourceStatus(src Source, agents map[int64]string, repos map[int
 			st.Reason += " The data passed, but the app didn't come back up in that test."
 		}
 	}
+	// A restore test proves what was saved. If the newest backup left files
+	// out, or looks like its files were replaced, that isn't good news.
+	if st.Status == "proven" {
+		open := s.store.OpenAlertKinds(src.ID)
+		switch {
+		case open["backup-anomaly"]:
+			st.Status, st.Reason = "at-risk", "The newest backup looks very different from the one before. Check it before trusting it."
+		case open["backup-warnings"]:
+			st.Status, st.Reason = "at-risk", "The newest backup left some files out. See its alert."
+		}
+	}
 	return st
 }
 
@@ -365,7 +379,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	alerts, _ := s.store.Alerts(true, 50)
-	writeJSON(w, 200, map[string]any{"sources": out, "agents": nonNil(agents), "alerts": nonNil(alerts), "counts": counts})
+	writeJSON(w, 200, map[string]any{"sources": out, "agents": nonNil(agents), "alerts": nonNil(alerts), "counts": counts, "notices": nonNil(s.notices())})
 }
 
 func nonNil[T any](v []T) []T {
@@ -879,7 +893,7 @@ func (s *Server) handleGetNotify(w http.ResponseWriter, r *http.Request) {
 		}
 		*p = ""
 	}
-	writeJSON(w, 200, map[string]any{"settings": n, "saved": saved})
+	writeJSON(w, 200, map[string]any{"settings": n, "saved": saved, "status": s.deliveryStatus()})
 }
 
 func (s *Server) handlePutNotify(w http.ResponseWriter, r *http.Request) {

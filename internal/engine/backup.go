@@ -52,6 +52,57 @@ type Builder struct {
 	// Where the time went, for the job log: reading the source (for a
 	// command, waiting for its output) and waiting for uploads to make room.
 	readTime, readBytes, upWait atomic.Int64
+
+	// Files the walk couldn't read (permission denied, I/O errors). A file
+	// that vanished while the backup ran isn't counted: that is normal.
+	skipped       int
+	skippedSample []string
+	// Warnings are problems worth an alert even though the backup was saved.
+	warnings []string
+	// pseudo caches, per device, whether a folder is a pseudo filesystem
+	// (/proc, /sys) whose "files" aren't data.
+	pseudo map[uint64]string
+}
+
+// maxSkippedSample is how many unreadable paths a warning names.
+const maxSkippedSample = 5
+
+// skip records a file or folder the backup couldn't read.
+func (b *Builder) skip(p string, err error) {
+	if errors.Is(err, fs.ErrNotExist) {
+		b.log("note: %s disappeared while the backup ran", p)
+		return
+	}
+	b.log("warning: cannot read %s: %v", p, err)
+	b.skipped++
+	if len(b.skippedSample) < maxSkippedSample {
+		b.skippedSample = append(b.skippedSample, p)
+	}
+}
+
+// Warn records a problem that doesn't stop the backup but should reach a
+// person: the dashboard raises an alert for it.
+func (b *Builder) Warn(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	b.log("warning: %s", msg)
+	b.warnings = append(b.warnings, msg)
+}
+
+// Warnings lists what Warn recorded, plus a summary of unreadable files.
+func (b *Builder) Warnings() []string {
+	out := append([]string(nil), b.warnings...)
+	if b.skipped > 0 {
+		what := "file or folder"
+		if b.skipped > 1 {
+			what = "files or folders"
+		}
+		msg := fmt.Sprintf("%d %s couldn't be read and aren't in this backup, such as %s.", b.skipped, what, strings.Join(b.skippedSample, ", "))
+		if hint := unreadableHint(); hint != "" {
+			msg += " " + hint
+		}
+		out = append(out, msg)
+	}
+	return out
 }
 
 type Options struct {
@@ -156,12 +207,34 @@ func (b *Builder) AddPath(ctx context.Context, root string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Lstat(abs); err != nil {
+	fi, err := os.Lstat(abs)
+	if err != nil {
 		return fmt.Errorf("source path %s: %w", root, err)
 	}
+	// A protected folder that is itself a link (/var/www/site -> /home/u/site,
+	// or a deploy tool's current -> releases/42) would otherwise be saved as
+	// just the link. Keep the link and back up the folder it points to.
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		if target, err := filepath.EvalSymlinks(abs); err == nil {
+			if ti, err := os.Stat(target); err == nil && ti.IsDir() && target != abs {
+				if err := b.walk(ctx, abs); err != nil {
+					return err
+				}
+				b.log("%s is a link to %s: backing up that folder too", abs, target)
+				return b.walk(ctx, target)
+			}
+		} else {
+			b.Warn("%s is a link to a folder that doesn't exist (%v): only the link is in this backup", abs, err)
+		}
+	}
+	return b.walk(ctx, abs)
+}
+
+// walk adds abs and everything below it.
+func (b *Builder) walk(ctx context.Context, abs string) error {
 	return filepath.WalkDir(abs, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			b.log("warning: skipping %s: %v", p, err)
+			b.skip(p, err)
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
 			}
@@ -190,8 +263,17 @@ func (b *Builder) AddPath(ctx context.Context, root string) error {
 		}
 		info, err := d.Info()
 		if err != nil {
-			b.log("warning: skipping %s: %v", p, err)
+			b.skip(p, err)
 			return nil
+		}
+		// /proc, /sys and the like hold the kernel's view of the system, not
+		// data, and reading them can hang or return endless "files". Skipped
+		// when the walk reaches them, but not when asked for one directly.
+		if d.IsDir() && p != abs {
+			if fsType := b.pseudoFS(p, info); fsType != "" {
+				b.log("skipping %s: a %s filesystem, which holds no files to back up", p, fsType)
+				return fs.SkipDir
+			}
 		}
 		mp := snapshot.CleanPath(p)
 		if mp == "" {
@@ -204,7 +286,7 @@ func (b *Builder) AddPath(ctx context.Context, root string) error {
 		case info.Mode()&fs.ModeSymlink != 0:
 			target, err := os.Readlink(p)
 			if err != nil {
-				b.log("warning: skipping symlink %s: %v", p, err)
+				b.skip(p, err)
 				return nil
 			}
 			e := &snapshot.Entry{Path: mp, Type: snapshot.TypeSymlink, Link: filepath.ToSlash(target), MTime: info.ModTime().UnixNano()}
@@ -240,7 +322,7 @@ func (b *Builder) addFile(ctx context.Context, osPath, mp string, info fs.FileIn
 	}
 	f, err := os.Open(osPath)
 	if err != nil {
-		b.log("warning: cannot read %s: %v", osPath, err)
+		b.skip(osPath, err)
 		b.stats.Files--
 		b.stats.Bytes -= info.Size()
 		return nil
@@ -341,6 +423,7 @@ func (b *Builder) Commit(ctx context.Context, snap *snapshot.Snapshot) (snapshot
 	snap.Manifest = manifest
 	snap.Entries = len(b.entries)
 	snap.Root = snapshot.Root(b.entries).String()
+	b.stats.Skipped = b.skipped
 	snap.Stats = b.stats
 	snap.Parent = b.parentID
 	snap.Engine = Version

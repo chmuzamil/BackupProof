@@ -402,6 +402,10 @@ const ALERT_WORDS = {
   'rpo-missed': 'Data-loss limit passed', 'rto-missed': 'Restore-time limit passed',
   'copy-drill-failed': 'Restore test of second copy failed',
   'app-test-failed': 'App test failed',
+  'backup-failed': 'Backup failed', 'backup-warnings': 'Backup incomplete',
+  'maintenance-failed': 'Old backups not cleaned up', 'backup-anomaly': 'Backup looks unusual',
+  'storage-large': 'Storage above its size limit',
+  'dashboard-backup-failed': 'Dashboard backup failed', 'witness-failed': 'Witness stopped cosigning',
 };
 
 // --------------------------------------------------------------- widgets
@@ -1345,7 +1349,7 @@ async function pageDashboard() {
   let tone, verdict;
   if (failing) { tone = 'bad'; verdict = `${items(failing)} ${failing === 1 ? 'has' : 'have'} a problem`; }
   else if (proven === total) { tone = 'ok'; verdict = total === 1 ? 'Your item is restore-tested' : `All ${nf(total)} items are restore-tested`; }
-  else { tone = 'warn'; verdict = `${nf(proven)} of ${items(total)} ${proven === 1 ? 'is' : 'are'} restore-tested`; }
+  else { tone = 'warn'; verdict = `${nf(proven)} of ${items(total)} ${total === 1 ? 'is' : 'are'} restore-tested`; }
   const lastPass = sources.map((s) => s.lastDrill && s.lastDrill.passed && toDate(s.lastDrill.created)).filter(Boolean).sort((a, b) => b - a)[0];
   const nextTest = sources.map((s) => s.source.enabled !== false && toDate(s.source.nextDrill)).filter((x) => x && x > Date.now()).sort((a, b) => a - b)[0];
   const agentsTotal = c.agentsTotal ?? agents.length, online = c.agentsOnline ?? 0;
@@ -1364,7 +1368,10 @@ async function pageDashboard() {
     h('p', null, h('strong', null, `${nf(alerts.length)} thing${alerts.length > 1 ? 's need' : ' needs'} your attention`), ' · ', h('a', { href: '#/alerts' }, 'See all alerts')),
     h('ul', null, alerts.slice(0, 5).map((a) => h('li', null, a.message, ' ', h('span', { class: 'small' }, '(', rel(a.created), ')'))))) : null;
 
-  return h('div', null, head, tiles, banner,
+  const notices = (d.notices || []).length && isAdmin() ? h('div', { class: 'banner warn' },
+    h('ul', null, d.notices.map((n) => h('li', null, n.text, n.href ? [' ', h('a', { href: n.href }, 'Open settings')] : null)))) : null;
+
+  return h('div', null, head, tiles, banner, notices,
     h('section', { class: 'card ledger' }, cardHead('What’s protected', tapeLegend()), itemList(sources, proofTapes(proofs))));
 }
 
@@ -2417,8 +2424,24 @@ function formatLine(r) {
 }
 
 async function pageRepositories() {
-  const [repos0, sources, stats] = await Promise.all([api('/repositories'), api('/sources').catch(() => []), api('/repositories/stats').catch(() => ({}))]);
+  const [repos0, sources, stats, limits] = await Promise.all([api('/repositories'), api('/sources').catch(() => []), api('/repositories/stats').catch(() => ({})),
+    api('/repositories/size-warnings').catch(() => ({}))]);
   const repos = repos0 || [];
+  // sizeWarning lets an administrator be told before the storage fills up.
+  const sizeWarning = (r) => {
+    const cur = (limits || {})[String(r.id)] || 0;
+    const gb = input({ name: 'warn-gb-' + r.id, type: 'number', inputmode: 'decimal', min: 0, step: 'any', value: cur ? +(cur / 1e9).toFixed(1) : '', placeholder: 'GB', 'aria-label': `Warn when ${r.name} is bigger than this many GB` });
+    const save = btn('Save', busy(async () => {
+      const v = Number(gb.value || 0);
+      if (!(v >= 0)) return toast('Enter a size in GB, or leave it empty for no warning.', 'bad');
+      await put(`/repositories/${r.id}/size-warning`, { bytes: Math.round(v * 1e9) });
+      S.dirty = false;
+      toast(v ? `You’ll get an alert when “${r.name}” is bigger than ${v} GB` : 'Size warning turned off', 'ok');
+    }, 'Saving…'), 'sm');
+    return details(cur ? `Size warning: above ${bytes(cur)}` : 'Warn me before it fills up',
+      h('p', { class: 'muted small' }, 'Checked after each weekly storage check. Leave empty for no warning.'),
+      h('div', { class: 'row inline' }, field('Alert when bigger than (GB)', gb), save));
+  };
   const usedBy = (id) => (sources || []).filter((x) => x.repoId === id);
   const removeRepo = async (r) => {
     const ok = await confirmDlg(h('div', null,
@@ -2455,6 +2478,7 @@ async function pageRepositories() {
                 h('div', { class: 'small muted' }, monthAgo ? `${last.bytes >= monthAgo.bytes ? '+' : '−'}${bytes(Math.abs(last.bytes - monthAgo.bytes))} in 30 days` : `${plural(last.snapshots, 'backup copy')}`.replace('copys', 'copies'))),
               st.length > 1 ? sizeChart(st) : null) : null,
             healthLine(st),
+            isAdmin() ? sizeWarning(r) : null,
             canOperate() && usedBy(r.id).length ? btn('Check now', busy(async () => {
               await post(`/repositories/${r.id}/check`);
               toast('Health check started. It reads back a sample of the stored data.', 'ok');
@@ -3979,11 +4003,14 @@ async function pageAlerts() {
   const row = (a) => tr([
     timeEl(a.created), ALERT_WORDS[a.kind] || String(a.kind || '').replace(/-/g, ' '), h('span', { class: 'break' }, a.message),
     a.sourceId ? h('a', { href: `#/sources/${a.sourceId}`, 'aria-label': 'Open the item for: ' + (a.message || 'this alert') }, 'Open item') : a.agentId ? h('a', { href: '#/agents' }, 'Servers') : '—',
-    a.resolved ? h('span', null, 'Fixed ', timeEl(a.resolved)) : h('span', { class: 'pill bad' }, 'Open'),
+    a.resolved ? h('span', null, 'Fixed ', timeEl(a.resolved))
+      : a.kind === 'backup-anomaly' && isAdmin() ? h('span', null, h('span', { class: 'pill bad' }, 'Open'), ' ',
+        btn('It was expected', busy(async () => { await post(`/alerts/${a.id}/dismiss`); toast('Alert closed', 'ok'); reload(); }, 'Closing…'), 'sm quiet'))
+      : h('span', { class: 'pill bad' }, 'Open'),
   ], H);
   const history = (all || []).filter((a) => a.resolved);
   return h('div', null,
-    pageHead('Alerts', 'Alerts go away by themselves once the problem is fixed.'),
+    pageHead('Alerts', 'Alerts go away by themselves once the problem is fixed, and are sent again each day while they’re open. An unusual backup stays open until you say the change was expected.'),
     h('section', { class: 'card' }, cardHead(`Open (${nf((open || []).length)})`), (open || []).length ? table(H, open.map(row)) : empty('All good — nothing needs your attention.')),
     h('section', { class: 'card' }, cardHead('Earlier'), history.length ? table(H, history.map(row)) : empty('No earlier alerts.')));
 }
@@ -4146,6 +4173,7 @@ function transparencyCard(t) {
 function notifyCard(resp) {
   const n = (resp && resp.settings) || resp || {};
   const saved = new Set((resp && resp.saved) || []);
+  const status = (resp && resp.status) || {};
   const clear = new Set();
   const txt = (name, value, attrs = {}) => input({ name, code: true, autocomplete: 'off', value: value || '', ...attrs });
   const secret = (key, name) => {
@@ -4181,9 +4209,14 @@ function notifyCard(resp) {
   // forget lets someone remove a saved secret (turning that channel off).
   const forget = (key) => saved.has(key) ? btn('Forget saved', (e) => { clear.add(key); e.currentTarget.replaceWith(h('span', { class: 'hint' }, 'Will be removed when you save.')); S.dirty = true; }, 'sm quiet') : null;
   const on = (...keys) => keys.some((k) => (f[k] && f[k].value && !f[k].dataset.secret) || saved.has(k)) ? h('span', { class: 'pill ok' }, 'On') : null;
+  // CHANNEL_NAMES are the server's names for each channel, for its delivery status.
+  const CHANNEL_NAMES = { Email: 'email', 'Slack, Discord or Mattermost': 'webhook', 'Microsoft Teams': 'Microsoft Teams', Telegram: 'Telegram', ntfy: 'ntfy', Gotify: 'Gotify', Pushover: 'Pushover', PagerDuty: 'PagerDuty' };
   const channel = (title, state, ...body) => {
+    const st = state && status[CHANNEL_NAMES[title]];
+    const failing = st && st.lastErrorAt && (!st.lastOk || st.lastErrorAt > st.lastOk);
+    if (failing) body.unshift(h('p', { class: 'fact-bad small' }, 'The last alert sent here failed (', timeEl(st.lastErrorAt), '): ', st.lastError, '. It is retried for a day.'));
     const d = details(title, ...body);
-    if (state) d.querySelector('summary').append(' ', state);
+    if (state) d.querySelector('summary').append(' ', failing ? h('span', { class: 'pill bad' }, 'Failing') : state);
     d.classList.add('channel');
     return d;
   };
@@ -4226,8 +4259,8 @@ function notifyCard(resp) {
     h('div', { class: 'row' }, field('Your user key', f.pushoverUser, 'Shown on your Pushover dashboard.'), field('Application token', f.pushoverToken, 'Create an application in Pushover.')), forget('pushoverUser'), forget('pushoverToken')),
   channel('PagerDuty', on('pagerDutyKey'),
     field('Integration key', f.pagerDutyKey, 'Add an “Events API v2” integration to a service. Problems open an incident, which is resolved automatically when fixed.'), forget('pagerDutyKey')),
-  channel('Heartbeat (advanced)', on('heartbeatUrl'),
-    field('Heartbeat address', f.heartbeatUrl, 'Pinged every minute while BackupProof is healthy, so a service like healthchecks.io can tell you if BackupProof itself stops.')),
+  channel('Heartbeat (recommended)', on('heartbeatUrl'),
+    field('Heartbeat address', f.heartbeatUrl, 'This dashboard starts every backup, so if it stops, all backups stop, and it can’t alert you about itself. It pings this address every minute while it runs; a service like healthchecks.io or Uptime Kuma tells you when the pings stop.')),
   h('h3', null, 'Weekly summary'),
   h('p', { class: 'muted small' }, 'One email a week: what was backed up and restore-tested, what failed, and anything that needs attention.'),
   weekly.el,

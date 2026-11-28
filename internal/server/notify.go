@@ -108,6 +108,10 @@ var alertWords = map[string]string{
 	"app-test-failed":         "app test failed",
 	"dashboard-backup-failed": "the dashboard's own backup failed",
 	"witness-failed":          "a transparency-log witness stopped cosigning",
+	"backup-warnings":         "backup incomplete",
+	"maintenance-failed":      "old backups not cleaned up",
+	"backup-anomaly":          "backup looks unusual",
+	"storage-large":           "storage above its size limit",
 }
 
 func (s *Server) alert(kind string, sourceID, agentID *int64, msg string) {
@@ -118,7 +122,7 @@ func (s *Server) alert(kind string, sourceID, agentID *int64, msg string) {
 			what = kind
 		}
 		ev := event{Subject: "BackupProof: " + what, Body: msg + s.dashboardLine(), Key: alertKey(kind, sourceID, agentID), Urgent: true}
-		go func() { _ = s.notify(ev) }() // notify logs its own failures
+		go s.notifyOrQueue(ev)
 	}
 }
 
@@ -143,7 +147,7 @@ func (s *Server) resolve(kind string, sourceID, agentID *int64) {
 			msg = name + ": " + what + " — fixed, everything is working again."
 		}
 		ev := event{Subject: "BackupProof resolved: " + what, Body: msg, Key: alertKey(kind, sourceID, agentID), Resolved: true}
-		go func() { _ = s.notify(ev) }()
+		go s.notifyOrQueue(ev)
 	}
 }
 
@@ -161,12 +165,49 @@ func (s *Server) send(subject, body string) error {
 
 // notify delivers ev to every configured channel and reports which failed.
 func (s *Server) notify(ev event) error {
-	n := s.notifySettings()
-	type channel struct {
-		name string
-		on   bool
-		fn   func() error
+	failed := s.deliver(ev, nil)
+	if len(failed) == 0 {
+		return nil
 	}
+	var errs []string
+	for _, c := range sortedKeys(failed) {
+		errs = append(errs, c+": "+failed[c])
+	}
+	return fmt.Errorf("%s", strings.Join(errs, "; "))
+}
+
+type channel struct {
+	name string
+	on   bool
+	fn   func() error
+}
+
+// deliver sends ev to the configured channels (only those named in only, if
+// it isn't nil), records each channel's outcome, and returns the failures.
+func (s *Server) deliver(ev event, only map[string]bool) map[string]string {
+	n := s.notifySettings()
+	failed := map[string]string{}
+	for _, c := range channels(n, ev) {
+		if !c.on || only != nil && !only[c.name] {
+			continue
+		}
+		err := c.fn()
+		s.recordDelivery(c.name, err)
+		if err != nil {
+			failed[c.name] = err.Error()
+		}
+	}
+	if len(failed) > 0 {
+		var errs []string
+		for _, c := range sortedKeys(failed) {
+			errs = append(errs, c+": "+failed[c])
+		}
+		s.log.Printf("notification failed: %s", strings.Join(errs, "; "))
+	}
+	return failed
+}
+
+func channels(n NotifySettings, ev event) []channel {
 	text := ev.Subject + "\n" + ev.Body
 	channels := []channel{
 		{"email", n.SMTPHost != "" && n.To != "", func() error { return sendEmail(n, ev) }},
@@ -225,20 +266,7 @@ func (s *Server) notify(ev event) error {
 			return postJSON(pagerDutyAPI+"/v2/enqueue", body, nil)
 		}},
 	}
-	var errs []string
-	for _, c := range channels {
-		if !c.on {
-			continue
-		}
-		if err := c.fn(); err != nil {
-			errs = append(errs, c.name+": "+err.Error())
-		}
-	}
-	if len(errs) > 0 {
-		s.log.Printf("notification failed: %s", strings.Join(errs, "; "))
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	return nil
+	return channels
 }
 
 func firstLine(s string) string { l, _, _ := strings.Cut(s, "\n"); return l }

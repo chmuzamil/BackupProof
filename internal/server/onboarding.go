@@ -402,6 +402,12 @@ cat > /Library/LaunchDaemons/dev.backupproof.agent.plist <<'PLIST'
 </dict></plist>
 PLIST
   launchctl load -w /Library/LaunchDaemons/dev.backupproof.agent.plist
+  echo
+  echo "One more step on a Mac: macOS keeps Documents, Desktop, Mail and Photos from"
+  echo "programs it hasn't been told to trust. Open System Settings > Privacy & Security >"
+  echo "Full Disk Access, click +, press Cmd+Shift+G, type /usr/local/bin/backupproof and"
+  echo "add it. Without it, those folders are left out of backups (the dashboard warns you)."
+  echo
 else
   echo "Start it with: BP_STATE=$STATE backupproof agent run"
 fi

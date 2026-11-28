@@ -225,25 +225,35 @@ func volumeUsers(ctx context.Context, v string) []string {
 }
 
 // stopContainers stops the given running containers and returns a function
-// that starts them again, in reverse order.
-func stopContainers(ctx context.Context, names []string, log func(string, ...any)) func() {
+// that starts them again, in reverse order. If one won't stop, it starts the
+// ones it stopped and fails: copying a live database's files can save a
+// damaged copy. If one won't start again the backup is still kept, and a
+// warning makes sure someone hears that the app is down.
+func stopContainers(ctx context.Context, names []string, warn, log func(string, ...any)) (func(), error) {
 	var stopped []string
+	start := func() {
+		for i := len(stopped) - 1; i >= 0; i-- {
+			log("starting container %s", stopped[i])
+			if _, err := docker(context.Background(), "start", stopped[i]); err != nil {
+				warn("the container %s didn't start again after the backup (%v), so its app may be down: start it with docker start %s", stopped[i], err, stopped[i])
+			}
+		}
+	}
+	began := time.Now()
 	for _, n := range names {
 		log("stopping container %s", n)
 		if _, err := docker(ctx, "stop", n); err != nil {
-			log("warning: could not stop %s: %v", n, err)
-			continue
+			start()
+			return nil, fmt.Errorf("couldn't stop the container %s, so its data wasn't copied while it was running: %v", n, err)
 		}
 		stopped = append(stopped, n)
 	}
 	return func() {
-		for i := len(stopped) - 1; i >= 0; i-- {
-			log("starting container %s", stopped[i])
-			if _, err := docker(context.Background(), "start", stopped[i]); err != nil {
-				log("warning: could not start %s again: %v", stopped[i], err)
-			}
+		start()
+		if len(stopped) > 0 {
+			log("the containers were stopped for %s", time.Since(began).Round(time.Second))
 		}
-	}
+	}, nil
 }
 
 // volumeDir is a volume's folder on this server, if this process can read it.
@@ -285,7 +295,11 @@ func backupDocker(ctx context.Context, s Spec, b *engine.Builder, log engine.Log
 		for _, v := range vols {
 			users = append(users, volumeUsers(ctx, v)...)
 		}
-		defer stopContainers(ctx, uniq(users), log)()
+		restart, err := stopContainers(ctx, uniq(users), b.Warn, log)
+		if err != nil {
+			return nil, err
+		}
+		defer restart()
 	}
 	var names []string
 	for _, c := range cs {
@@ -416,9 +430,10 @@ func ContainersUsing(ctx context.Context, paths []string) []string {
 }
 
 // StopContainers stops the given running containers and returns a function
-// that starts them again.
-func StopContainers(ctx context.Context, names []string, log func(string, ...any)) func() {
-	return stopContainers(ctx, names, log)
+// that starts them again. It fails, with the containers running, if one
+// won't stop.
+func StopContainers(ctx context.Context, names []string, log func(string, ...any)) (func(), error) {
+	return stopContainers(ctx, names, func(f string, a ...any) { log("warning: "+f, a...) }, log)
 }
 
 // addVolumeViaHelper copies a volume out with tar in a throwaway container
@@ -525,7 +540,11 @@ func RestoreVolume(ctx context.Context, v, src string, owners map[string]Owner, 
 	if _, err := docker(ctx, "volume", "create", v); err != nil {
 		return err
 	}
-	defer stopContainers(ctx, volumeUsers(ctx, v), log)()
+	restart, err := StopContainers(ctx, volumeUsers(ctx, v), log)
+	if err != nil {
+		return err
+	}
+	defer restart()
 	if dir := volumeDir(ctx, v); dir != "" {
 		// Restored inside the volume first, so a failed download leaves it as
 		// it was and the swap can't cross filesystems.

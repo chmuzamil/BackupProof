@@ -95,6 +95,9 @@ func (s *Server) recordCheck(jobID, sourceID int64, ok bool, result any) {
 	if err := s.store.AddRepoStat(repoID, ok, r); err != nil {
 		s.log.Printf("storage check: recording result: %v", err)
 	}
+	if r.StoredBytes > 0 {
+		s.checkSize(repoID, src, r.StoredBytes)
+	}
 	// Storage that only failed to hand some samples over is checked again
 	// within the hour rather than in a week: the samples are unknown, not bad.
 	if !ok && r.OnlyUnreadable() {
@@ -191,4 +194,73 @@ func (s *Server) handleRepoStats(w http.ResponseWriter, r *http.Request) {
 		out[strconv.FormatInt(id, 10)] = v
 	}
 	writeJSON(w, 200, out)
+}
+
+// Size warnings: an administrator can set, per storage, a size above which an
+// alert says it is filling up, before a quota or a bill says it first. The
+// size is measured by each storage check.
+
+func (s *Server) sizeWarnings() map[string]int64 {
+	m := map[string]int64{}
+	if raw := s.store.Setting("storage-size-warnings"); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &m)
+	}
+	return m
+}
+
+func (s *Server) handleSizeWarnings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.sizeWarnings())
+}
+
+func (s *Server) handleSetSizeWarning(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	rp, _, err := s.store.Repository(id)
+	if err != nil {
+		writeErr(w, 404, err)
+		return
+	}
+	var req struct {
+		Bytes int64 `json:"bytes"` // 0 turns the warning off
+	}
+	if err := readJSON(r, &req); err != nil || req.Bytes < 0 {
+		writeErr(w, 400, errors.New("give the size in bytes, or 0 to turn the warning off"))
+		return
+	}
+	m := s.sizeWarnings()
+	key := strconv.FormatInt(id, 10)
+	if req.Bytes == 0 {
+		delete(m, key)
+	} else {
+		m[key] = req.Bytes
+	}
+	raw, _ := json.Marshal(m)
+	if err := s.store.SetSetting("storage-size-warnings", string(raw)); err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	detail := fmt.Sprintf("storage %q: size warning turned off", rp.Name)
+	if req.Bytes > 0 {
+		detail = fmt.Sprintf("storage %q: warn above %s", rp.Name, humanBytes(req.Bytes))
+	}
+	s.audit(s.actor(r), "storage-size-warning", detail)
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// checkSize raises or resolves the size alert after a storage check measured it.
+func (s *Server) checkSize(repoID int64, src *Source, size int64) {
+	sid := src.ID
+	limit := s.sizeWarnings()[strconv.FormatInt(repoID, 10)]
+	if limit <= 0 || size <= limit {
+		s.resolve("storage-large", &sid, nil)
+		return
+	}
+	name := "the storage"
+	if rp, _, err := s.store.Repository(repoID); err == nil {
+		name = fmt.Sprintf("the storage %q", rp.Name)
+	}
+	s.alert("storage-large", &sid, nil, fmt.Sprintf("%s holds %s, more than the %s you set as its limit. Keep fewer old backups, exclude what you don't need, or raise the limit.", name, humanBytes(size), humanBytes(limit)))
 }

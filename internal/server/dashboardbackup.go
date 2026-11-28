@@ -132,6 +132,9 @@ func (s *Server) runDashboardBackup(ctx context.Context) (snapshot.WithID, error
 	if err != nil {
 		return snapshot.WithID{}, err
 	}
+	for _, w := range env.Warnings {
+		s.log.Printf("dashboard backup: warning: %s", w)
+	}
 	s.forgetOldDashboardBackups(ctx, rp)
 	return snap, nil
 }

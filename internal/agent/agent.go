@@ -480,6 +480,9 @@ func (a *Agent) run(ctx context.Context, lease *protocol.Lease, jl *jobLog) (any
 			jl.Logf("warning: retention/prune failed: %v", merr)
 			res["maintenanceError"] = merr.Error()
 		}
+		if len(env.Warnings) > 0 {
+			res["warnings"] = env.Warnings
+		}
 		return res, nil
 	case "drill":
 		work := filepath.Join(a.dir, "drills")

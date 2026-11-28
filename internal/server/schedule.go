@@ -122,6 +122,8 @@ func (s *Server) tick(now time.Time) {
 	s.scheduleDashboardBackup(now)
 	s.scheduleCheckpoint(now)
 	s.maybeSendWeeklyReport(now)
+	s.retryNotifications(now)
+	s.remindOpenAlerts(now)
 	s.heartbeat()
 }
 
@@ -186,8 +188,11 @@ func (s *Server) watchdog(now time.Time, sources []Source) {
 		if a.Revoked {
 			continue
 		}
+		created, _ := time.Parse(time.RFC3339Nano, a.Created)
 		if a.LastSeen != nil && now.Sub(*a.LastSeen) > agentOfflineAfter {
 			s.alert("agent-offline", nil, &aid, fmt.Sprintf("The server '%s' hasn't been in touch since %s. Is it switched on?", a.Name, a.LastSeen.Local().Format("Jan 2, 15:04")))
+		} else if a.LastSeen == nil && !created.IsZero() && now.Sub(created) > agentOfflineAfter {
+			s.alert("agent-offline", nil, &aid, fmt.Sprintf("The server '%s' was added %s ago but has never been in touch. Is its agent running?", a.Name, humanDur(now.Sub(created))))
 		} else {
 			s.resolve("agent-offline", nil, &aid)
 		}

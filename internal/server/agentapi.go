@@ -382,6 +382,10 @@ func (s *Server) handleFinish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err)
 		return
 	}
+	var prevBackup *Job
+	if job.Kind == "backup" {
+		prevBackup = s.store.LastJob(job.SourceID, "backup", "succeeded")
+	}
 	if err := s.store.FinishJob(id, a.ID, req.OK, req.Error, req.Result); err != nil {
 		writeErr(w, 409, err)
 		return
@@ -399,6 +403,9 @@ func (s *Server) handleFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.jobOutcome(job.Kind, sid, req.OK, req.Error)
+	if job.Kind == "backup" && req.OK {
+		s.backupFindings(sid, prevBackup, req.Result)
+	}
 	// Every successful backup of an item with a second storage is copied there.
 	if job.Kind == "backup" && req.OK {
 		s.queueCopy(sid, req.Result)

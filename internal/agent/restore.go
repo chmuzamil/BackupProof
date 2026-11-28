@@ -129,7 +129,10 @@ func (a *Agent) runRestore(ctx context.Context, r *repo.Repo, lease *protocol.Le
 					roots = append(roots, top)
 				}
 			}
-			restart := source.StopContainers(ctx, source.ContainersUsing(ctx, roots), jl.Logf)
+			restart, err := source.StopContainers(ctx, source.ContainersUsing(ctx, roots), jl.Logf)
+			if err != nil {
+				return nil, err
+			}
 			jl.Logf("putting mounted folders back where they came from")
 			res, err := engine.Restore(ctx, r, s, "/", engine.RestoreOptions{Include: mounts, StripPrefix: "docker/mounts", Original: true, Log: jl.Logf})
 			add(res)

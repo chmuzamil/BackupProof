@@ -771,6 +771,42 @@ func (s *Store) ResolveAlerts(kind string, sourceID, agentID *int64) int64 {
 	return n
 }
 
+// OpenAlertKinds lists the kinds of alert open for an item.
+func (s *Store) OpenAlertKinds(sourceID int64) map[string]bool {
+	out := map[string]bool{}
+	rows, err := s.db.Query("SELECT kind FROM alerts WHERE resolved IS NULL AND source_id=?", sourceID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		if rows.Scan(&k) == nil {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// Alert returns one alert by id.
+func (s *Store) Alert(id int64) (*Alert, error) {
+	var a Alert
+	var sid, aid sql.NullInt64
+	var res sql.NullString
+	if err := s.db.QueryRow("SELECT id,source_id,agent_id,kind,message,created,resolved FROM alerts WHERE id=?", id).
+		Scan(&a.ID, &sid, &aid, &a.Kind, &a.Message, &a.Created, &res); err != nil {
+		return nil, err
+	}
+	if sid.Valid {
+		a.SourceID = &sid.Int64
+	}
+	if aid.Valid {
+		a.AgentID = &aid.Int64
+	}
+	a.Resolved = parseTime(res)
+	return &a, nil
+}
+
 func (s *Store) Alerts(openOnly bool, limit int) ([]Alert, error) {
 	q := "SELECT id,source_id,agent_id,kind,message,created,resolved FROM alerts"
 	if openOnly {
